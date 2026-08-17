@@ -63,6 +63,25 @@ func TestParseDomifaddr_UnreadableOutputIsAnErrorNotAnEmptyResult(t *testing.T) 
 	}
 }
 
+func TestIPv4Address_SkipsTheGuestsLoopbackInterface(t *testing.T) {
+	// The guest agent reports every interface, and lists lo with 127.0.0.1
+	// first. Returning it sends ssh to the host's own sshd, where it either
+	// hangs on an unrelated host or is reset — a failure that looks like the
+	// guest refusing logins rather than like the wrong address.
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source agent", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr-source-agent.txt"),
+	})
+
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01")
+	if err != nil {
+		t.Fatalf("IPv4Address: %v", err)
+	}
+	if address != "192.168.171.178" {
+		t.Errorf("address = %q, want the guest's own address 192.168.171.178", address)
+	}
+}
+
 func TestAddresses_FallsBackFromTheGuestAgentToTheDHCPLease(t *testing.T) {
 	fake := hostexec.NewFake()
 	// A guest whose agent is not up yet: virsh fails the agent query outright.

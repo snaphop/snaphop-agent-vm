@@ -38,8 +38,12 @@ of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `image`, `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
 `destroy`, `--version`, and `--dry-run` surfaces in `internal/cli` — every
 command in the documented contract. What remains is hardening: the integration
-suite in `test/integration/` covers only the image build, so the VM lifecycle
-has not been exercised against a real KVM host. Treat
+suite in `test/integration/` now covers the image build **and** the VM
+lifecycle — create, boot, SSH, stop/start/restart, destroy, rollback after a
+failed create, and the refusal to destroy a domain this tool did not create —
+and the whole suite has been run to completion against a real KVM host
+(libvirt 12.6.0, QEMU 11.1.0, `virt-install` 5.1.0), booting all three
+supported distros in NAT mode. Bridged mode is still unexercised. Treat
 `docs/cli.md` and `docs/architecture.md` as the specification to satisfy, and
 update them in the same change if the implementation must diverge.
 
