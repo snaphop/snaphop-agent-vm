@@ -1,0 +1,30 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+/bin/
+/dist/
+agent-vm
+
+# Go
+*.test
+*.out
+coverage.out
+
+# VM and image artifacts — never commit these
+*.qcow2
+*.img
+*.iso
+*.raw
+vmlinuz*
+initrd*
+initramfs*
+console.log
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

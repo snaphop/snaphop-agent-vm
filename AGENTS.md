@@ -9,29 +9,74 @@
 
 ## 1. Project Overview
 
-<!-- TODO(template): replace every placeholder in this section. -->
+- **Name:** `snaphop-agent-vm`
+- **What it does:** Creates and manages short-lived QEMU/KVM virtual machines on
+  a Linux host — via libvirt — so AI coding agents get a disposable,
+  network-isolated machine with root access instead of running on the host.
+- **Primary language / runtime:** Go 1.22+ (single static binary, `agent-vm`).
+- **Key dependencies / frameworks:** existing host CLI tools, orchestrated rather
+  than reimplemented (ADR-0009) — `virt-install` (defines domains and builds the
+  cloud-init seed), `virsh` (lifecycle, inspection, NAT network, addresses,
+  console), QEMU/KVM, `qemu-img` (copy-on-write overlays), `podman`/`skopeo` (OCI
+  pull, build, flatten), libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`,
+  `virt-sysprep`), `ip` (bridge validation), and `ssh`. The Go code is pure Go —
+  no cgo, no libvirt bindings.
+- **Deployment target:** A single Linux host with hardware virtualization
+  (`/dev/kvm`) and a running `libvirtd`/`virtqemud`. Distributed as a binary and
+  invoked by humans or agent supervisors; there is no server component and no
+  hosted service.
+- **Canonical product/API reference:** [`docs/cli.md`](./docs/cli.md) for the
+  command-line contract, [`docs/architecture.md`](./docs/architecture.md) for
+  the system map, and [`docs/decisions/`](./docs/decisions/) for the decisions
+  that produced both.
 
-- **Name:** `<project-name>`
-- **What it does:** `<one-sentence description>`
-- **Primary language / runtime:** `<language and supported runtime versions>`
-- **Key dependencies / frameworks:** `<frameworks, libraries, protocols>`
-- **Deployment target:** `<where and how the project runs>`
-- **Canonical product/API reference:** `<path or "not applicable">`
+**Status: design phase.** The documentation in this repository describes the
+intended design and public contract. The Go implementation has not landed yet —
+`cmd/` and `internal/` are placeholders. When implementing, treat `docs/cli.md`
+and `docs/architecture.md` as the specification to satisfy, and update them in
+the same change if the implementation must diverge.
 
-Describe the users, public interfaces, and most important invariants in one or
-two short paragraphs. Name any compatibility constraints that agents could
-otherwise discover only after breaking them.
+Users are developers and agent supervisors who need a throwaway machine per
+task: a VM is created in seconds from a cached base image, the agent works
+inside it as root, and the VM is destroyed afterwards. The three invariants that
+matter most are **the guest is untrusted** (an agent inside it may run arbitrary
+code, so nothing the host cares about may be reachable by default), **base
+images are content-addressed and reproducible** (a VM's root disk is always a
+copy-on-write overlay on an immutable, digest-pinned base, so creation is fast
+and repeatable), and **we orchestrate existing tools rather than reimplementing
+them** (ADR-0009 — if `virt-install`, `virsh`, `podman`, `qemu-img`, or libguestfs
+already does something, we call it; writing our own version of it requires an ADR
+saying why the tool could not be used).
+
+Compatibility constraints agents could otherwise discover only by breaking
+them: the CLI surface, the on-disk state layout under the state directory, the
+`vm.json`/`manifest.json` files, and the generated libvirt domain XML are public
+contracts (see §8). Base images built by an older version must remain bootable
+by a newer one, or the manifest schema version must be raised and a rebuild
+path documented.
 
 ## 2. Repository Layout
 
-<!-- TODO(template): replace this example with the real repository tree. -->
-
 ```text
 .
-├── src/                    # application source
-├── tests/                  # automated tests
+├── cmd/agent-vm/           # CLI entry point (flag parsing, exit codes only)
+├── internal/
+│   ├── cli/                # subcommand implementations
+│   ├── config/             # config file, env vars, defaults, validation
+│   ├── image/              # base image cache: podman + libguestfs pipeline
+│   ├── domain/             # virt-install argv, virsh lifecycle and queries
+│   ├── network/            # virsh net-* for NAT, ip -json bridge validation
+│   ├── guestinit/          # cloud-init user-data generation
+│   ├── state/              # state directory, vm.json, locking
+│   └── hostexec/           # the only place processes spawn: argv, logs, versions
+├── templates/              # embedded: per-distro Containerfiles, cloud-init
+│                           # user-data, NAT network XML
+├── test/
+│   ├── golden/             # golden tool argv and cloud-init user-data fixtures
+│   ├── toolout/            # output captured from real tools, for parser tests
+│   └── integration/        # KVM-requiring tests (build tag `integration`)
 ├── scripts/                # repeatable development and operational helpers
-├── docs/                   # architecture notes, ADRs, and runbooks
+├── docs/                   # architecture, CLI contract, runbooks, ADRs
 ├── .github/                # CI and contribution metadata
 ├── AGENTS.md               # canonical agent instructions
 ├── CODE_REVIEW.md          # code-review process
@@ -40,176 +85,359 @@ otherwise discover only after breaking them.
 └── CHANGELOG.md            # human-readable history of notable changes
 ```
 
-Document where new modules belong and how test paths relate to source paths.
-Call out generated, vendored, mirrored, or compatibility-sensitive areas that
-must not drift.
+Where new code belongs:
+
+- A new subcommand: `internal/cli/<verb>.go`, plus `internal/cli/<verb>_test.go`.
+  `cmd/agent-vm` stays a thin shell — no business logic there.
+- Distro-specific behavior (package names, kernel path, init flavor): the
+  per-distro `Containerfile` under `templates/distro/`, plus a small distro
+  definition under `internal/image/distro/` for anything a `Containerfile` cannot
+  express. Do not scatter `switch distro` blocks across packages.
+- A new tool invocation: the package that owns the concern (`internal/image`,
+  `internal/domain`, `internal/network`), always executed through
+  `internal/hostexec` and behind an interface so tests can substitute a fake at the
+  process boundary. Nothing else may call `os/exec`.
+- A parser for a tool's output: next to its caller, using the tool's
+  machine-readable mode, with a fixture in `test/toolout/` captured from the real
+  tool.
+
+Unit tests live beside the code they cover. Tests that need `/dev/kvm`, a
+running libvirt, or network access to a registry live in `test/integration/` and
+are guarded by the `integration` build tag.
+
+Compatibility-sensitive areas that must not drift: the `virt-install` argument
+vector and cloud-init user-data we generate (public contract, pinned by golden
+files), `internal/state` (on-disk layout and schema versions), and `docs/cli.md`
+(must match the actual flags). Golden files in `test/golden/` are generated —
+regenerate them with the documented command rather than hand-editing. Fixtures in
+`test/toolout/` are captures of real tool output; refresh them by re-running the
+tool and noting its version, never by editing them to make a parser pass.
 
 ## 3. Setup
 
-<!-- TODO(template): replace this block with commands that work from a fresh clone. -->
-
 Prerequisites:
 
-- `<runtime/tool and version>`
-- `<package manager/build tool>`
-- `<optional local service>`
+- Go 1.22 or newer
+- A Linux host with KVM: `/dev/kvm` present, and your user in the `kvm` and
+  `libvirt` groups
+- libvirt 9.0+ (`libvirtd` or `virtqemud`, plus `virsh`) and QEMU 8.0+
+- `virt-install` 4.0+ (`virtinst` on Debian/Ubuntu)
+- `qemu-img`, `podman` 4.0+ (or `skopeo` 1.11+), and libguestfs 1.50+
+  (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`)
+- `golangci-lint` for linting
+
+No libvirt development headers are needed — the build is pure Go and talks to
+libvirt through `virt-install` and `virsh`.
 
 ```bash
 git clone <repository-url>
-cd <repository-directory>
-<install-command>
-cp .env.example .env
-<initial-verification-command>
+cd snaphop-agent-vm
+go mod download
+cp .env.example .env          # optional; source it into your shell to override
+                              # defaults. The binary reads the environment, not
+                              # this file; config.toml is the persistent option.
+go build ./...
+go run ./cmd/agent-vm doctor
 ```
 
-List any private registry access, local services, seed data, or environment
-configuration needed for a complete development environment. Never put real
-credentials in this file.
+`doctor` is the setup verification command: it checks KVM availability, the
+libvirt connection, group membership, every required tool **and its minimum
+version**, free space in the state directory, and — for bridged mode — the presence
+of the configured host bridge. It must exit non-zero (`3`) with an actionable
+message naming the tool and version when the host is not ready. Because the design
+delegates to host tools, this check is load-bearing, not a nicety.
+
+`--dry-run` on any command prints the exact tool invocations it would run. Use it
+to review a change without a KVM host.
+
+Host preparation beyond package installation (bridge creation, libvirt NAT
+network definition, storage location, unprivileged access) is documented in
+[`docs/host-setup.md`](./docs/host-setup.md). No credentials are required for
+development; public registries are the only external dependency, and offline
+work is possible once a base image is cached.
 
 ## 4. Common Commands
 
 Prefer repository scripts over ad hoc commands so local work and CI stay
-aligned. If a check does not exist, say so explicitly rather than leaving an
-agent to invent one.
-
-<!-- TODO(template): replace or remove every placeholder row. -->
+aligned. While the project is in the design phase there is no `go.mod` and
+`scripts/` is empty, so these are the commands the implementation must make work
+— create the script rather than substituting an ad hoc invocation for it.
 
 | Task | Command |
 |---|---|
-| Install dependencies | `<install-command>` |
-| Build | `<build-command>` |
-| Run locally | `<run-command>` |
-| Run all tests | `<test-command>` |
-| Run one test | `<single-test-command>` |
-| Lint | `<lint-command or "not configured">` |
-| Format | `<format-command or "not configured">` |
-| Typecheck | `<typecheck-command or "not configured">` |
-| Package/container build | `<package-command or "not configured">` |
-| Live/integration test | `<command, prerequisites, and mutation warning>` |
+| Install dependencies | `go mod download` |
+| Build | `go build ./...` |
+| Build the binary | `go build -o bin/agent-vm ./cmd/agent-vm` |
+| Run locally | `go run ./cmd/agent-vm <subcommand>` |
+| Run all tests | `go test ./...` |
+| Run one test | `go test ./internal/domain -run TestVirtInstallArgs_NAT` |
+| Lint | `golangci-lint run` |
+| Format | `gofmt -w .` (CI enforces `gofmt -l .` being empty) |
+| Typecheck | `go vet ./...` (the compiler is the type checker) |
+| Package/container build | `scripts/build-release.sh` (static binary per arch) |
+| Regenerate golden files | `go test ./... -update-golden` |
+| Live/integration test | `go test -tags integration ./test/integration/...` |
 
-State the minimum verification required before handoff and any broader checks
-required for packaging, deployment, schema, authentication, or public-contract
-changes.
+**Minimum verification before handoff:** `gofmt -l .` (empty), `go vet ./...`,
+`golangci-lint run`, and `go test ./...`.
+
+Additional checks required for specific changes:
+
+- Tool invocations (`virt-install` argv, `virsh` usage), generated cloud-init
+  user-data, state layout, `vm.json`/`manifest.json`, CLI flags, config keys, or
+  environment variables: regenerate golden files, update `docs/cli.md` (including
+  its **Underlying Commands** table), and run the integration suite.
+- A new tool, a new flag on an existing tool, or a raised minimum version: update
+  `doctor`, the dependency tables in `AGENTS.md` §3 and `docs/architecture.md`,
+  `docs/host-setup.md` package lists, and `docs/cli.md`.
+- Image build pipeline, `Containerfile`s, or distro definitions: run
+  `go test -tags integration ./test/integration/...` for every supported distro
+  and record which distro/tag combinations you actually booted.
+- Networking changes: exercise both NAT and bridged modes, or state explicitly
+  which one you could not verify and why.
+
+**The integration suite creates and destroys real VMs, networks, and disk
+images on the host it runs on.** It uses a dedicated `agent-vm-test-` name prefix
+and its own state directory. Never point it at a state directory holding VMs
+someone cares about, and never run it against a production libvirt host without
+explicit approval.
 
 ## 5. Architecture And Runtime Notes
 
-<!-- TODO(template): replace these prompts with project-specific facts. -->
+Major modules and responsibilities:
 
-- Identify each major module and its responsibility.
-- Describe the request/job/event flow across module boundaries.
-- Document runtime profiles, feature flags, queues, databases, caches, and
-  external services.
-- Name canonical contracts such as OpenAPI files, schemas, protocol
-  definitions, generated clients, or reference documentation, and say what
-  must be updated together.
-- Record compatibility constraints such as older consumers, supported runtime
-  versions, wire formats, or database migration ordering.
-- Explain CI and release behavior, especially whether merging deploys,
-  publishes artifacts, or only verifies a build.
-- Require an ADR in `docs/decisions/` for significant decisions that are hard
-  to reverse, affect multiple components, or change security/deployment
-  boundaries.
-- Document observable or operational effects in `CHANGELOG.md` under
-  `[Unreleased]` in the same change. Use Keep a Changelog categories and
-  explain what changed and why in language a non-developer can follow. Pure
-  refactors, test-only changes, and formatting-only changes may be omitted.
+- `internal/config` — resolves configuration from defaults, the config file,
+  environment variables, and flags (in that precedence order) and validates the
+  result. Defaults: **2 vCPU, 4 GiB RAM, 50 GiB disk, NAT networking.**
+- `internal/image` — turns an OCI container image reference into a cached,
+  immutable base artifact by sequencing `podman pull`/`build`/`export`,
+  `virt-make-fs`, `virt-ls`/`virt-copy-out`, and `virt-sysprep`, then writing a
+  `manifest.json` recording the source digest, kernel version, kernel command line,
+  and builder tool versions.
+- `internal/guestinit` — generates the cloud-init **user-data** (hostname, SSH
+  public key, agent user, optional user-supplied user-data). Seed construction is
+  `virt-install --cloud-init`'s job, not ours.
+- `internal/domain` — builds the `virt-install` argument vector and drives
+  `virsh` for lifecycle and inspection.
+- `internal/network` — ensures the NAT network exists via `virsh net-*`, or
+  validates an existing host bridge with `ip -json link`.
+- `internal/state` — owns the state directory, per-VM `vm.json`, and the file
+  locks that keep concurrent `create`/`destroy` calls from racing.
+- `internal/hostexec` — the only package that spawns processes: argv construction,
+  timeouts, logging with exit status, and tool version detection.
+
+Flow for `agent-vm create`: resolve config → check host readiness → ensure base
+image (build if the cache misses) → allocate the VM's state directory under a lock
+→ `qemu-img create` the overlay with the base as backing file → generate
+cloud-init user-data → ensure the network → one `virt-install --import --boot
+kernel=…` run to define and start the domain → poll `virsh domifaddr` and wait for
+SSH → capture `virsh dumpxml` and write `vm.json`. Every step is idempotent or
+fully rolled back; a failed `create` must not leave a defined domain or a
+half-written state directory behind.
+
+Runtime profiles and configuration: a single profile, parameterized by the
+libvirt URI (`qemu:///system` by default, `qemu:///session` supported for
+NAT-only unprivileged use), the state directory, and the network mode. There is
+no database, queue, or cache beyond the base image cache on local disk. External
+services are container registries, contacted only during an image build.
+
+Canonical contracts and what must change together: `docs/cli.md` (flags,
+subcommands, exit codes, underlying commands), `test/golden/` (`virt-install` argv
+and generated user-data), `internal/state` schemas plus their `schemaVersion`
+constants, and `docs/host-setup.md` when host prerequisites change. A change to any
+one of these usually requires the others in the same commit.
+
+Compatibility constraints: libvirt 9.0+, QEMU 8.0+, and `virt-install` 4.0+ are the
+floor; x86_64 and aarch64 hosts are supported, and architecture differences
+(machine type, firmware) are `virt-install`'s responsibility rather than ours; base
+images built by an earlier release must stay bootable, and a breaking manifest
+change requires a `schemaVersion` bump plus a documented rebuild path.
+
+CI and release behavior: pull requests run format, vet, lint, and unit tests.
+Integration tests run only on a KVM-capable runner and are not required for
+merge. **Merging does not deploy or publish anything.** Tagged releases build
+and attach static binaries; that workflow is the only publishing path.
+
+Require an ADR in [`docs/decisions/`](./docs/decisions/) for decisions that are
+hard to reverse, affect multiple components, or change the security/deployment
+boundary — specifically the virtualization stack, the boot method, the image
+cache format, guest-to-host sharing, network modes, the default resource profile,
+adding a supported distro family, or **implementing something a standard host
+tool already does** (ADR-0009). ADR-0001 carries the same list.
+
+Document observable or operational effects in `CHANGELOG.md` under
+`[Unreleased]` in the same change, using Keep a Changelog categories and
+language a non-developer can follow. Pure refactors, test-only changes, and
+formatting-only changes may be omitted.
 
 ## 6. Code Style
 
+- **Reach for the existing tool first.** Before writing code that generates domain
+  XML, builds an ISO, extracts container layers, partitions a disk, or parses
+  human-readable output, check whether `virt-install`, `virsh`, `podman`,
+  `qemu-img`, `cloud-localds`, or a libguestfs tool already does it — and check for
+  a machine-readable output flag while you are there. Reimplementation needs an ADR.
+- All process execution goes through `internal/hostexec` with an explicit argument
+  vector. No `os/exec` elsewhere, no shell strings, no `sh -c`.
 - Match the surrounding style of every file you edit. Do not reformat unrelated
   code.
-- Keep functions and modules focused. Preserve established boundaries instead
-  of creating convenience dependencies across them.
+- Standard Go idiom: `gofmt`, wrapped errors with `%w`, `context.Context` as the
+  first parameter for anything that can block, no panics outside `main`
+  initialization.
+- Errors reaching the user must say what failed, what the host state was, and
+  what to do next. Because nearly every failure is another program's failure, an
+  error must carry the tool name, its argv, its exit status, and a bounded excerpt
+  of its stderr. "Operation failed" is not acceptable output from a tool that drives
+  another program.
+- Keep functions and modules focused. Preserve established boundaries instead of
+  creating convenience dependencies across them — `internal/cli` orchestrates,
+  it does not render XML or shell out.
 - Prefer descriptive names over abbreviations or cleverness.
-- Comments explain non-obvious decisions and constraints, not what the code
-  already says.
+- Comments explain non-obvious decisions and constraints — why a kernel
+  command-line argument is required, why an operation is retried — not what the
+  code already says.
 - Do not leave dead code, commented-out replacements, or debugging output.
-- Handle errors at the correct boundary; do not silently swallow failures.
-- Keep public interfaces and user-facing behavior documented.
-- Do not hand-edit generated or vendored files unless this repository
-  explicitly requires it. Update the source and regenerate when possible.
-
-<!-- TODO(template): add language/framework conventions that are actually enforced. -->
+- Handle errors at the correct boundary; do not silently swallow failures. A
+  failed cleanup step is reported, never hidden.
+- Keep public interfaces and user-facing behavior documented: a flag change
+  updates `docs/cli.md` and the command's help text together.
+- Do not hand-edit generated files (`test/golden/`, any generated mocks). Update
+  the source and regenerate.
 
 ## 7. Testing
 
-- Add or update tests for every behavior change. A bug fix requires a
-  regression test unless the behavior cannot be exercised automatically; if
-  so, explain the gap.
-- Name tests after behavior, not implementation details.
-- Prefer realistic values and test through public boundaries. Mock external
-  systems at network, process, clock, filesystem, or service boundaries.
-- Cover success, expected failure, authorization/validation, and edge cases
-  proportional to the risk of the change.
+- Add or update tests for every behavior change. A bug fix requires a regression
+  test unless the behavior cannot be exercised automatically; if so, explain the
+  gap in the pull request.
+- Name tests after behavior: `TestCreate_RejectsInvalidVMName`, not
+  `TestCreate3`.
+- Prefer realistic values — real distro names, real sizes, real domain XML — and
+  test through public boundaries (`internal/cli` entry points, not private
+  helpers).
+- Mock external systems at the process boundary: `virt-install`, `virsh`,
+  `qemu-img`, `podman`/`skopeo`, and the libguestfs tools each sit behind an
+  interface that tests can substitute. Do not mock inside your own packages.
+- Output parsers are tested against fixtures in `test/toolout/` captured from real
+  tools, with the producing tool's version recorded alongside. Hand-written fake
+  output that no tool ever emitted is not coverage.
+- Cover success, expected failure, validation/authorization, and edge cases in
+  proportion to risk. Required coverage for this project: VM name validation,
+  path containment inside the state directory, resource-limit parsing, network
+  mode selection, rollback after a failed `create`, and refusal to destroy
+  anything not recorded in state.
+- Tool argument vectors (notably `virt-install`) and generated cloud-init user-data
+  are covered by golden-file tests. A diff in a golden file is a contract change and
+  must be justified in the pull request.
 - Do not disable, skip, or weaken tests to make a change pass.
-- Do not rely on an optional integration test as the only regression coverage.
-- Document tests that require credentials, containers, external services, or
-  a running deployment.
-- When asked to review code, follow `CODE_REVIEW.md`.
+- Do not rely on the optional integration suite as the only regression coverage
+  for a bug — reproduce it in a unit test wherever the failure can be modeled at
+  a process boundary.
+- Tests requiring `/dev/kvm`, libvirt, or registry access are documented as such
+  and carry the `integration` build tag.
+- When asked to review code, follow [`CODE_REVIEW.md`](./CODE_REVIEW.md).
 
 ## 8. Public Contracts And Data
 
-<!-- TODO(template): customize this section or state that it is not applicable. -->
+Public — consumed outside this repository, by humans, scripts, and agent
+supervisors:
 
-- Identify which APIs, events, schemas, command-line interfaces, file formats,
-  and environment variables are public or consumed outside this repository.
-- Keep implementation, tests, generated artifacts, and canonical reference
-  documentation synchronized.
-- Treat changes to paths, methods, fields, defaults, status/error semantics,
-  authentication, ordering, and pagination as contract changes.
-- Do not make breaking contract or schema changes without explicit approval and
-  a documented migration/versioning plan.
-- Preserve backward compatibility unless the task explicitly authorizes a
-  break.
+- The `agent-vm` command line: subcommands, flags, defaults, stdout format
+  (including `--output json`), and exit codes. Specified in
+  [`docs/cli.md`](./docs/cli.md).
+- Configuration: `~/.config/agent-vm/config.toml` keys and the
+  `AGENT_VM_*` environment variables.
+- On-disk state layout under the state directory, and the `vm.json` and
+  `manifest.json` schemas.
+- The `virt-install` argument vector and cloud-init user-data the tool generates.
+  The resulting domain XML belongs to libvirt and `virt-install`; we capture it to
+  `domain.xml` as a record, and operators may still `virsh edit` a defined domain.
+- The set of host tools required and their minimum versions — raising a floor can
+  make the tool stop working on a host where it worked yesterday.
+
+Treat as contract changes: renaming or removing a subcommand or flag, changing a
+default (resources, network mode, distro tag), changing JSON output fields,
+changing exit-code meanings, changing the state directory layout, changing the
+guest's device topology through the `virt-install` arguments (disk bus, NIC model,
+console), and adding a required tool or raising a minimum version.
+
+Keep implementation, tests, golden files, `docs/cli.md`, and `--help` text
+synchronized in the same change. Do not make breaking contract or schema changes
+without explicit approval and a documented migration path — for state and
+manifests, that means reading the old `schemaVersion` and either upgrading it in
+place or telling the user exactly what to rebuild. Preserve backward
+compatibility unless the task explicitly authorizes a break.
 
 ## 9. Security And Secrets
 
-- `SECURITY.md` defines this repository's hard security boundaries. Its
-  MUST/MUST NOT rules are binding. Read it before touching authentication,
-  authorization, credentials, logging, browser-facing pages, external input,
-  deployment, or dependency policy.
-- Never commit real credentials, tokens, private keys, customer data, or PII.
-  Use environment variables or the approved secret-management mechanism.
-- Do not log secrets, authorization headers, full sensitive payloads, or PII.
-- Treat data from HTTP, messaging, files, environment variables, databases,
-  subprocesses, and upstream services as untrusted.
-- Report vulnerabilities using the private process in `SECURITY.md`; do not
-  expose them in a normal public issue or discussion.
+[`SECURITY.md`](./SECURITY.md) defines this repository's hard security
+boundaries, and its MUST/MUST NOT rules are binding. Read it before touching
+guest isolation, networking, image provenance, SSH key handling, host
+filesystem sharing, subprocess invocation, or the destroy path.
+
+The essentials, which `SECURITY.md` states precisely:
+
+- **The guest is untrusted.** An agent inside a VM may run arbitrary code. No
+  host path, credential, or host-only service is reachable from a guest by
+  default.
+- Never commit real credentials, tokens, private keys, or PII. SSH **public**
+  keys are injected at first boot via cloud-init; private keys never enter an
+  image, a seed, or the repository.
+- Never bake secrets into a base image or a cloud-init seed that outlives the
+  VM, and never log the contents of user-supplied cloud-init data.
+- Treat everything crossing a boundary as untrusted: CLI arguments, config
+  files, environment variables, registry metadata, guest agent responses, DHCP
+  leases, and the stdout of every helper process.
+- Bridged networking puts the guest directly on the operator's LAN. It is never
+  the default and always requires an explicit flag.
+- Report vulnerabilities through the private process in `SECURITY.md`; do not
+  open a public issue.
 
 ## 10. Git, Commits, And Pull Requests
 
 - Use focused branches such as `feat/<short-desc>`, `fix/<short-desc>`,
   `chore/<short-desc>`, or `docs/<short-desc>`.
 - Use Conventional Commits, for example:
-  - `feat(auth): rotate refresh tokens`
-  - `fix(api): reject expired credentials`
-  - `chore(deps): update the HTTP client`
+  - `feat(create): add --network bridge`
+  - `fix(image): reject manifests with an unknown schema version`
+  - `docs(adr): record the direct kernel boot decision`
+  - `chore(deps): raise the minimum virt-install version to 4.1`
 - Keep changes small and reviewable. Separate unrelated refactors from behavior
   changes.
 - Pull requests must explain what changed, why it changed, how it was verified,
   and any operational or compatibility impact.
-- Include screenshots, logs, or example requests when they materially help a
-  reviewer verify behavior.
+- Include the exact commands you ran, and for VM-affecting changes the relevant
+  `virsh dumpxml` excerpt, guest console output, or `agent-vm doctor` result
+  that shows the behavior. State plainly which distros and network modes you did
+  **not** verify.
 
 ## 11. Things Agents Must Not Do Without Explicit Approval
 
 - Force-push, rewrite shared history, delete branches, or run destructive Git
   commands.
-- Add or replace top-level dependencies, frameworks, databases, or service
-  providers.
-- Change public contracts, schemas, authentication behavior, compatibility
-  targets, deployment behavior, or CI/release workflows.
+- Add or replace top-level dependencies, frameworks, or external services —
+  including swapping the OCI tooling or the root filesystem builder, adding a
+  required host tool, or raising a minimum tool version.
+- Reimplement in Go what a standard host tool already does, or bypass
+  `internal/hostexec` to spawn a process directly. If a tool cannot do what is
+  needed, say so in an ADR and get approval before writing the replacement.
+- Change public contracts (§8), authentication or SSH key handling,
+  compatibility targets, deployment behavior, or CI/release workflows.
 - Modify `LICENSE`, weaken `SECURITY.md`, or bypass repository protections.
 - Disable tests, validation, linting, type checks, security checks, or hooks.
-- Commit generated build output, credentials, production data, or large
+- Commit generated build output, base images, disk images, credentials, or large
   speculative abstractions.
-- Perform a mutating live/production test unless the task explicitly authorizes
-  it and the target is confirmed safe.
+- Run destructive libvirt or host operations outside the tool's own state: no
+  `virsh destroy`/`undefine` on domains this tool did not create, no editing or
+  deleting host networks or bridges, no `rm -rf` outside the state directory,
+  and no changes to host firewall rules.
+- Perform a mutating live test on a host running VMs that matter, or run the
+  integration suite against a production libvirt host.
 
 ## 12. When In Doubt
 
-1. Read nearby source, tests, canonical reference docs, and recent ADRs.
+1. Read nearby source, tests, `docs/cli.md`, `docs/architecture.md`, and recent
+   ADRs.
 2. Preserve existing module and trust boundaries.
-3. Ask before making an irreversible API, schema, auth, dependency, data, or
-   deployment decision.
+3. Ask before making an irreversible decision about the CLI contract, state
+   layout, boot method, guest isolation, dependencies, or release process.
 4. Prefer the smallest change that fully solves the stated problem.

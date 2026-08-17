@@ -24,6 +24,56 @@
 
 The reviewer must not modify code unless the task separately asks for fixes.
 
+## What To Look At First In This Repository
+
+This tool defines virtual machines, deletes disk images, and puts untrusted
+guests on a network. Those are the places where a bug is expensive, so review
+them first and hardest:
+
+- **Destroy and rollback paths.** Does a failed `create` leave a defined domain,
+  an orphaned overlay, or a half-written state directory? Does a cleanup failure
+  get reported (exit `7`) rather than swallowed? Does `destroy` act only on the
+  domain and paths recorded in `vm.json`?
+- **Path containment.** Every write and delete must resolve inside the state
+  directory, symlinks included. A missing check here means the tool can delete
+  something it never created.
+- **Reimplementation.** The first question for any new code: does `virt-install`,
+  `virsh`, `podman`, `qemu-img`, `cloud-localds`, or a libguestfs tool already do
+  this? Hand-rolled domain XML, ISO building, layer extraction, or partitioning
+  needs an ADR, not a review approval (ADR-0009).
+- **Subprocess invocation.** Everything goes through `internal/hostexec` with an
+  explicit argument vector — no `os/exec` elsewhere, no shell strings, no untrusted
+  value a tool could read as an option. Are exit status and stderr actually checked,
+  or is a silent tool failure treated as success? Does the error name the tool and
+  argv so a user can rerun it?
+- **Output parsing.** Is a machine-readable mode available and used
+  (`--output=json`, `--format json`, a structured `virsh` subcommand)? Is the parser
+  as narrow as possible, and backed by a fixture captured from the real tool rather
+  than invented output?
+- **Tool dependencies and versions.** A new tool or a raised version floor is a
+  contract change: `doctor`, the dependency tables, `docs/host-setup.md`, and
+  `docs/cli.md` must all move together.
+- **Generated artifacts.** cloud-init user-data must be valid and correctly escaped.
+  Compare golden `virt-install` argv and user-data diffs against the intended
+  change — an unexplained device or `kernel_args` change is a contract change.
+- **Network mode selection.** Bridged mode must never be reachable implicitly,
+  including as a fallback when NAT setup fails.
+- **Guest isolation.** Any new host path, device, or channel exposed to a guest
+  needs an ADR and maintainer approval, not a review approval.
+- **Image provenance.** Digest verification must be enforced, with no fallback to
+  an unpinned tag, and base images must be immutable and atomically published.
+- **Untrusted guest data.** Guest agent responses, DHCP leases, and console output
+  are attacker-influenced input; check they are validated before being used in
+  paths, commands, or identity decisions.
+- **Concurrency.** Per-VM and per-image locking around create/destroy and image
+  builds, and no second source of truth for runtime state — libvirt owns that.
+- **Contract sync.** Flags, `--help`, `docs/cli.md`, config keys, env vars, and
+  `schemaVersion` handling must move together, with a stated rebuild or upgrade
+  path.
+- **Verification honesty.** The PR should say which distros and network modes were
+  actually booted. "Tests pass" without an integration run is not evidence that a
+  VM still boots; say so if that gap exists.
+
 ## Severity Guide
 
 - **Critical:** likely credential/data compromise, destructive behavior, or

@@ -1,6 +1,6 @@
 # 1. Record architecture decisions
 
-Date: YYYY-MM-DD
+Date: 2026-08-17
 
 ## Status
 
@@ -29,6 +29,12 @@ template:
 
 Files are named `NNNN-kebab-case-title.md`, numbered sequentially, never
 renumbered.
+
+For this project specifically, an ADR is required for changes to the
+virtualization stack, the boot method, the image cache format, guest-to-host
+sharing, network modes, the default resource profile, adding a supported distro
+family, and implementing in our own code something a standard host tool already
+does (ADR-0009).
 
 ## Consequences
 
