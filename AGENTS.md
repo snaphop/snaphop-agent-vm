@@ -33,11 +33,12 @@
 **Status: implementation in progress.** The documentation in this repository
 describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
-`internal/network`, `internal/image/distro`, and the `doctor`, `--version`, and
-`--dry-run` surfaces in `internal/cli`. Not yet landed: `image build`, `create`,
-`destroy`, the lifecycle and inspection commands, `internal/domain`, and
-`internal/guestinit`; those subcommands exist in the dispatch table and report
-that they are unimplemented rather than being reported as unknown. Treat
+`internal/network`, `internal/image` (including the per-distro
+`Containerfile`s), and the `doctor`, `image`, `--version`, and `--dry-run`
+surfaces in `internal/cli`. Not yet landed: `create`, `destroy`, the lifecycle
+and inspection commands, `internal/domain`, and `internal/guestinit`; those
+subcommands exist in the dispatch table and report that they are unimplemented
+rather than being reported as unknown. Treat
 `docs/cli.md` and `docs/architecture.md` as the specification to satisfy, and
 update them in the same change if the implementation must diverge.
 

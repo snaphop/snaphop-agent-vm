@@ -44,6 +44,23 @@ migration or rebuild step a user has to take.
   embedded network XML) and host bridge validation via `ip -json link`.
 - `scripts/check.sh` (format, vet, lint, unit tests) and
   `scripts/build-release.sh` (static binary per architecture).
+- The base image build pipeline and the `agent-vm image build`, `image list`,
+  `image inspect`, and `image rm` commands. A build pulls the source image,
+  pins it to the digest that was actually fetched, builds the embedded
+  per-distro `Containerfile` on top of that digest, flattens the result,
+  writes a partitioned ext4 `base.qcow2`, extracts the kernel and initramfs,
+  and generalizes the image with `virt-sysprep` so no two VMs share a machine
+  ID or SSH host key. It records the source digest, kernel version, kernel
+  command line, and the version of every tool that took part.
+- Per-distro build recipes for Ubuntu, Fedora, and Arch Linux in
+  `templates/distro/`, which are the readable form of all distro-specific
+  knowledge in the project. Each installs a kernel, an initramfs generator,
+  systemd, cloud-init, sshd, sudo, and the QEMU guest agent, and restricts
+  cloud-init to the NoCloud datasource so a guest never probes a metadata
+  service on the network.
+- Golden-file testing (`internal/golden`, `test/golden/`), regenerated with
+  `go test ./... -update-golden`. The first golden file pins the tool
+  invocations an Ubuntu base image build performs.
 - Design documentation for `snaphop-agent-vm`: a tool that creates disposable
   QEMU/KVM virtual machines for AI coding agents, so an agent can run commands
   with root access on a throwaway machine instead of on the developer's host.
@@ -79,9 +96,17 @@ migration or rebuild step a user has to take.
   libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
   bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
 - Subcommands specified in `docs/cli.md` but not implemented yet (`create`,
-  `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`, `destroy`,
-  `image`) report that they are unimplemented in this build instead of being
-  reported as unknown commands.
+  `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`) report that they
+  are unimplemented in this build instead of being reported as unknown commands.
+- A cached base image directory also holds the `Containerfile` it was built
+  from, as a record of the recipe that produced it. Documented in
+  `docs/cli.md`.
+- `--dry-run` now guarantees that nothing changes, including the state
+  directory itself: it is not created, and commands that would delete or write
+  print what they would do instead. `image build` prints its whole pipeline
+  with `<placeholders>` for the values that only exist once a build has run,
+  rather than executing the read-only half of a pipeline whose earlier steps
+  were skipped.
 - Replaced the repository's generic project-template documentation with
   project-specific instructions: `AGENTS.md` now describes the real layout,
   commands, contracts, and prohibited actions; `SECURITY.md` states the trust

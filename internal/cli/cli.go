@@ -30,7 +30,10 @@ var Version = "0.1.0-dev"
 type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
-	Env    config.Environ
+	// Stdin is read only to confirm a destructive operation. When it is nil,
+	// such an operation refuses instead of assuming consent.
+	Stdin io.Reader
+	Env   config.Environ
 	// Runner substitutes the process runner. It is the seam tests use to stand
 	// in for the host tools; in a real run it is nil and the real one is built.
 	Runner hostexec.Runner
@@ -66,11 +69,12 @@ type command struct {
 func commands() map[string]*command {
 	list := []*command{
 		doctorCommand(),
+		imageCommand(),
 	}
 	// Commands specified in docs/cli.md that this build does not implement yet
 	// are registered too, so they fail with an accurate message instead of
 	// "unknown command".
-	for _, name := range []string{"create", "list", "info", "start", "stop", "restart", "ssh", "destroy", "console", "image"} {
+	for _, name := range []string{"create", "list", "info", "start", "stop", "restart", "ssh", "destroy", "console"} {
 		list = append(list, notImplemented(name))
 	}
 
@@ -101,8 +105,8 @@ func notImplemented(name string) *command {
 // Run parses global flags, dispatches to a subcommand, and returns the process
 // exit code. It never panics out to the caller: every failure becomes a message
 // on stderr and a documented exit code.
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	app := &App{Stdout: stdout, Stderr: stderr, Env: os.Getenv}
+func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	app := &App{Stdout: stdout, Stderr: stderr, Stdin: stdin, Env: os.Getenv}
 	return app.Main(ctx, args)
 }
 
@@ -223,7 +227,13 @@ func (a *App) Store() (*state.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := state.Open(cfg.StateDir)
+	open := state.Open
+	if a.dryRun {
+		// Creating the state directory tree is a change to the host, and a dry
+		// run makes none.
+		open = state.OpenExisting
+	}
+	store, err := open(cfg.StateDir)
 	if err != nil {
 		return nil, err
 	}

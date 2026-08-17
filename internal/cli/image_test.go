@@ -1,0 +1,296 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+)
+
+// imageHost answers the tools an image build uses. It does not reproduce the
+// build's side effects — the tests here are about the command surface; the
+// pipeline itself is covered in internal/image.
+func imageHost() *hostexec.Fake {
+	fake := healthyHost()
+	fake.RespondPrefix("podman", hostexec.FakeResponse{Stdout: "[]"})
+	return fake
+}
+
+// cliRun runs one command against a fake host in a fresh state directory, and
+// returns the exit code with what was written.
+func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+
+	app := &App{Stdout: &stdout, Stderr: &stderr, Env: func(string) string { return "" }, Runner: fake}
+	full := append([]string{"--state-dir", stateDir, "--config", t.TempDir() + "/absent.toml"}, args...)
+
+	code := app.Main(context.Background(), full)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestImage_RequiresASubcommand(t *testing.T) {
+	code, _, stderr := cliRun(t, imageHost(), t.TempDir(), "image")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "build") {
+		t.Errorf("stderr does not list the subcommands:\n%s", stderr)
+	}
+}
+
+func TestImage_RejectsAnUnknownSubcommand(t *testing.T) {
+	code, _, _ := cliRun(t, imageHost(), t.TempDir(), "image", "publish")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+}
+
+func TestImageBuild_RejectsAnUnsupportedDistro(t *testing.T) {
+	code, _, stderr := cliRun(t, imageHost(), t.TempDir(), "image", "build", "alpine")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "ubuntu") {
+		t.Errorf("stderr does not name the supported distros:\n%s", stderr)
+	}
+}
+
+func TestImageList_EmptyCacheIsNotAnError(t *testing.T) {
+	code, stdout, _ := cliRun(t, imageHost(), t.TempDir(), "image", "list")
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "No base images cached") {
+		t.Errorf("stdout does not explain the empty cache:\n%s", stdout)
+	}
+}
+
+func TestImageList_EmptyCacheEmitsAnEmptyJSONArray(t *testing.T) {
+	// A supervisor parsing this must get [] rather than null.
+	code, stdout, _ := cliRun(t, imageHost(), t.TempDir(), "--output", "json", "image", "list")
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	var manifests []state.Manifest
+	if err := json.Unmarshal([]byte(stdout), &manifests); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, stdout)
+	}
+	if strings.TrimSpace(stdout) != "[]" {
+		t.Errorf("stdout = %q, want []", strings.TrimSpace(stdout))
+	}
+}
+
+// cachedImage writes a complete base image into a state directory, as a
+// finished build would leave it.
+func cachedImage(t *testing.T, dir string) *state.Store {
+	t.Helper()
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+
+	for _, path := range []string{
+		store.BaseDiskPath("ubuntu", "24.04"),
+		store.KernelPath("ubuntu", "24.04"),
+		store.InitrdPath("ubuntu", "24.04"),
+	} {
+		if err := store.WriteFile(path, []byte("artifact\n"), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", path, err)
+		}
+	}
+	err = store.SaveManifest(&state.Manifest{
+		Distro:        "ubuntu",
+		Tag:           "24.04",
+		SourceRef:     "docker.io/library/ubuntu:24.04",
+		SourceDigest:  "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
+		KernelVersion: "6.8.0-31-generic",
+		KernelCmdline: "root=/dev/vda1 console=ttyS0 rw",
+		ToolVersions:  map[string]string{"podman": "4.9.3", "virt-make-fs": "1.50.1"},
+	})
+	if err != nil {
+		t.Fatalf("SaveManifest: %v", err)
+	}
+	return store
+}
+
+func TestImageList_ShowsACachedImage(t *testing.T) {
+	dir := t.TempDir()
+	cachedImage(t, dir)
+
+	code, stdout, _ := cliRun(t, imageHost(), dir, "image", "list")
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, want := range []string{"ubuntu:24.04", "6.8.0-31-generic", "sha256:"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout does not contain %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestImageInspect_ShowsProvenanceAndTheKernelCommandLine(t *testing.T) {
+	dir := t.TempDir()
+	cachedImage(t, dir)
+
+	code, stdout, _ := cliRun(t, imageHost(), dir, "image", "inspect", "ubuntu")
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	// The full digest and the kernel command line are the two things an
+	// operator comes to inspect for: with direct kernel boot the command line
+	// is not discoverable from inside the guest.
+	for _, want := range []string{
+		"sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
+		"root=/dev/vda1 console=ttyS0 rw",
+		"6.8.0-31-generic",
+		"podman",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout does not contain %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestImageInspect_UnknownImageIsNotFound(t *testing.T) {
+	code, _, _ := cliRun(t, imageHost(), t.TempDir(), "image", "inspect", "fedora")
+
+	if code != ExitNotFound {
+		t.Errorf("exit code = %d, want %d", code, ExitNotFound)
+	}
+}
+
+func TestImageRm_RefusesWithoutConfirmationWhenThereIsNoTerminal(t *testing.T) {
+	// Assuming consent for a destructive operation in a non-interactive run is
+	// exactly the mistake that loses someone's cached image.
+	dir := t.TempDir()
+	cachedImage(t, dir)
+
+	code, _, stderr := cliRun(t, imageHost(), dir, "image", "rm", "ubuntu")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "--yes") {
+		t.Errorf("stderr does not tell the operator how to proceed:\n%s", stderr)
+	}
+
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("the image was removed without confirmation")
+	}
+}
+
+func TestImageRm_RemovesWithYes(t *testing.T) {
+	dir := t.TempDir()
+	store := cachedImage(t, dir)
+
+	code, _, stderr := cliRun(t, imageHost(), dir, "--yes", "image", "rm", "ubuntu")
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0: %s", code, stderr)
+	}
+	if store.HasImage("ubuntu", "24.04") {
+		t.Error("the image is still cached after `image rm --yes`")
+	}
+}
+
+func TestImageRm_DeclinedAtThePromptRemovesNothing(t *testing.T) {
+	dir := t.TempDir()
+	store := cachedImage(t, dir)
+
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Stdin:  strings.NewReader("n\n"),
+		Env:    func(string) string { return "" },
+		Runner: imageHost(),
+	}
+	code := app.Main(context.Background(), []string{
+		"--state-dir", dir, "--config", t.TempDir() + "/absent.toml",
+		"image", "rm", "ubuntu",
+	})
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("the image was removed after the operator declined")
+	}
+}
+
+func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
+	dir := t.TempDir()
+	store := cachedImage(t, dir)
+
+	vm := store.NewVM("agent-01")
+	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "24.04"}
+	if err := store.SaveVM(vm); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+
+	code, _, stderr := cliRun(t, imageHost(), dir, "--yes", "image", "rm", "ubuntu")
+
+	if code == ExitOK {
+		t.Fatal("image rm removed a base image a VM still depends on")
+	}
+	if !strings.Contains(stderr, "agent-01") {
+		t.Errorf("stderr does not name the dependent VM:\n%s", stderr)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("the image was removed despite the refusal")
+	}
+}
+
+func TestImageBuild_DryRunPrintsThePlanAndCreatesNothing(t *testing.T) {
+	// --dry-run must exit 0 having changed nothing at all — not even the state
+	// directory it would otherwise create.
+	dir := filepath.Join(t.TempDir(), "state")
+
+	code, stdout, _ := cliRun(t, imageHost(), dir, "--dry-run", "image", "build", "fedora")
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	for _, want := range []string{"podman pull", "virt-make-fs", "virt-sysprep", "manifest.json"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("plan does not mention %q:\n%s", want, stdout)
+		}
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("--dry-run created the state directory: %v", err)
+	}
+}
+
+func TestImageRm_DryRunRemovesNothing(t *testing.T) {
+	dir := t.TempDir()
+	store := cachedImage(t, dir)
+
+	code, stdout, _ := cliRun(t, imageHost(), dir, "--yes", "--dry-run", "image", "rm", "ubuntu")
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "ubuntu/24.04") {
+		t.Errorf("plan does not say what it would remove:\n%s", stdout)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("--dry-run removed the image")
+	}
+}

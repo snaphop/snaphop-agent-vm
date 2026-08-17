@@ -27,7 +27,34 @@ type Distro struct {
 	// build recipe.
 	KernelPackage string
 	Initramfs     string
+
+	// Containerfile is the embedded build recipe under templates/distro/.
+	// Everything a Containerfile can express belongs there rather than here.
+	Containerfile string
+
+	// KernelPattern and InitrdPattern match the artifacts to extract from
+	// /boot after the build. They differ per family because each one names its
+	// initramfs differently, and there is no way to express "find the kernel"
+	// in a Containerfile.
+	KernelPattern string
+	InitrdPattern string
 }
+
+// ModulesDir is where every supported family keeps its kernel modules. The
+// directory name under it is the kernel version, which is more reliable than
+// parsing it out of a kernel filename.
+const ModulesDir = "/usr/lib/modules"
+
+// KernelCmdline is the command line every guest boots with. Under direct
+// kernel boot (ADR-0004) this lives on the host, not in the guest, so it is
+// recorded in each base image's manifest and is part of the public contract.
+//
+//   - root=/dev/vda1 matches the single partition virt-make-fs --partition
+//     writes; the overlay is attached as the first virtio disk.
+//   - console=ttyS0 is what makes the serial console — and therefore
+//     console.log, the primary artifact for diagnosing a VM that never became
+//     reachable — actually contain the boot.
+const KernelCmdline = "root=/dev/vda1 console=ttyS0 rw"
 
 // SourceRef is the OCI reference for a tag of this family. It is a starting
 // point only: a build resolves it to a digest and pins that (SECURITY.md,
@@ -45,6 +72,9 @@ var (
 		DefaultTag:    "24.04",
 		KernelPackage: "linux-image-virtual",
 		Initramfs:     "initramfs-tools",
+		Containerfile: "ubuntu.Containerfile",
+		KernelPattern: "vmlinuz-*",
+		InitrdPattern: "initrd.img-*",
 	}
 	Fedora = Distro{
 		Name:          "fedora",
@@ -52,6 +82,9 @@ var (
 		DefaultTag:    "42",
 		KernelPackage: "kernel-core",
 		Initramfs:     "dracut",
+		Containerfile: "fedora.Containerfile",
+		KernelPattern: "vmlinuz-*",
+		InitrdPattern: "initramfs-*.img",
 	}
 	Arch = Distro{
 		Name:          "arch",
@@ -59,6 +92,9 @@ var (
 		DefaultTag:    "base",
 		KernelPackage: "linux",
 		Initramfs:     "mkinitcpio",
+		Containerfile: "arch.Containerfile",
+		KernelPattern: "vmlinuz-linux",
+		InitrdPattern: "initramfs-linux.img",
 	}
 )
 

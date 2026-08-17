@@ -1,0 +1,59 @@
+[
+     {
+          "Id": "c6348fa86ba0fb2108c9334f5fe913ddc6d853313e655891f133a0127c30099f",
+          "Digest": "sha256:1cfa4e2b09e127b9c4ed43578d3f3c18e7d44ea47b9ea98475c0cbe9086525f8",
+          "RepoTags": [
+               "docker.io/library/busybox:latest"
+          ],
+          "RepoDigests": [
+               "docker.io/library/busybox@sha256:1cfa4e2b09e127b9c4ed43578d3f3c18e7d44ea47b9ea98475c0cbe9086525f8",
+               "docker.io/library/busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616"
+          ],
+          "Parent": "",
+          "Comment": "",
+          "Created": "2026-05-13T02:21:49Z",
+          "Config": {
+               "Env": [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+               ],
+               "Cmd": [
+                    "sh"
+               ]
+          },
+          "Version": "",
+          "Author": "",
+          "Architecture": "amd64",
+          "Os": "linux",
+          "Size": 4690894,
+          "VirtualSize": 4690894,
+          "GraphDriver": {
+               "Name": "overlay",
+               "Data": {
+                    "UpperDir": "/home/wensington/.local/share/containers/storage/overlay/0958e0fef2d6a31e1325b8bfecd99dead933363682d69850a7606599023751bc/diff",
+                    "WorkDir": "/home/wensington/.local/share/containers/storage/overlay/0958e0fef2d6a31e1325b8bfecd99dead933363682d69850a7606599023751bc/work"
+               }
+          },
+          "RootFS": {
+               "Type": "layers",
+               "Layers": [
+                    "sha256:0958e0fef2d6a31e1325b8bfecd99dead933363682d69850a7606599023751bc"
+               ]
+          },
+          "Labels": null,
+          "Annotations": {
+               "org.opencontainers.image.url": "https://github.com/docker-library/busybox",
+               "org.opencontainers.image.version": "1.38.0-glibc"
+          },
+          "ManifestType": "application/vnd.oci.image.manifest.v1+json",
+          "User": "",
+          "History": [
+               {
+                    "created": "2026-05-13T02:21:49Z",
+                    "created_by": "BusyBox 1.38.0 (glibc), Debian 13"
+               }
+          ],
+          "NamesHistory": [
+               "docker.io/library/busybox:latest"
+          ]
+     }
+]

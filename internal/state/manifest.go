@@ -52,30 +52,27 @@ type Manifest struct {
 // Ref renders the image's identity as an operator writes it.
 func (m *Manifest) Ref() string { return m.Distro + ":" + m.Tag }
 
-// Paths of a base image's artifacts, given the store it lives in.
-func (s *Store) BaseDiskPath(distro, tag string) string {
-	return filepath.Join(s.ImageDir(distro, tag), BaseDiskFile)
-}
-
-// KernelPath is the extracted guest kernel handed to virt-install --boot.
-func (s *Store) KernelPath(distro, tag string) string {
-	return filepath.Join(s.ImageDir(distro, tag), KernelFile)
-}
-
-// InitrdPath is the extracted initramfs handed to virt-install --boot.
-func (s *Store) InitrdPath(distro, tag string) string {
-	return filepath.Join(s.ImageDir(distro, tag), InitrdFile)
-}
-
-// SaveManifest writes images/<distro>/<tag>/manifest.json atomically.
-func (s *Store) SaveManifest(m *Manifest) error {
+// MarshalManifest encodes a manifest in the on-disk form. It is exported
+// because a build assembles its manifest inside a temporary directory and
+// renames it into place with the artifacts it describes, rather than writing it
+// to the cache directly.
+func MarshalManifest(m *Manifest) ([]byte, error) {
 	m.SchemaVersion = ManifestSchemaVersion
 
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encoding manifest for %s: %w", m.Ref(), err)
+		return nil, fmt.Errorf("encoding manifest for %s: %w", m.Ref(), err)
 	}
-	return s.WriteFile(filepath.Join(s.ImageDir(m.Distro, m.Tag), ManifestFile), append(data, '\n'), filePerm)
+	return append(data, '\n'), nil
+}
+
+// SaveManifest writes images/<distro>/<tag>/manifest.json atomically.
+func (s *Store) SaveManifest(m *Manifest) error {
+	data, err := MarshalManifest(m)
+	if err != nil {
+		return err
+	}
+	return s.WriteFile(filepath.Join(s.ImageDir(m.Distro, m.Tag), ManifestFile), data, filePerm)
 }
 
 // LoadManifest reads one base image's manifest.

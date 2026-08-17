@@ -29,19 +29,66 @@ const (
 	filePerm fs.FileMode = 0o644
 )
 
-// Store is a state directory.
-type Store struct {
+// Layout computes paths inside a state directory without touching the
+// filesystem. It exists separately from Store so that --dry-run can print the
+// paths an operation would use without creating anything: a dry run that
+// created a directory tree would not be a dry run.
+type Layout struct {
 	root string
 }
 
+// NewLayout returns the layout of the state directory at dir.
+func NewLayout(dir string) Layout { return Layout{root: dir} }
+
+// Root is the state directory itself.
+func (l Layout) Root() string { return l.root }
+
+// VMDir is where one VM's overlay, user-data, console log, and record live.
+func (l Layout) VMDir(name string) string { return filepath.Join(l.root, "vms", name) }
+
+// ImageDir is where one base image's disk, kernel, initrd, and manifest live.
+func (l Layout) ImageDir(distro, tag string) string {
+	return filepath.Join(l.root, "images", distro, tag)
+}
+
+// BaseDiskPath is the immutable base disk a VM's overlay is backed by.
+func (l Layout) BaseDiskPath(distro, tag string) string {
+	return filepath.Join(l.ImageDir(distro, tag), BaseDiskFile)
+}
+
+// KernelPath is the extracted guest kernel handed to virt-install --boot.
+func (l Layout) KernelPath(distro, tag string) string {
+	return filepath.Join(l.ImageDir(distro, tag), KernelFile)
+}
+
+// InitrdPath is the extracted initramfs handed to virt-install --boot.
+func (l Layout) InitrdPath(distro, tag string) string {
+	return filepath.Join(l.ImageDir(distro, tag), InitrdFile)
+}
+
+// Store is a state directory that exists on disk.
+type Store struct {
+	Layout
+}
+
 // Open returns a Store rooted at dir, creating the directory tree if needed.
-func Open(dir string) (*Store, error) {
+func Open(dir string) (*Store, error) { return open(dir, true) }
+
+// OpenExisting returns a Store rooted at dir without creating anything. It is
+// what --dry-run uses: creating a directory tree is a change to the host, and a
+// dry run makes none.
+func OpenExisting(dir string) (*Store, error) { return open(dir, false) }
+
+func open(dir string, create bool) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("state: no state directory configured")
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, fmt.Errorf("resolving state directory %s: %w", dir, err)
+	}
+	if !create {
+		return &Store{Layout: NewLayout(abs)}, nil
 	}
 	for _, path := range []string{
 		abs,
@@ -54,18 +101,7 @@ func Open(dir string) (*Store, error) {
 			return nil, fmt.Errorf("creating state directory %s: %w", path, err)
 		}
 	}
-	return &Store{root: abs}, nil
-}
-
-// Root is the state directory itself.
-func (s *Store) Root() string { return s.root }
-
-// VMDir is where one VM's overlay, user-data, console log, and record live.
-func (s *Store) VMDir(name string) string { return filepath.Join(s.root, "vms", name) }
-
-// ImageDir is where one base image's disk, kernel, initrd, and manifest live.
-func (s *Store) ImageDir(distro, tag string) string {
-	return filepath.Join(s.root, "images", distro, tag)
+	return &Store{Layout: NewLayout(abs)}, nil
 }
 
 // Paths within a VM directory, named once so no caller spells them again.

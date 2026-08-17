@@ -139,8 +139,28 @@ Use `--dry-run` to print the whole pipeline without running it.
 | `--platform <os/arch>` | host platform | Image platform to pull. |
 
 Building is the only operation that requires network access to a registry. It is
-safe to run concurrently for different distros and refuses to run twice for the
-same one.
+safe to run concurrently for different distros, and a second build of the same
+one waits for the first to finish rather than racing it.
+
+The whole build happens in a temporary directory under `images/` that is renamed
+into place only on success, so a failed or interrupted build leaves no image
+behind — and a rebuild keeps the previous image until the new one is complete.
+The source image is pulled by tag, then pinned to the digest that was actually
+fetched; everything after the pull is built on the digest, and the digest is what
+`manifest.json` records.
+
+Every base image makes the same promises to the VMs built on it, and those
+promises are the guest contract: `sshd`, `systemd-networkd`, and the cloud-init
+units start by themselves at first boot; cloud-init reads the NoCloud seed and
+no other datasource, so a guest never contacts a metadata service on the
+network; and the image carries no identity — `virt-sysprep` empties the machine
+ID and removes SSH host keys, so no two VMs share either. Changing any of these
+changes what every script that SSHes into these VMs can assume.
+
+Under `--dry-run`, `image build` prints the pipeline and the file operations it
+would perform and exits without touching anything, including the state
+directory. Values that only exist once a build has run — the source digest, the
+kernel file name — appear as `<placeholders>` rather than as guesses.
 
 ### `agent-vm image list`
 
@@ -256,7 +276,7 @@ any command; the table below is the summary.
 
 | Operation | Tools invoked |
 |---|---|
-| `image build` | `podman pull`, `podman build`, `podman create`, `podman export`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh dumpxml` |
 | `list` / `info` | `virsh list --all`, `virsh dominfo`, `virsh domifaddr`, `virsh domblklist`, `qemu-img info --output=json` |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
@@ -294,6 +314,7 @@ $STATE_DIR/
 │       ├── base.qcow2          # immutable, read-only backing file
 │       ├── vmlinuz
 │       ├── initrd
+│       ├── Containerfile       # the recipe this image was built from (a record)
 │       └── manifest.json       # source digest, kernel version, cmdline,
 │                               # builder tool versions, schemaVersion
 ├── vms/

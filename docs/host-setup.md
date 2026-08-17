@@ -91,7 +91,20 @@ are unavailable in that mode.
 
 State lives in `~/.local/share/agent-vm` by default: cached base images
 under `images/`, per-VM overlays under `vms/`. Plan roughly 2–3 GiB per cached
-base image, plus whatever the guests actually write.
+base image, plus whatever the guests actually write. (An Ubuntu 24.04 base image
+measures about 1.4 GiB of qcow2 plus 35 MiB of kernel and initramfs.)
+
+Building a base image also leaves images in **podman's** storage, which is
+separate from the state directory and is not counted by anything `agent-vm`
+reports: the pulled source image, the built `agent-vm/<distro>:<tag>` image, and
+usually a dangling intermediate layer. That is deliberate — it makes a rebuild
+much faster — but it is real disk. Reclaim it with the usual podman commands:
+
+```bash
+podman images                       # what is actually there
+podman image prune                  # dangling layers
+podman rmi agent-vm/ubuntu:24.04    # the built image; agent-vm rebuilds it on demand
+```
 
 Overlays are thin. A 50 GiB VM starts at a few megabytes, so `df` at creation
 time tells you nothing about where you will be after an agent runs a build.

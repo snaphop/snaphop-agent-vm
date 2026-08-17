@@ -275,6 +275,11 @@ func checkLibvirt(ctx context.Context, app *App, cfg *config.Config) check {
 }
 
 func checkStateDir(app *App, cfg *config.Config) check {
+	if app.dryRun {
+		// This check works by writing a probe file, which --dry-run forbids.
+		return check{Name: "state directory", Status: statusSkip, Detail: "skipped under --dry-run: the check writes a probe file"}
+	}
+
 	store, err := app.Store()
 	if err != nil {
 		return check{

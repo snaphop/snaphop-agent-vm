@@ -22,6 +22,10 @@ type Fake struct {
 	PrefixResponses map[string]FakeResponse
 	// Missing lists tools that are not installed.
 	Missing map[string]bool
+	// MatchFunc is consulted before the argv rules, for invocations that are
+	// easier to describe as a predicate than as a literal argument vector —
+	// the same tool asked about two different paths, for instance.
+	MatchFunc func(c Command) (FakeResponse, bool)
 	// Default answers any invocation no other rule matched.
 	Default FakeResponse
 
@@ -35,6 +39,11 @@ type FakeResponse struct {
 	Stderr   string
 	ExitCode int
 	Err      error
+	// Do runs before the response is returned, for the tools whose real effect
+	// a later step depends on — virt-make-fs producing a disk, virt-copy-out
+	// producing a kernel. Without it a test could not exercise the steps that
+	// read what an earlier tool wrote.
+	Do func(c Command) error
 }
 
 // NewFake returns an empty Fake that succeeds silently by default.
@@ -68,7 +77,12 @@ func (f *Fake) Run(_ context.Context, c Command) (*Result, error) {
 		return nil, &NotFoundError{Tool: c.Name}
 	}
 
-	r := f.lookup(strings.Join(c.Argv(), " "))
+	r := f.lookup(c)
+	if r.Do != nil {
+		if err := r.Do(c); err != nil {
+			return nil, err
+		}
+	}
 	res := &Result{
 		Stdout:   []byte(r.Stdout),
 		Stderr:   []byte(r.Stderr),
@@ -83,7 +97,14 @@ func (f *Fake) Run(_ context.Context, c Command) (*Result, error) {
 	return res, nil
 }
 
-func (f *Fake) lookup(argv string) FakeResponse {
+func (f *Fake) lookup(c Command) FakeResponse {
+	if f.MatchFunc != nil {
+		if r, ok := f.MatchFunc(c); ok {
+			return r
+		}
+	}
+
+	argv := strings.Join(c.Argv(), " ")
 	if r, ok := f.Responses[argv]; ok {
 		return r
 	}
