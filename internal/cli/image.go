@@ -307,7 +307,7 @@ func (a *App) confirm(prompt string) (bool, error) {
 		return false, exitf(ExitUsage, "%s\n  This is a destructive operation and there is no terminal to confirm on. Re-run with --yes.", prompt)
 	}
 
-	fmt.Fprintf(a.Stderr, "%s [y/N] ", prompt)
+	_, _ = fmt.Fprintf(a.Stderr, "%s [y/N] ", prompt)
 	line, err := bufio.NewReader(a.Stdin).ReadString('\n')
 	if err != nil && line == "" {
 		return false, nil

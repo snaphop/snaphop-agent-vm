@@ -14,7 +14,7 @@ func TestLockVM_SerializesOperationsOnTheSameVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TryLockVM: %v", err)
 	}
-	t.Cleanup(func() { held.Release() })
+	t.Cleanup(func() { _ = held.Release() })
 
 	// A second lock within this process must also be refused: two goroutines
 	// racing a create is the same bug as two processes racing it.
@@ -35,13 +35,13 @@ func TestLockVM_DifferentVMsDoNotBlockEachOther(t *testing.T) {
 	if err != nil {
 		t.Fatalf("locking agent-01: %v", err)
 	}
-	defer first.Release()
+	defer func() { _ = first.Release() }()
 
 	second, err := store.TryLockVM("agent-02", "create")
 	if err != nil {
 		t.Fatalf("locking agent-02 while agent-01 is locked: %v", err)
 	}
-	defer second.Release()
+	defer func() { _ = second.Release() }()
 }
 
 func TestLockVM_ReleaseAllowsTheNextHolder(t *testing.T) {
@@ -76,7 +76,7 @@ func TestLockVM_WaitsUntilTheContextExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TryLockVM: %v", err)
 	}
-	defer held.Release()
+	defer func() { _ = held.Release() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
@@ -99,14 +99,14 @@ func TestLockImage_SerializesBuildsOfTheSameImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LockImage: %v", err)
 	}
-	defer held.Release()
+	defer func() { _ = held.Release() }()
 
 	// Different distros build concurrently; the same one does not.
 	other, err := store.LockImage(ctx, "fedora", "42", "image build")
 	if err != nil {
 		t.Fatalf("LockImage for a different distro: %v", err)
 	}
-	defer other.Release()
+	defer func() { _ = other.Release() }()
 
 	waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()

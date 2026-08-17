@@ -201,6 +201,11 @@ migration or rebuild step a user has to take.
   the required host tools and their minimum versions are documented and checked by
   `agent-vm doctor`.
 
+- `create`, `destroy`, `image build`, and `image rm` now report a lock they
+  could not release instead of discarding the failure. A stuck lock is host
+  state an operator has to clear before the next run, so it is no longer
+  silent.
+
 ### Security
 
 - Documented the project's hard security boundaries in `SECURITY.md`: the guest

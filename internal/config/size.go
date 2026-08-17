@@ -36,7 +36,7 @@ func ParseSize(s string) (Size, error) {
 		return 0, fmt.Errorf("invalid size %q: expected a number with an optional K, M, G, or T suffix", s)
 	}
 
-	unit := Size(1)
+	var unit Size
 	switch suffix {
 	case "", "b":
 		unit = 1

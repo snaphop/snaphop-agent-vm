@@ -35,7 +35,7 @@ func (o *output) JSON(value any) error {
 
 // Printf writes a command result to stdout.
 func (o *output) Printf(format string, args ...any) {
-	fmt.Fprintf(o.stdout, format, args...)
+	_, _ = fmt.Fprintf(o.stdout, format, args...)
 }
 
 // Progress writes human-readable progress to stderr, unless --quiet.
@@ -43,7 +43,7 @@ func (o *output) Progress(format string, args ...any) {
 	if o.quiet {
 		return
 	}
-	fmt.Fprintf(o.stderr, format, args...)
+	_, _ = fmt.Fprintf(o.stderr, format, args...)
 }
 
 // Table writes aligned columns to stdout. Header cells are given as the first
@@ -54,7 +54,7 @@ func (o *output) Table(rows [][]string) {
 	}
 	w := tabwriter.NewWriter(o.stdout, 0, 0, 2, ' ', 0)
 	for _, row := range rows {
-		fmt.Fprintln(w, strings.Join(row, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
-	w.Flush()
+	_ = w.Flush()
 }

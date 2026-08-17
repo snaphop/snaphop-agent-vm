@@ -265,14 +265,16 @@ func (s *Store) WriteFile(path string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("creating temporary file for %s: %w", resolved, err)
 	}
-	defer os.Remove(tmp.Name())
+	// A no-op once the rename below succeeds; on every failure path it is what
+	// keeps a partial file out of the state directory.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing %s: %w", resolved, err)
 	}
 	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("setting permissions on %s: %w", resolved, err)
 	}
 	if err := tmp.Close(); err != nil {

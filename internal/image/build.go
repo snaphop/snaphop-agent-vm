@@ -83,7 +83,7 @@ type BuildOptions struct {
 // The whole build happens in a temporary directory that is renamed into place
 // only on success, so an interrupted or failed build can never leave a
 // partially written base image that a VM could boot from (SECURITY.md).
-func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*state.Manifest, error) {
+func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Manifest, err error) {
 	d, tag := opts.Ref.Distro, opts.Ref.Tag
 
 	// One build per base image at a time. A second build of the same image
@@ -92,7 +92,13 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*state.Manifest
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Release()
+	// A lock we cannot release is host state the operator needs to know about,
+	// so it is reported rather than dropped (AGENTS.md §6).
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil && err == nil {
+			err = releaseErr
+		}
+	}()
 
 	if !opts.Force && b.Store.HasImage(d.Name, tag) {
 		return b.Store.LoadManifest(d.Name, tag)
@@ -506,12 +512,18 @@ func repoOf(ref string) string {
 // Remove deletes a cached base image, refusing while any VM's overlay still
 // uses it as a backing file. A backing file is not optional: removing it makes
 // those VMs' disks unreadable (ADR-0004).
-func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) error {
+func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err error) {
 	lock, err := b.Store.LockImage(ctx, ref.Distro.Name, ref.Tag, "image rm")
 	if err != nil {
 		return err
 	}
-	defer lock.Release()
+	// A lock we cannot release is host state the operator needs to know about,
+	// so it is reported rather than dropped (AGENTS.md §6).
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil && err == nil {
+			err = releaseErr
+		}
+	}()
 
 	if !b.Store.HasImage(ref.Distro.Name, ref.Tag) {
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}

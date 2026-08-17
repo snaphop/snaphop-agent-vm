@@ -28,7 +28,9 @@ go vet ./... || fail=1
 
 step "golangci-lint"
 if command -v golangci-lint >/dev/null 2>&1; then
-  golangci-lint run || fail=1
+  # Report every finding: the defaults cap repeats per linter, which hides the
+  # tail of a backlog and makes a partial fix look complete.
+  golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 || fail=1
 else
   echo "WARNING: golangci-lint is not installed; lint was NOT run."
   echo "Install it from https://golangci-lint.run/ before claiming a clean run."

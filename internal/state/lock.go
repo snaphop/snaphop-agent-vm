@@ -99,7 +99,7 @@ func (s *Store) tryLock(path, resource, operation string) (*Lock, error) {
 
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		holder := readHolder(file)
-		file.Close()
+		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, &BusyError{Resource: resource, Holder: holder}
 		}
@@ -109,8 +109,8 @@ func (s *Store) tryLock(path, resource, operation string) (*Lock, error) {
 	// Record the holder only after the lock is ours, so the file always
 	// describes the process that actually holds it.
 	if err := writeHolder(file, operation); err != nil {
-		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		file.Close()
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
 		return nil, err
 	}
 	return &Lock{file: file, path: resolved}, nil
@@ -127,7 +127,7 @@ func (l *Lock) Release() error {
 	// The lock file itself is left in place: removing it would race with
 	// another process that has already opened it and is waiting on flock.
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("releasing lock %s: %w", l.path, err)
 	}
 	return file.Close()
