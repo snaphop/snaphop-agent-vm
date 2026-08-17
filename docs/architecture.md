@@ -98,10 +98,10 @@ versions are enforced by `agent-vm doctor`.
 |---|---|
 | Define and start a domain | `virt-install --import --boot kernel=…,initrd=…,kernel_args=…` |
 | Domain lifecycle | `virsh start` / `shutdown` / `destroy` / `undefine` |
-| Domain inspection | `virsh list --all`, `dominfo`, `dumpxml`, `domblklist` |
+| Domain inspection | `virsh list --all --name`, `domstate`, `dumpxml`, `domblklist`, `domiflist` |
 | Guest address | `virsh domifaddr --source agent`, fallback `--source lease` |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
-| NAT network | `virsh net-define` / `net-start` / `net-autostart` / `net-dhcp-leases` |
+| NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -json link show type bridge` |
 | OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` (or `skopeo copy`) |
 | Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
@@ -109,7 +109,7 @@ versions are enforced by `agent-vm doctor`.
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
 | Disk facts | `qemu-img info -U --output=json` |
-| cloud-init seed | `virt-install --cloud-init user-data=…` (fallback `cloud-localds`) |
+| cloud-init seed | `virt-install --cloud-init user-data=…` |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 
 Two rules keep this maintainable. **Machine-readable output only** — `--output=json`,
@@ -172,8 +172,9 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   guest user, authorized SSH public keys, and any operator-supplied user-data
   merged in — and hand it to `virt-install --cloud-init user-data=…`, which builds
   and attaches the NoCloud seed. We own the content; we do not build ISOs.
-  (`cloud-localds` is the documented fallback when a persistent seed is needed,
-  such as with `--no-start`.)
+  Because that seed exists for the first boot only, there is no "define without
+  starting" mode: `create --no-start` is rejected rather than approximated
+  ([`cli.md`](./cli.md)).
 - **Public interface:** the guest contract — user name, `sudo` rights, and which
   services are expected up after first boot.
 - **Failure behavior:** a malformed user-data file is rejected before the VM is
@@ -186,8 +187,8 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 
 - **Responsibility:** Build the `virt-install` argument vector that defines a VM,
   and drive the rest of the lifecycle through `virsh` (`start`, `shutdown`,
-  `destroy`, `undefine`) and its query subcommands (`list --all`, `dominfo`,
-  `dumpxml`, `domstate`, `domiflist`, `domifaddr`). `console` and `ssh` are exec'd directly so
+  `destroy`, `undefine`) and its query subcommands (`list --all --name`,
+  `dumpxml`, `domstate`, `domblklist`, `domiflist`, `domifaddr`). `console` and `ssh` are exec'd directly so
   the operator gets a real terminal, not a proxied one.
 - **Public interface:** the `virt-install` argument vector — direct kernel boot via
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,

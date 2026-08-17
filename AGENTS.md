@@ -79,6 +79,7 @@ path documented.
 │   ├── network/            # virsh net-* for NAT, ip -json bridge validation
 │   ├── guestinit/          # cloud-init user-data generation
 │   ├── state/              # state directory, vm.json, locking
+│   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
 ├── templates/              # embedded: per-distro Containerfiles, cloud-init
 │                           # user-data, NAT network XML
@@ -88,7 +89,8 @@ path documented.
 │   └── integration/        # KVM-requiring tests (build tag `integration`)
 ├── scripts/                # repeatable development and operational helpers
 ├── docs/                   # architecture, CLI contract, runbooks, ADRs
-├── .github/                # CI and contribution metadata
+├── .github/                # contribution metadata (pull request template). The
+│                           # CI workflows described in §5 are not written yet.
 ├── AGENTS.md               # canonical agent instructions
 ├── CODE_REVIEW.md          # code-review process
 ├── CONTRIBUTING.md         # contribution workflow

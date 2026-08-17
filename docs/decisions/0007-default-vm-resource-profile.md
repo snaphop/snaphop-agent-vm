@@ -34,9 +34,10 @@ Defaults for `agent-vm create`:
 | Root disk | 50 GiB virtual, thin overlay | `--disk` |
 
 All three are overridable per VM and settable as defaults in the config file or
-via `AGENT_VM_*`. No memory ballooning, CPU pinning, or automatic sizing based
-on host capacity — the guest gets what was asked for, and capacity planning stays
-with the operator.
+via `AGENT_VM_*`. The guest gets what was asked for: no CPU pinning, no automatic
+sizing from host capacity, and no reclaiming memory from a running guest. (The
+domain does carry the standard `--memballoon virtio` device, as any virtio guest
+does, but the tool never inflates it.) Capacity planning stays with the operator.
 
 Changing any of these defaults is a public contract change (`AGENTS.md` §8): the
 same command would produce a different machine.

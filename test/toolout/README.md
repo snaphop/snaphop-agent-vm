@@ -24,6 +24,8 @@ holds the output of `virsh --version`.
 | `virsh-domifaddr.txt` | `virsh -c test:///default domifaddr test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domifaddr-source-agent.txt` | `virsh -c qemu:///system domifaddr <vm> --source agent` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domiflist.txt` | `virsh -c test:///default domiflist test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
+| `virsh-domblklist.txt` | `virsh -c test:///default domblklist test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
+| `podman-image-inspect.json` | `podman image inspect --format json docker.io/library/busybox:latest` | podman 6.1.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domstate.txt` | `virsh -c test:///default domstate test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-list-all-name.txt` | `virsh -c test:///default list --all --name` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
@@ -54,6 +56,10 @@ present.
 No fixture exists yet for `skopeo --version`; skopeo was not installed on the
 host where these were captured, so that parser is not covered by a real
 capture. Add it — and a matching table row — when working on a host that has it.
+
+`podman-image-inspect.json` is captured but not yet used: the digest parser in
+`internal/image` is still tested against hand-written JSON, which AGENTS.md §7
+does not accept as coverage. Point that test at this fixture.
 
 There is also no capture of `virsh domifaddr` for a guest that has **no**
 address yet — the state a VM is in for the first seconds of its boot, and the

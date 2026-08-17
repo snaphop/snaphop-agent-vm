@@ -59,9 +59,8 @@ Minimum versions, all checked by `agent-vm doctor`:
 | `podman` (or `skopeo`) | 4.0 (1.11) | OCI pull, build, flatten |
 
 `skopeo` works in place of `podman` for pulling, but `podman` is preferred because
-the per-distro image recipes are `Containerfile`s. `cloud-image-utils` (Debian/
-Ubuntu) or `cloud-utils` (Fedora) is optional — it supplies `cloud-localds`, used
-only for the persistent-seed fallback path.
+the per-distro image recipes are `Containerfile`s. No separate cloud-init tooling
+is needed on the host: `virt-install --cloud-init` builds the NoCloud seed.
 
 Because the tool orchestrates these programs rather than reimplementing them
 ([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md)), a missing or

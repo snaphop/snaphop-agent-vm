@@ -26,7 +26,7 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 | `--quiet` | off | Suppress progress output; errors still go to stderr. |
 | `--yes` | off | Skip interactive confirmation for destructive operations. |
 | `--dry-run` | off | Print the exact tool invocations the operation would run, and exit 0 without changing anything. |
-| `--version` | — | Print the `agent-vm` version, plus the detected versions of `virt-install`, `virsh`, `libvirt`, `qemu-img`, `podman`, and libguestfs. |
+| `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. |
 
 Human-readable progress and logs go to **stderr**. Command results go to
 **stdout**, so `--output json` can be piped safely.
@@ -330,10 +330,10 @@ any command; the table below is the summary.
 | `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
-| `ssh` | `virsh domifaddr`, then `ssh` |
-| `console` | `virsh console` |
-| `destroy` | `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
-| `doctor` | `virsh version`, `virt-install --version`, `qemu-img --version`, `podman --version`, `virt-make-fs --version`, `ip -json link` |
+| `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
+| `console` | `virsh domstate`, then `virsh console` |
+| `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `virsh net-list` and — when a bridge is configured — `ip -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

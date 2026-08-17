@@ -50,7 +50,7 @@ it is refused.
 
 ```bash
 virt-install --import --disk path=root.qcow2,bus=virtio \
-  --boot kernel=<images>/vmlinuz,initrd=<images>/initrd,kernel_args="root=/dev/vda1 console=ttyS0"
+  --boot kernel=<images>/vmlinuz,initrd=<images>/initrd,kernel_args="root=/dev/vda1 console=ttyS0 rw"
 ```
 
 The kernel and initramfs are the artifacts extracted during the image build, and
