@@ -187,7 +187,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 - **Responsibility:** Build the `virt-install` argument vector that defines a VM,
   and drive the rest of the lifecycle through `virsh` (`start`, `shutdown`,
   `destroy`, `undefine`) and its query subcommands (`list --all`, `dominfo`,
-  `dumpxml`, `domblklist`, `domifaddr`). `console` and `ssh` are exec'd directly so
+  `dumpxml`, `domstate`, `domiflist`, `domifaddr`). `console` and `ssh` are exec'd directly so
   the operator gets a real terminal, not a proxied one.
 - **Public interface:** the `virt-install` argument vector — direct kernel boot via
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,
@@ -278,16 +278,18 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 8. **Define and start.** One `virt-install --import --boot kernel=…,initrd=…` run
    defines and starts the domain, with the serial console logged to `console.log`.
    The exact argv is logged and recorded.
-9. **Wait for the guest.** Poll `virsh domifaddr --source agent` (falling back to
-   `--source lease`) for an address, then wait for SSH, bounded by
-   `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
-   with the console log, because "it booted slowly" and "it failed to boot" need
-   the same evidence.
-10. **Record.** Capture `virsh dumpxml` to `domain.xml`, write `vm.json` (including
-    the `virt-install` version and argv), and print the result.
+9. **Record.** Read the MAC with `virsh domiflist`, capture `virsh dumpxml` to
+   `domain.xml`, and write `vm.json` (including the `virt-install` version and
+   argv). Recording happens *before* the wait, so that a VM left in place by a
+   boot timeout is still one `agent-vm destroy` knows how to remove.
+10. **Wait for the guest.** Poll `virsh domifaddr --source agent` (falling back to
+    `--source lease`) for an address, then wait for SSH, bounded by
+    `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
+    with the console log, because "it booted slowly" and "it failed to boot" need
+    the same evidence. Then print the result.
 
-Rollback: steps 4–8 are undone in reverse on failure — `virsh destroy`, `virsh
-undefine`, then delete the overlay, user-data, and state directory. Step 9 is the
+Rollback: steps 4–9 are undone in reverse on failure — `virsh destroy`, `virsh
+undefine`, then delete the overlay, user-data, and state directory. Step 10 is the
 deliberate exception noted above: a boot-wait timeout preserves the VM and its
 console log rather than destroying the evidence. `undefine` is
 never given `--remove-all-storage`; the tool deletes its own files after the

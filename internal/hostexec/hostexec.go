@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -91,6 +93,9 @@ type Runner interface {
 	Run(ctx context.Context, c Command) (*Result, error)
 	// LookPath resolves a tool on PATH, returning *NotFoundError if absent.
 	LookPath(name string) (string, error)
+	// Become replaces this process with the command, so the operator's terminal
+	// talks to it directly. It returns only on failure to start.
+	Become(c Command) error
 }
 
 // Exec is the real Runner.
@@ -174,6 +179,27 @@ func (e *Exec) Run(ctx context.Context, c Command) (*Result, error) {
 	return res, nil
 }
 
+// Become replaces this process with c via execve.
+//
+// An interactive session — `ssh` into a guest, `virsh console` on one — is not
+// something to supervise: the operator's terminal, signals, window size, and
+// exit status all belong to the tool being run. Replacing this process hands
+// all of that over at once, and is why `agent-vm ssh` behaves exactly like the
+// `ssh` it prints under --dry-run.
+func (e *Exec) Become(c Command) error {
+	path, err := e.LookPath(c.Name)
+	if err != nil {
+		return err
+	}
+	e.Logger.Debug("replacing this process", "tool", c.Name, "argv", c.Argv())
+
+	// On success this never returns: the process image is gone.
+	if err := syscall.Exec(path, c.Argv(), os.Environ()); err != nil {
+		return fmt.Errorf("running %s: %w", c.Name, err)
+	}
+	return nil
+}
+
 // LookPath resolves a tool on PATH.
 func (e *Exec) LookPath(name string) (string, error) {
 	path, err := exec.LookPath(name)
@@ -206,13 +232,24 @@ func (d *DryRun) Run(ctx context.Context, c Command) (*Result, error) {
 	}
 	d.planned = append(d.planned, c)
 	if d.Out != nil {
-		fmt.Fprintln(d.Out, c.String())
+		_, _ = fmt.Fprintln(d.Out, c.String())
 	}
 	return &Result{Stdout: []byte(c.DryRunStdout), Skipped: true}, nil
 }
 
 // LookPath delegates; resolving a tool changes nothing.
 func (d *DryRun) LookPath(name string) (string, error) { return d.Inner.LookPath(name) }
+
+// Become prints the command instead of becoming it. This is the documented way
+// to get the exact `ssh` or `virsh console` invocation for a VM and run it
+// yourself (docs/cli.md).
+func (d *DryRun) Become(c Command) error {
+	d.planned = append(d.planned, c)
+	if d.Out != nil {
+		_, _ = fmt.Fprintln(d.Out, c.String())
+	}
+	return nil
+}
 
 // Planned returns the mutating commands that were printed rather than run.
 func (d *DryRun) Planned() []Command { return d.planned }
@@ -237,11 +274,15 @@ func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	if strings.IndexFunc(s, func(r rune) bool {
-		return !(r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '=' || r == ',' || r == '+' || r == '@' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
-	}) < 0 {
+	if strings.IndexFunc(s, func(r rune) bool { return !isUnquotedRune(r) }) < 0 {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// isUnquotedRune reports whether a rune can appear in displayed argv without
+// quoting — the characters a shell would pass through untouched.
+func isUnquotedRune(r rune) bool {
+	return r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '=' || r == ',' || r == '+' || r == '@' ||
+		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }

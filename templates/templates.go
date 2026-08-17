@@ -12,5 +12,5 @@ import "embed"
 
 // FS holds the embedded template tree.
 //
-//go:embed network/*.xml.tmpl distro/*.Containerfile
+//go:embed network/*.xml.tmpl distro/*.Containerfile cloud-init/*.tmpl
 var FS embed.FS

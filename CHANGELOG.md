@@ -87,6 +87,78 @@ migration or rebuild step a user has to take.
   anything the CLI does not expose, and an "Underlying Commands" table in
   `docs/cli.md` so every operation can be reproduced by hand.
 
+- `agent-vm create <name>`, which is the command the whole tool exists for: it
+  resolves configuration, builds the base image if it is not cached, creates a
+  copy-on-write overlay on it, generates cloud-init user-data authorizing your
+  SSH public keys, ensures the NAT network (or validates the host bridge you
+  named), defines and starts the domain with one `virt-install` run, and waits
+  for the guest to accept SSH. It records the result in `vm.json`, including the
+  base image digest, the MAC address, and the exact `virt-install` version and
+  argument vector that created the VM, so "what made this, from what?" is
+  answerable from the state directory alone.
+- `create` is transactional: a failure anywhere through "define and start"
+  removes the domain, the overlay, and the state directory, and reports both the
+  original failure and anything the cleanup could not remove (exit `7`). The one
+  exception is the boot wait — a `--wait-for-ssh` timeout exits `6` and leaves
+  the VM in place with its `console.log`, because a slow boot and a failed boot
+  need the same evidence.
+- Generated cloud-init user-data (`internal/guestinit`), pinned by golden files.
+  It authorizes your public keys, creates the guest user with password login
+  disabled and root login disabled, and nothing else. User-data you supply with
+  `--cloud-init` is merged as a separate MIME part with explicit merge rules, so
+  a mistake in your file cannot quietly replace the keys that let you in, and its
+  contents are never logged or echoed in an error.
+- Domain management (`internal/domain`): the `virt-install` argument vector,
+  golden-pinned for both network modes, and the `virsh` calls behind lifecycle
+  and inspection. `virsh undefine` is never given `--remove-all-storage` — this
+  tool deletes only files it has verified are inside its own state directory.
+
+- `agent-vm list` and `agent-vm info <name>`. `list` shows every VM this state
+  directory recorded, with its live state, distro, resources, network mode,
+  address, and creation time; a VM whose libvirt domain has vanished is reported
+  as `missing` rather than silently dropped, and a domain that exists in libvirt
+  but has no record here is never listed, because it is not this tool's to act
+  on. `info` prints one VM's full record — the base image digest that actually
+  booted, the MAC address, the overlay and its real cost on the host, the
+  captured `domain.xml`, and the exact `virt-install` version and argument
+  vector that created it, formatted so it can be copied and rerun.
+
+- `agent-vm start`, `stop`, and `restart`. `stop` asks the guest to shut down
+  and waits `--timeout` (60s by default); if the guest ignores it, the command
+  exits `6` and says so, and the VM keeps running — escalating to a force-off
+  would lose whatever the guest had not written, so it stays your decision and
+  needs `--force`. `restart` will not start a guest it could not stop. Starting
+  a running VM, or stopping a stopped one, exits `5` and names the state it
+  found rather than doing nothing quietly.
+
+- `agent-vm ssh <name> [-- <command>...]` and `agent-vm console <name>`. Both
+  replace the `agent-vm` process with the tool they wrap, so your terminal,
+  signals, window size, and exit status belong to `ssh` or `virsh console`
+  directly — running a command in a guest forwards its exit status because it
+  *is* that process. Arguments after `--` reach the guest untouched, even ones
+  that look like `agent-vm` flags. `--dry-run` prints the exact `ssh` or
+  `virsh console` command instead of running it, so you can use it by hand.
+- `ssh` authenticates with the private key that sits beside the public key you
+  authorized (`id_ed25519` next to `id_ed25519.pub`), naming it to `ssh` only
+  when it exists and never reading it. `create`'s readiness probe offers the
+  same key, so "create says it is ready" and "ssh works" cannot disagree.
+
+- `agent-vm destroy <name>`, which asks the guest to shut down, undefines the
+  domain, and deletes the VM's overlay, generated user-data, and state
+  directory. It prompts first, naming exactly what it is about to delete, and a
+  run with no terminal to answer on refuses rather than assuming consent
+  (`--yes` skips the question). `--force` powers the guest off immediately and
+  `--keep-disk` removes only the libvirt domain, leaving the disk and the state
+  directory behind.
+- `destroy` will not remove anything that is not this tool's: a name with no
+  record in this state directory is a not-found error that never reaches
+  libvirt, and a domain whose disk is not the overlay recorded here exits `5`
+  and names the disks it found instead of undefining someone else's VM. A guest
+  that ignores the shutdown request exits `6` with the VM intact, because
+  destroy is about to delete the disk and that is the last moment unwritten
+  data can still be saved. A VM whose domain has already vanished from libvirt
+  can still have its leftover state removed.
+
 ### Changed
 
 - The state directory now also contains `networks/`, holding the network XML
@@ -95,9 +167,14 @@ migration or rebuild step a user has to take.
 - The NAT network is defined on `192.168.171.0/24` rather than colliding with
   libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
   bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
-- Subcommands specified in `docs/cli.md` but not implemented yet (`create`,
-  `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`) report that they
-  are unimplemented in this build instead of being reported as unknown commands.
+- `create --no-start` is now rejected with exit `2` and an explanation, instead
+  of being listed as a working flag. `virt-install` always boots a guest that
+  has cloud-init data — the generated seed is attached to that first boot only
+  and is absent from the domain it leaves defined — so a VM stopped before
+  cloud-init finished would never receive its SSH key and could not be reached
+  afterwards. Create the VM and stop it instead:
+  `agent-vm create <name> && agent-vm stop <name>`. Documented in
+  `docs/cli.md`.
 - A cached base image directory also holds the `Containerfile` it was built
   from, as a record of the recipe that produced it. Documented in
   `docs/cli.md`.

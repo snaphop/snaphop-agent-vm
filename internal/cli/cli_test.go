@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -81,19 +84,41 @@ func TestRun_InvalidResourceValueIsAUsageError(t *testing.T) {
 	}
 }
 
-func TestRun_UnimplementedCommandSaysSoInsteadOfUnknownCommand(t *testing.T) {
-	// docs/cli.md specifies these commands; this build does not have them yet.
-	// An operator following the docs deserves an accurate answer.
-	code, _, stderr := run(t, "create", "agent-01")
+func TestRun_EveryCommandInTheDocumentedContractExists(t *testing.T) {
+	// docs/cli.md is the specification this package must satisfy, so a command
+	// documented there and missing here is a bug in one of the two. Reading the
+	// document is what keeps them from drifting apart quietly.
+	contract, err := os.ReadFile(filepath.Join("..", "..", "docs", "cli.md"))
+	if err != nil {
+		t.Fatalf("reading docs/cli.md: %v", err)
+	}
 
-	if code != ExitFailure {
-		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	// Headings name one command, or several sharing a description:
+	//   ### `agent-vm info <name>`
+	//   ### `agent-vm start <name>` / `stop <name>` / `restart <name>`
+	heading := regexp.MustCompile("(?m)^### (`agent-vm .*)$")
+	verb := regexp.MustCompile("`(?:agent-vm )?([a-z]+)")
+
+	documented := map[string]bool{}
+	for _, line := range heading.FindAllStringSubmatch(string(contract), -1) {
+		for _, match := range verb.FindAllStringSubmatch(line[1], -1) {
+			documented[match[1]] = true
+		}
 	}
-	if !strings.Contains(stderr, "not implemented") {
-		t.Errorf("stderr does not explain the command is unimplemented:\n%s", stderr)
+	if len(documented) < 5 {
+		t.Fatalf("found only %d documented commands; the heading pattern no longer matches docs/cli.md", len(documented))
 	}
-	if strings.Contains(stderr, "unknown command") {
-		t.Errorf("a documented command was reported as unknown:\n%s", stderr)
+
+	implemented := commands()
+	for name := range documented {
+		if _, ok := implemented[name]; !ok {
+			t.Errorf("docs/cli.md documents `agent-vm %s`, but it is not in the dispatch table", name)
+		}
+	}
+	for name := range implemented {
+		if !documented[name] {
+			t.Errorf("`agent-vm %s` is implemented but not documented in docs/cli.md", name)
+		}
 	}
 }
 

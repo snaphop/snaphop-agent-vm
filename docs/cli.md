@@ -197,7 +197,7 @@ and must not already exist.
 | `--ssh-key <path>` | config value | SSH **public** key(s) to authorize; repeatable. |
 | `--cloud-init <path>` | none | Extra cloud-init user-data merged into the generated user-data. |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
-| `--no-start` | off | Define the domain without starting it. |
+| `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
 
 On success, prints the VM name, address, and SSH command; with `--output json`,
@@ -213,6 +213,23 @@ The one deliberate exception is the guest-boot wait: a `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
 `agent-vm destroy <name>` once you have looked.
+
+`--no-start` is rejected rather than approximated. `virt-install` always boots a
+guest that has cloud-init data: it starts the domain with the generated NoCloud
+seed attached, then defines the domain without it, so the seed exists for that
+first boot only. A VM stopped before cloud-init finished would never receive its
+SSH key and could not be reached afterwards. Create the VM and stop it instead:
+
+```console
+$ agent-vm create build-01 && agent-vm stop build-01
+```
+
+The readiness probe and `agent-vm ssh` both run `ssh` with
+`StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`. A VM here is
+disposable and generates a fresh host key every time, so recording host keys
+would leave the operator with a `known_hosts` file full of conflicts for reused
+addresses. In the default NAT mode the network is host-local; with
+`--network bridge` the guest is on the LAN and this is a weaker guarantee.
 
 ### `agent-vm list`
 
@@ -231,7 +248,15 @@ the overlay path, the MAC address, the captured domain XML path, and the
 
 Lifecycle control. `stop` requests a graceful ACPI shutdown and waits
 `--timeout`, then reports failure (exit `6`) — it never silently escalates to a
-force-off. `restart` is `stop` followed by `start`.
+force-off. `restart` is `stop` followed by `start`, and does not start a guest
+it could not stop: a `restart` that times out leaves the VM running, exactly as
+it was.
+
+All three act only on VMs recorded in this state directory. An operation whose
+state does not allow it — starting a running VM, stopping a stopped one — exits
+`5` and names the state it found. A VM that is recorded here but whose libvirt
+domain has been undefined by hand exits `4`; the record is reported, never
+repaired by redefining someone else's domain.
 
 Flags for `stop` and `restart`:
 
@@ -244,9 +269,24 @@ Flags for `stop` and `restart`:
 
 Execs `ssh` to the VM as the guest user, or runs a command non-interactively and
 forwards its exit status. Resolves the address with
-`virsh domifaddr --source agent` (falling back to `--source lease`) and uses the
-key recorded for the VM. This is a convenience wrapper around `ssh`, not an SSH
-implementation — `--dry-run` prints the `ssh` command so you can use it directly.
+`virsh domifaddr --source agent` (falling back to `--source lease`). This is a
+convenience wrapper around `ssh`, not an SSH implementation — `--dry-run` prints
+the `ssh` command so you can use it directly.
+
+Everything after `--` is the guest's command line and is passed through
+untouched, including anything that looks like an `agent-vm` flag. A command given
+this way runs in batch mode so it fails instead of stopping at a prompt; an
+interactive session may prompt.
+
+Only the **public** key paths are recorded for a VM, so the key to authenticate
+with is located by the usual convention that `id_ed25519` sits beside
+`id_ed25519.pub`. When that file exists it is named to `ssh` with `-i`; when it
+does not, `ssh` falls back to your agent and defaults as usual. This tool never
+reads private key material.
+
+A VM that is not running exits `5`, and one that is running but has no address
+yet exits `6` — `ssh` would otherwise report a connection failure that says
+nothing about which of the two happened.
 
 ### `agent-vm destroy <name>`
 
@@ -257,15 +297,25 @@ overlay, and generated user-data. Prompts for confirmation unless `--yes` is giv
 |---|---|---|
 | `--keep-disk` | off | Keep the overlay and state directory; only remove the libvirt domain. |
 | `--force` | off | Power off immediately instead of attempting graceful shutdown. |
+| `--timeout <duration>` | `60s` | How long to wait for the graceful shutdown. |
 
 `destroy` only ever touches domains and paths recorded in this state directory.
 It refuses to remove a path that does not resolve inside the state directory,
-and it refuses to undefine a libvirt domain it did not create.
+and it refuses to undefine a libvirt domain it did not create — a domain whose
+disk is not the overlay recorded here exits `5` and names the disks it found.
+
+A guest that ignores the shutdown request exits `6` with the VM intact and
+nothing removed; `destroy` never escalates to a force-off on its own, because
+the disk is about to be deleted and that is the last moment unwritten data can
+still be saved. A VM whose libvirt domain has already been undefined by hand is
+not an error: its leftover state is removed, which is what this command is for.
 
 ### `agent-vm console <name>`
 
 Execs `virsh console` for the VM. The console is also logged to
-`vms/<name>/console.log` for post-mortem debugging of a boot failure.
+`vms/<name>/console.log` for post-mortem debugging of a boot failure — so a VM
+that is not running exits `5` and names that log, which is what you actually
+want when a guest failed to boot.
 
 ## Underlying Commands
 
@@ -277,8 +327,8 @@ any command; the table below is the summary.
 | Operation | Tools invoked |
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
-| `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh dumpxml` |
-| `list` / `info` | `virsh list --all`, `virsh dominfo`, `virsh domifaddr`, `virsh domblklist`, `qemu-img info --output=json` |
+| `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domifaddr`, then `ssh` |
 | `console` | `virsh console` |

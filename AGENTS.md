@@ -34,11 +34,12 @@
 describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
-`Containerfile`s), and the `doctor`, `image`, `--version`, and `--dry-run`
-surfaces in `internal/cli`. Not yet landed: `create`, `destroy`, the lifecycle
-and inspection commands, `internal/domain`, and `internal/guestinit`; those
-subcommands exist in the dispatch table and report that they are unimplemented
-rather than being reported as unknown. Treat
+`Containerfile`s), `internal/guestinit`, `internal/domain`, and the `doctor`,
+`image`, `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
+`destroy`, `--version`, and `--dry-run` surfaces in `internal/cli` — every
+command in the documented contract. What remains is hardening: the integration
+suite in `test/integration/` covers only the image build, so the VM lifecycle
+has not been exercised against a real KVM host. Treat
 `docs/cli.md` and `docs/architecture.md` as the specification to satisfy, and
 update them in the same change if the implementation must diverge.
 

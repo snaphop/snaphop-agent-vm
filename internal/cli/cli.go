@@ -70,12 +70,15 @@ func commands() map[string]*command {
 	list := []*command{
 		doctorCommand(),
 		imageCommand(),
-	}
-	// Commands specified in docs/cli.md that this build does not implement yet
-	// are registered too, so they fail with an accurate message instead of
-	// "unknown command".
-	for _, name := range []string{"create", "list", "info", "start", "stop", "restart", "ssh", "destroy", "console"} {
-		list = append(list, notImplemented(name))
+		createCommand(),
+		listCommand(),
+		infoCommand(),
+		startCommand(),
+		stopCommand(),
+		restartCommand(),
+		sshCommand(),
+		consoleCommand(),
+		destroyCommand(),
 	}
 
 	byName := make(map[string]*command, len(list))
@@ -85,21 +88,28 @@ func commands() map[string]*command {
 	return byName
 }
 
-// notImplemented is a placeholder for a documented command this build does not
-// have yet. It is deliberately explicit: an operator following docs/cli.md
-// should learn that the contract exists and the code does not, rather than be
-// told the command is unknown.
-func notImplemented(name string) *command {
-	return &command{
-		name:    name,
-		summary: "not implemented in this build",
-		usage:   fmt.Sprintf("agent-vm %s — specified in docs/cli.md, not implemented yet", name),
-		run: func(context.Context, *App, []string) error {
-			return exitf(ExitFailure,
-				"`agent-vm %s` is specified in docs/cli.md but is not implemented in this build (%s).\n"+
-					"  Implemented so far: doctor.", name, Version)
-		},
+// parseNamed parses a command that takes exactly one VM name plus flags. Go's
+// flag package stops at the first non-flag argument, so flags written after the
+// name — the way docs/cli.md spells these commands — need a second pass over
+// what is left.
+func parseNamed(flags *flag.FlagSet, args []string, usage string) (string, error) {
+	if err := flags.Parse(args); err != nil {
+		return "", &ExitError{Code: ExitUsage, Err: err}
 	}
+	if flags.NArg() == 0 {
+		return "", exitf(ExitUsage, "usage: %s", usage)
+	}
+	name := flags.Arg(0)
+
+	if flags.NArg() > 1 {
+		if err := flags.Parse(flags.Args()[1:]); err != nil {
+			return "", &ExitError{Code: ExitUsage, Err: err}
+		}
+		if flags.NArg() != 0 {
+			return "", exitf(ExitUsage, "usage: %s: unexpected argument %q", usage, flags.Arg(0))
+		}
+	}
+	return name, nil
 }
 
 // Run parses global flags, dispatches to a subcommand, and returns the process
@@ -120,9 +130,9 @@ func (a *App) Main(ctx context.Context, args []string) int {
 	}
 
 	code := exitCodeFor(err)
-	fmt.Fprintf(a.Stderr, "agent-vm: %v\n", err)
+	_, _ = fmt.Fprintf(a.Stderr, "agent-vm: %v\n", err)
 	if code == ExitUsage {
-		fmt.Fprintf(a.Stderr, "Run `agent-vm --help` for usage.\n")
+		_, _ = fmt.Fprintf(a.Stderr, "Run `agent-vm --help` for usage.\n")
 	}
 	return code
 }
@@ -203,14 +213,21 @@ func (a *App) newRunner() hostexec.Runner {
 // Config resolves configuration on first use. Flags beat environment variables,
 // which beat the configuration file, which beats the built-in defaults.
 func (a *App) Config() (*config.Config, error) {
+	return a.ConfigWith(config.Overrides{})
+}
+
+// ConfigWith resolves configuration with a command's own flags applied on top
+// of the global ones. Commands that take resource or network flags use it;
+// everything else uses Config.
+func (a *App) ConfigWith(overrides config.Overrides) (*config.Config, error) {
 	if a.cfg != nil {
 		return a.cfg, nil
 	}
-	cfg, err := config.Load(a.Env, config.Overrides{
-		ConfigFile: a.configFile,
-		StateDir:   a.stateDir,
-		LibvirtURI: a.libvirtURI,
-	})
+	overrides.ConfigFile = a.configFile
+	overrides.StateDir = a.stateDir
+	overrides.LibvirtURI = a.libvirtURI
+
+	cfg, err := config.Load(a.Env, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +300,7 @@ func (a *App) printVersions(ctx context.Context) error {
 }
 
 func (a *App) printUsage() {
-	fmt.Fprintf(a.Stderr, `agent-vm — disposable QEMU/KVM virtual machines for AI coding agents
+	_, _ = fmt.Fprintf(a.Stderr, `agent-vm — disposable QEMU/KVM virtual machines for AI coding agents
 
 Usage:
   agent-vm [global flags] <command> [arguments] [flags]
@@ -302,9 +319,9 @@ Commands:
 	for _, name := range names {
 		fmt.Fprintf(w, "  %-10s %s\n", name, byName[name].summary)
 	}
-	fmt.Fprint(a.Stderr, w.String())
+	_, _ = fmt.Fprint(a.Stderr, w.String())
 
-	fmt.Fprintf(a.Stderr, `
+	_, _ = fmt.Fprintf(a.Stderr, `
 Global flags:
   --config <path>        configuration file (default ~/.config/agent-vm/config.toml)
   --state-dir <path>     root of all VM and image state (default ~/.local/share/agent-vm)

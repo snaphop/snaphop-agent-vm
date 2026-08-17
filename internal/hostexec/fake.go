@@ -29,8 +29,9 @@ type Fake struct {
 	// Default answers any invocation no other rule matched.
 	Default FakeResponse
 
-	mu    sync.Mutex
-	calls []Command
+	mu     sync.Mutex
+	calls  []Command
+	became []Command
 }
 
 // FakeResponse is a canned outcome for one invocation.
@@ -119,6 +120,28 @@ func (f *Fake) lookup(c Command) FakeResponse {
 		return bestResp
 	}
 	return f.Default
+}
+
+// Become records the invocation instead of replacing the test process, which
+// is the one thing a test cannot let happen.
+func (f *Fake) Become(c Command) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, c)
+	f.became = append(f.became, c)
+	f.mu.Unlock()
+
+	if f.Missing[c.Name] {
+		return &NotFoundError{Tool: c.Name}
+	}
+	r := f.lookup(c)
+	return r.Err
+}
+
+// Became returns the commands this process was asked to be replaced by.
+func (f *Fake) Became() []Command {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Command(nil), f.became...)
 }
 
 // LookPath reports a tool as present unless it is listed in Missing.

@@ -1,0 +1,4 @@
+ Interface   Type      Source    Model   MAC
+------------------------------------------------------------
+ testnet0    network   default   -       aa:bb:cc:dd:ee:ff
+

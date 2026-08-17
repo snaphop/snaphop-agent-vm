@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/network"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
@@ -82,6 +83,7 @@ func exitCodeFor(err error) int {
 		missing    *hostexec.NotFoundError
 		tooOld     *hostexec.VersionError
 		timeout    *hostexec.TimeoutError
+		waitedOut  *domain.TimeoutError
 		bridge     *network.BridgeError
 		cleanup    *CleanupError
 	)
@@ -94,7 +96,7 @@ func exitCodeFor(err error) int {
 		return ExitNotFound
 	case errors.As(err, &exists), errors.As(err, &busy):
 		return ExitConflict
-	case errors.As(err, &timeout):
+	case errors.As(err, &timeout), errors.As(err, &waitedOut):
 		return ExitTimeout
 	case errors.As(err, &cleanup):
 		return ExitCleanup
