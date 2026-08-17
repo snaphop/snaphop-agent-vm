@@ -125,6 +125,55 @@ To relocate state, set `state_dir` in the config file or `AGENT_VM_STATE_DIR`.
 A shared state directory means shared images *and* shared locks across users —
 workable, but everyone needs write access to it.
 
+### Letting The Hypervisor Reach The State Directory
+
+Under `qemu:///system` the QEMU process does **not** run as you — it runs as
+libvirt's own account (`libvirt-qemu` on Debian, Ubuntu, and Arch; `qemu` on
+Fedora and RHEL; whatever `user` is set to in `/etc/libvirt/qemu.conf`). That
+account has to search every directory between `/` and a VM's disk, and the
+default state directory lives under `~/.local/share`, where a home directory is
+commonly `0700` or `0710`. Being able to write the state directory yourself is
+not the same thing and does not help.
+
+The symptom is a `create` that gets all the way to defining the domain and then
+fails:
+
+```text
+ERROR    Cannot access storage file '/home/you/.local/share/agent-vm/vms/<name>/root.qcow2'
+         (as uid:957, gid:957): Permission denied
+```
+
+`agent-vm doctor` reports this up front as **state directory access**, naming the
+shallowest directory that blocks the path. Grant search permission — and only
+search permission, not read — to the account it names:
+
+```bash
+sudo setfacl -m u:libvirt-qemu:x /home/you
+sudo setfacl -m u:libvirt-qemu:x /home/you/.local
+agent-vm doctor            # confirm; repeat for any other directory it names
+```
+
+`x` without `r` lets the hypervisor traverse a directory without listing it, so
+the rest of your home stays as private as it was. Reverse it with
+`setfacl -x u:libvirt-qemu <dir>`. This needs a filesystem mounted with ACL
+support, which is the default on ext4, XFS, and Btrfs.
+
+The alternative is to keep the state directory out of your home entirely, which
+avoids the problem instead of working around it:
+
+```bash
+sudo install -d -o "$USER" -g "$USER" -m 0755 /var/lib/agent-vm
+```
+
+then set `state_dir = "/var/lib/agent-vm"` in the config file. Prefer this on a
+multi-user host, where poking a hole into one user's home is the wrong shape of
+fix.
+
+Do **not** reach for `chmod 0755 ~` — it opens your whole home directory to every
+local account to fix a problem that two ACL entries solve. Under
+`qemu:///session` none of this applies: QEMU runs as you, and `doctor` skips the
+check.
+
 ## 5. NAT Networking (Default)
 
 NAT mode uses a libvirt-managed network named `agent-vm-nat` on
@@ -186,8 +235,15 @@ Leave them enabled. Both confine the QEMU process, which is precisely the barrie
 you want between an untrusted guest and the host, and disabling them to fix a
 permission error trades a real boundary for a shortcut.
 
-If a VM fails to start with a permission error on its disk, the state directory
-is usually mislabeled or outside a path the confinement policy allows:
+If a VM fails to start with a permission error on its disk, check ordinary Unix
+permissions **first**. The common cause is that the hypervisor's account cannot
+search its way to the state directory, which has nothing to do with SELinux or
+AppArmor — see [Letting the hypervisor reach the state
+directory](#letting-the-hypervisor-reach-the-state-directory), and run
+`agent-vm doctor`, which tests exactly that. Relabelling will not fix a missing
+`x` bit.
+
+If `doctor` passes and a VM still cannot open its disk, then look for a denial:
 
 ```bash
 # SELinux: check for denials
@@ -221,6 +277,7 @@ The first `image build` needs registry access and takes a few minutes. Subsequen
 | `exit 3`, tool missing or too old | Host package missing or below the floor | `agent-vm doctor`, the package table above |
 | A tool failed and you want to reproduce it | — | The error names the tool, argv, and exit status; rerun it by hand, or use `--dry-run` |
 | `exit 3`, `/dev/kvm` unusable | Virtualization disabled, or user not in `kvm` | firmware settings, `ls -l /dev/kvm` |
+| `Cannot access storage file ... Permission denied` on create | The hypervisor's account cannot search a directory above the state directory | `agent-vm doctor` (state directory access), then `setfacl -m u:<qemu user>:x` on the directory it names |
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `skopeo inspect docker://<ref>` |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |

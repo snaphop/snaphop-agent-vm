@@ -30,12 +30,24 @@ func healthyHost() *hostexec.Fake {
 	return fake
 }
 
+// undeterminableHypervisor stands in for a host whose QEMU account cannot be
+// identified, which makes the traversal check skip.
+func undeterminableHypervisor() (*hypervisorIdentity, error) { return nil, nil }
+
 // runDoctorWith runs doctor against a fake host and returns its JSON report.
 func runDoctorWith(t *testing.T, fake *hostexec.Fake, extraArgs ...string) (doctorReport, int) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 
-	app := &App{Stdout: &stdout, Stderr: &stderr, Env: func(string) string { return "" }, Runner: fake}
+	// The hypervisor identity is pinned to "undeterminable" so the traversal
+	// check skips. It would otherwise consult this host's passwd database and
+	// judge a 0700 t.TempDir(), making these results depend on the machine the
+	// tests run on. TestDoctor_StateDirectory* below cover that check directly.
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env: func(string) string { return "" }, Runner: fake,
+		HypervisorIdentity: undeterminableHypervisor,
+	}
 	args := append([]string{
 		"--state-dir", t.TempDir(),
 		"--config", t.TempDir() + "/absent.toml",
@@ -192,7 +204,11 @@ func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
 	fake.Missing["qemu-img"] = true
 
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr, Env: func(string) string { return "" }, Runner: fake}
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env: func(string) string { return "" }, Runner: fake,
+		HypervisorIdentity: undeterminableHypervisor,
+	}
 	_ = app.run(context.Background(), []string{
 		"--state-dir", t.TempDir(),
 		"--config", t.TempDir() + "/absent.toml",
@@ -210,7 +226,11 @@ func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
 
 func TestDoctor_RejectsArguments(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	app := &App{Stdout: &stdout, Stderr: &stderr, Env: func(string) string { return "" }, Runner: healthyHost()}
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env: func(string) string { return "" }, Runner: healthyHost(),
+		HypervisorIdentity: undeterminableHypervisor,
+	}
 
 	err := app.run(context.Background(), []string{"--state-dir", t.TempDir(), "doctor", "extra"})
 

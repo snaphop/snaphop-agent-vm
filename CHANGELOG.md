@@ -17,13 +17,28 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm doctor` now reports whether the account the hypervisor runs as can
+  reach the state directory. Under `qemu:///system` QEMU runs as libvirt's own
+  user (`libvirt-qemu`, `qemu`, or whatever `/etc/libvirt/qemu.conf` sets), which
+  must be able to search every directory from `/` down to a VM's disk. The
+  default state directory sits under `~/.local/share`, and home directories are
+  commonly `0700`, so this was the most likely reason a `create` failed — and it
+  failed late, after the overlay and the domain were already built, with
+  `Cannot access storage file ... Permission denied` from `virt-install`. The
+  new check reports it up front, names the shallowest directory that blocks the
+  path, and prints the `setfacl` command that grants search access without
+  granting read. It reads POSIX ACLs as well as permission bits, so a host that
+  has already been fixed with `setfacl` is reported as passing; it is skipped
+  rather than guessed when the hypervisor's account cannot be identified, and it
+  does not apply to `qemu:///session`, where QEMU runs as the invoking user.
 - The first working `agent-vm` binary. It builds as a single static Go binary
   with no cgo, and implements the `doctor` command, the `--version` report, and
   the global flags (`--config`, `--state-dir`, `--libvirt-uri`, `--output`,
   `--verbose`, `--quiet`, `--yes`, `--dry-run`).
 - `agent-vm doctor` checks whether a host can run VMs: `/dev/kvm`, the libvirt
-  connection, group membership, the state directory and its free space, every
-  required host tool and its minimum version, the NAT network, and a configured
+  connection, group membership, the state directory and its free space, whether
+  the hypervisor's own account can reach the state directory, every required
+  host tool and its minimum version, the NAT network, and a configured
   bridge. Each check reports pass, warn, fail, or skip with a remedy; only a
   failure exits non-zero (exit `3`). It is available as `--output json` for
   scripts, and it never changes host state.

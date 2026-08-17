@@ -37,6 +37,10 @@ type App struct {
 	// Runner substitutes the process runner. It is the seam tests use to stand
 	// in for the host tools; in a real run it is nil and the real one is built.
 	Runner hostexec.Runner
+	// HypervisorIdentity substitutes the lookup of the user a privileged
+	// libvirt runs QEMU as. It is the seam tests use in place of the host's
+	// passwd database; in a real run it is nil and the host is consulted.
+	HypervisorIdentity func() (*hypervisorIdentity, error)
 
 	// globals, populated from the global flags.
 	configFile string

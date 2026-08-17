@@ -89,10 +89,10 @@ remedy. Exits `0` only if every required check passes.
 
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is `qemu:///system`;
-state directory writable with sufficient free space; the configured NAT network
-is definable; and, when a bridge is configured, that the bridge exists and is up.
-Bridged networking under `qemu:///session` is reported as unsupported rather than
-attempted.
+state directory writable with sufficient free space; state directory reachable by
+the account the hypervisor runs as; the configured NAT network is definable; and,
+when a bridge is configured, that the bridge exists and is up. Bridged networking
+under `qemu:///session` is reported as unsupported rather than attempted.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
@@ -101,6 +101,18 @@ are the ones that matter. Free space below 10 GiB is a warning: a cached base
 image needs 2–3 GiB and thin overlays grow as guests write. A NAT network that is
 not defined yet is a pass — `create` defines it on demand. `doctor` only inspects;
 it never changes host state.
+
+The **state directory access** check is separate from the writability check
+because they ask about different users. Under `qemu:///system` the QEMU process
+runs as libvirt's own account, which must be able to search every directory from
+`/` down to a VM's disk — a state directory you can write yourself may still be
+unreachable to it, and the resulting `create` fails only once `virt-install` tries
+to open the overlay. The check reads permission bits and any POSIX ACL, so a
+`setfacl` grant is recognised, and it names the shallowest directory that blocks
+the path along with the `setfacl` command that fixes it. It is skipped rather than
+guessed when the hypervisor's account cannot be identified, and it does not apply
+to `qemu:///session`, where QEMU runs as the invoking user. Because it only
+inspects the filesystem it still runs under `--dry-run`.
 
 It also verifies every tool this project delegates to, against its minimum
 version:
