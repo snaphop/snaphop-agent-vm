@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -262,18 +263,28 @@ func (m *Manager) Addresses(ctx context.Context, name string) ([]Interface, erro
 	return nil, nil
 }
 
-// IPv4Address returns the first IPv4 address the guest has, or "" if it has
-// none yet. IPv4 specifically: it is what the ssh convenience wrapper and the
-// address column of `agent-vm list` report.
+// IPv4Address returns the first IPv4 address the guest is reachable at, or ""
+// if it has none yet. IPv4 specifically: it is what the ssh convenience wrapper
+// and the address column of `agent-vm list` report.
+//
+// Loopback is skipped. `virsh domifaddr --source agent` reports every interface
+// the guest agent can see, and lists `lo` with 127.0.0.1 first; taking it
+// literally points ssh back at the host's own sshd instead of the guest.
+// `--source lease` never shows loopback, so this only bites once the guest
+// agent is answering.
 func (m *Manager) IPv4Address(ctx context.Context, name string) (string, error) {
 	interfaces, err := m.Addresses(ctx, name)
 	if err != nil {
 		return "", err
 	}
 	for _, iface := range interfaces {
-		if iface.Protocol == "ipv4" && iface.Address != "" {
-			return iface.Address, nil
+		if iface.Protocol != "ipv4" || iface.Address == "" {
+			continue
 		}
+		if ip := net.ParseIP(iface.Address); ip == nil || ip.IsLoopback() {
+			continue
+		}
+		return iface.Address, nil
 	}
 	return "", nil
 }

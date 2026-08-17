@@ -13,7 +13,7 @@ import (
 func TestInfo_PrintsTheProvenanceOfAVM(t *testing.T) {
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
-	fake.RespondPrefix("qemu-img info --output=json", hostexec.FakeResponse{
+	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
 		Stdout: readToolout(t, "qemu-img-info-json-overlay.json"),
 	})
 
@@ -42,7 +42,7 @@ func TestInfo_PrintsTheProvenanceOfAVM(t *testing.T) {
 func TestInfo_ReportsWhatTheOverlayActuallyCosts(t *testing.T) {
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
-	fake.RespondPrefix("qemu-img info --output=json", hostexec.FakeResponse{
+	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
 		Stdout: readToolout(t, "qemu-img-info-json-overlay.json"),
 	})
 
@@ -107,7 +107,7 @@ func TestInfo_RequiresExactlyOneName(t *testing.T) {
 func TestInfo_JSONOutputIsTheRecordWithLiveState(t *testing.T) {
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
-	fake.RespondPrefix("qemu-img info --output=json", hostexec.FakeResponse{
+	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
 		Stdout: readToolout(t, "qemu-img-info-json-overlay.json"),
 	})
 

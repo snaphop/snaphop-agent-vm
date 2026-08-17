@@ -206,6 +206,22 @@ migration or rebuild step a user has to take.
   state an operator has to clear before the next run, so it is no longer
   silent.
 
+### Fixed
+
+- `create`, `ssh`, and `list` no longer report a VM's address as `127.0.0.1`.
+  Once the QEMU guest agent starts answering, `virsh domifaddr --source agent`
+  lists the guest's loopback interface first, and the tool took that address at
+  face value — so the boot wait, and any `agent-vm ssh` afterwards, connected to
+  the host's own SSH server instead of the guest. On a host running sshd this
+  surfaced as `create` timing out with "did not accept SSH" on a VM that had in
+  fact booted correctly. Loopback addresses are now skipped.
+- `agent-vm info` reports disk sizes for a **running** VM again. A running
+  domain holds a write lock on its overlay, which made `qemu-img info` refuse to
+  open it, so the virtual size, on-host size, and backing file silently
+  disappeared from both the text and JSON output for every VM that was actually
+  in use. The tool now passes `-U`, which overrides the lock check while still
+  opening the image read-only.
+
 ### Security
 
 - Documented the project's hard security boundaries in `SECURITY.md`: the guest

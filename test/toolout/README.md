@@ -22,15 +22,23 @@ holds the output of `virsh --version`.
 | `virt-copy-out--version.txt` | `virt-copy-out --version` | libguestfs 1.60.1 (Arch Linux) | 2026-08-17 |
 | `virt-sysprep--version.txt` | `virt-sysprep --version` | libguestfs 1.56.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domifaddr.txt` | `virsh -c test:///default domifaddr test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
+| `virsh-domifaddr-source-agent.txt` | `virsh -c qemu:///system domifaddr <vm> --source agent` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domiflist.txt` | `virsh -c test:///default domiflist test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domstate.txt` | `virsh -c test:///default domstate test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-list-all-name.txt` | `virsh -c test:///default list --all --name` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
 
-The four `virsh-*` captures come from libvirt's built-in `test:///default`
+Most `virsh-*` captures come from libvirt's built-in `test:///default`
 driver. The data in them is synthetic, but the formatting is produced by the
 real `virsh` — which is the part a parser depends on — and capturing them this
 way needs no VM on the host doing the capture.
+
+`virsh-domifaddr-source-agent.txt` is the exception: it comes from a real
+booted guest, because the test driver cannot produce it. It is what the QEMU
+guest agent reports, which is every interface the guest can see — including
+`lo` with 127.0.0.1, listed *first*, and the `-` continuation rows a second
+protocol on one interface produces. The `test:///default` capture has neither,
+which is how the address picker came to return the loopback address.
 
 The `qemu-img` capture is of an overlay created with
 `qemu-img create -f qcow2 -F qcow2 -b base.qcow2 root.qcow2 50G`, so it shows

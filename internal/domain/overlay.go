@@ -77,10 +77,15 @@ type qemuImgInfo struct {
 // --output=json is used rather than the human-readable form: qemu-img's default
 // output is meant for people and has changed shape between releases, while the
 // JSON keys are stable (AGENTS.md §6).
+//
+// -U is required, not optional: a running domain holds a write lock on its
+// overlay, and without it qemu-img refuses to open the disk of every VM that is
+// actually in use — the ones an operator is most likely to ask about. It only
+// relaxes the lock check; the image is still opened read-only.
 func (m *Manager) InspectDisk(ctx context.Context, path string) (*DiskInfo, error) {
 	res, err := m.runner.Run(ctx, hostexec.Command{
 		Name:   hostexec.QemuImg.Name,
-		Args:   []string{"info", "--output=json", path},
+		Args:   []string{"info", "-U", "--output=json", path},
 		Effect: hostexec.Read,
 	})
 	if err != nil {

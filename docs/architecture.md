@@ -108,7 +108,7 @@ versions are enforced by `agent-vm doctor`.
 | Kernel/initrd extraction | `virt-ls`, `virt-copy-out` |
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
-| Disk facts | `qemu-img info --output=json` |
+| Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-install --cloud-init user-data=…` (fallback `cloud-localds`) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 

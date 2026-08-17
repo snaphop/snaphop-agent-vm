@@ -48,7 +48,7 @@ func TestCreateOverlay_RejectsARelativePath(t *testing.T) {
 
 func TestInspectDisk_ReadsRealQemuImgOutput(t *testing.T) {
 	fake := hostexec.NewFake()
-	fake.RespondPrefix("qemu-img info --output=json", hostexec.FakeResponse{
+	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
 		Stdout: toolout(t, "qemu-img-info-json-overlay.json"),
 	})
 
@@ -66,6 +66,23 @@ func TestInspectDisk_ReadsRealQemuImgOutput(t *testing.T) {
 	}
 	if info.BackingFile != "/tmp/agent-vm-capture/base.qcow2" {
 		t.Errorf("backing file = %q, want the base image", info.BackingFile)
+	}
+}
+
+func TestInspectDisk_AsksQemuImgToIgnoreTheRunningDomainsLock(t *testing.T) {
+	// A running domain holds a write lock on its overlay. Without -U, qemu-img
+	// refuses to open it at all, so `agent-vm info` loses its disk detail for
+	// exactly the VMs someone is most likely to be asking about.
+	fake := hostexec.NewFake()
+	fake.RespondPrefix("qemu-img info", hostexec.FakeResponse{
+		Stdout: toolout(t, "qemu-img-info-json-overlay.json"),
+	})
+
+	if _, err := manager(fake).InspectDisk(context.Background(), "/state/vms/agent-01/root.qcow2"); err != nil {
+		t.Fatalf("InspectDisk: %v", err)
+	}
+	if !strings.Contains(fake.String(), "qemu-img info -U ") {
+		t.Errorf("qemu-img was not asked to override the lock:\n%s", fake)
 	}
 }
 
