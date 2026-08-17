@@ -80,6 +80,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	libvirt := checkLibvirt(ctx, app, cfg)
 	report.Checks = append(report.Checks, libvirt)
 	report.Checks = append(report.Checks, checkStateDir(app, cfg))
+	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
@@ -317,6 +318,52 @@ func checkStateDir(app *App, cfg *config.Config) check {
 	return check{
 		Name: "state directory", Status: statusPass,
 		Detail: fmt.Sprintf("%s, %s free", store.Root(), config.Size(free).Human()),
+	}
+}
+
+// checkStateDirTraversal reports whether the hypervisor can reach the state
+// directory. Under a privileged libvirt, QEMU runs as its own user and must
+// search every directory from / down to a VM's disk; the default state
+// directory sits under a home directory, which is commonly 0700 or 0710. Only
+// permission bits and ACLs are read, so this is safe under --dry-run.
+func checkStateDirTraversal(app *App, cfg *config.Config) check {
+	const name = "state directory access"
+
+	if cfg.LibvirtURI == config.SessionURI {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "not applicable: " + config.SessionURI + " runs QEMU as the invoking user",
+		}
+	}
+
+	identity, err := app.hypervisorIdentity()
+	if err != nil {
+		return check{Name: name, Status: statusSkip, Detail: err.Error()}
+	}
+	if identity == nil {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "cannot determine which user this host runs QEMU as",
+			Remedy: "Set `user` in " + qemuConfPath + " if a VM fails to start with a permission error on its disk.",
+		}
+	}
+
+	blocker, err := firstUntraversable(cfg.StateDir, identity)
+	if err != nil {
+		return check{Name: name, Status: statusWarn, Detail: err.Error()}
+	}
+	if blocker != "" {
+		return check{
+			Name: name, Status: statusFail,
+			Detail: fmt.Sprintf("QEMU runs as %s, which cannot search %s on the way to %s", identity.Name, blocker, cfg.StateDir),
+			Remedy: fmt.Sprintf("Grant search permission without granting read: sudo setfacl -m u:%s:x %s. "+
+				"Repeat for any other ancestor this check names. Alternatively move the state directory outside your home with --state-dir or the state_dir config key.",
+				identity.Name, blocker),
+		}
+	}
+	return check{
+		Name: name, Status: statusPass,
+		Detail: fmt.Sprintf("%s can reach %s", identity.Name, cfg.StateDir),
 	}
 }
 

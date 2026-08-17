@@ -29,6 +29,7 @@ holds the output of `virsh --version`.
 | `virsh-domstate.txt` | `virsh -c test:///default domstate test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-list-all-name.txt` | `virsh -c test:///default list --all --name` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
+| `posix-acl-access-search-grant.bin` | `getxattr(dir, "system.posix_acl_access")` after `setfacl -m u:libvirt-qemu:x` | Linux 7.1.8, Btrfs, acl 2.3.2 (Arch Linux) | 2026-08-17 |
 
 Most `virsh-*` captures come from libvirt's built-in `test:///default`
 driver. The data in them is synthetic, but the formatting is produced by the
@@ -46,6 +47,16 @@ The `qemu-img` capture is of an overlay created with
 `qemu-img create -f qcow2 -F qcow2 -b base.qcow2 root.qcow2 50G`, so it shows
 what matters about a VM's root disk: a 50 GiB virtual size, an actual size
 under a megabyte, and a backing file pointing at the base image.
+
+The POSIX ACL capture is binary rather than text: it is the raw
+`system.posix_acl_access` extended attribute the kernel returns, not `getfacl`
+output. `getfacl` rendered the same directory as `user::rwx`,
+`user:libvirt-qemu:--x`, `group::---`, `mask::--x`, `other::---`, and uid 957 is
+`libvirt-qemu` on the capture host. It exists because doctor's state-directory
+access check decodes this attribute directly — that is how a `setfacl` grant is
+recognised instead of being reported as a failure the operator already fixed.
+Refresh it by re-running `setfacl` on a scratch directory and re-reading the
+attribute, never by editing the bytes.
 
 The bridge capture holds both `UP` and `DOWN` bridges, which is what makes it
 useful: a bridge that exists but is down must be reported as not ready, not as
