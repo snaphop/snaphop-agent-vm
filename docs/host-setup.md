@@ -115,9 +115,13 @@ workable, but everyone needs write access to it.
 
 ## 5. NAT Networking (Default)
 
-NAT mode uses a libvirt-managed network named `agent-vm-nat`. `agent-vm` defines
-and starts it on first use; the guest reaches the internet and the host, and
-nothing on the LAN reaches the guest.
+NAT mode uses a libvirt-managed network named `agent-vm-nat` on
+`192.168.171.0/24`, with the host at `192.168.171.1` and DHCP handing out
+`.2`–`.254`. `agent-vm` defines and starts it on first use; the guest reaches the
+internet and the host, and nothing on the LAN reaches the guest. The subnet
+differs from libvirt's own `default` network (`192.168.122.0/24`) so both can
+exist on one host. The bridge device is left unnamed so libvirt allocates one
+(`virbrN`).
 
 ```bash
 virsh -c qemu:///system net-list --all

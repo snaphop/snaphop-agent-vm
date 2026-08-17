@@ -1,0 +1,27 @@
+<!--
+  The NAT network agent-vm defines for the default network mode.
+
+  This is libvirt's standard NAT behavior and nothing more: no host-wide
+  routing, no additional host interfaces, and no forwarding rules beyond what
+  NAT needs (SECURITY.md, "Networking Boundaries"). The guest reaches the
+  internet; nothing on the host or the LAN can reach the guest unsolicited.
+
+  The bridge device is deliberately not named here, so libvirt allocates one
+  (virbrN) and two differently named agent-vm networks cannot collide on it.
+
+  The name and subnet are visible to operators through `virsh net-list` and
+  changing them orphans existing VMs, so both are a compatibility surface.
+-->
+<network>
+  <name>{{ .Name }}</name>
+  <forward mode="nat">
+    <nat>
+      <port start="1024" end="65535"/>
+    </nat>
+  </forward>
+  <ip address="{{ .GatewayIP }}" netmask="{{ .Netmask }}">
+    <dhcp>
+      <range start="{{ .DHCPStart }}" end="{{ .DHCPEnd }}"/>
+    </dhcp>
+  </ip>
+</network>

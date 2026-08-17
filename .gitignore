@@ -3,10 +3,11 @@
 .env.*
 !.env.example
 
-# Build output
+# Build output. Anchored to the repository root: an unanchored `agent-vm` would
+# also ignore cmd/agent-vm/, which is source.
 /bin/
 /dist/
-agent-vm
+/agent-vm
 
 # Go
 *.test

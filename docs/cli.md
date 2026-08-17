@@ -94,6 +94,14 @@ is definable; and, when a bridge is configured, that the bridge exists and is up
 Bridged networking under `qemu:///session` is reported as unsupported rather than
 attempted.
 
+Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
+`doctor` exit non-zero. Group membership is a warning, because a host may grant
+`/dev/kvm` and libvirt access another way and the checks that test those directly
+are the ones that matter. Free space below 10 GiB is a warning: a cached base
+image needs 2–3 GiB and thin overlays grow as guests write. A NAT network that is
+not defined yet is a pass — `create` defines it on demand. `doctor` only inspects;
+it never changes host state.
+
 It also verifies every tool this project delegates to, against its minimum
 version:
 
@@ -288,14 +296,21 @@ $STATE_DIR/
 │       ├── initrd
 │       └── manifest.json       # source digest, kernel version, cmdline,
 │                               # builder tool versions, schemaVersion
-└── vms/
-    └── <name>/
-        ├── root.qcow2          # copy-on-write overlay on base.qcow2
-        ├── user-data           # cloud-init user-data given to virt-install
-        ├── domain.xml          # captured `virsh dumpxml` output (a record, not an input)
-        ├── console.log         # serial console capture
-        └── vm.json             # VM record incl. virt-install version + argv, schemaVersion
+├── vms/
+│   └── <name>/
+│       ├── root.qcow2          # copy-on-write overlay on base.qcow2
+│       ├── user-data           # cloud-init user-data given to virt-install
+│       ├── domain.xml          # captured `virsh dumpxml` output (a record, not an input)
+│       ├── console.log         # serial console capture
+│       └── vm.json             # VM record incl. virt-install version + argv, schemaVersion
+├── networks/
+│   └── <name>.xml              # network XML passed to `virsh net-define` (a record)
+└── locks/                      # advisory file locks, one per VM and per base image
 ```
+
+`networks/` and `locks/` hold the tool's own bookkeeping. Locks are released by
+the kernel when the process holding one exits, so a crashed run never leaves a
+lock that has to be cleared by hand.
 
 Both `manifest.json` and `vm.json` carry a `schemaVersion`. The tool refuses to
 operate on a version it does not understand and says what to rebuild instead of

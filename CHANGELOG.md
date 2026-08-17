@@ -17,6 +17,33 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- The first working `agent-vm` binary. It builds as a single static Go binary
+  with no cgo, and implements the `doctor` command, the `--version` report, and
+  the global flags (`--config`, `--state-dir`, `--libvirt-uri`, `--output`,
+  `--verbose`, `--quiet`, `--yes`, `--dry-run`).
+- `agent-vm doctor` checks whether a host can run VMs: `/dev/kvm`, the libvirt
+  connection, group membership, the state directory and its free space, every
+  required host tool and its minimum version, the NAT network, and a configured
+  bridge. Each check reports pass, warn, fail, or skip with a remedy; only a
+  failure exits non-zero (exit `3`). It is available as `--output json` for
+  scripts, and it never changes host state.
+- `agent-vm --version` reports the tool's version together with the detected
+  versions of `virsh`, `virt-install`, `qemu-img`, `podman`, the libguestfs
+  tools, `ip`, and `ssh`, so "which versions am I running against?" is
+  answerable before something breaks.
+- Configuration resolution with the documented precedence — defaults, then
+  `config.toml`, then `AGENT_VM_*` environment variables, then flags — with
+  validation that fails before any host state changes. The documented defaults
+  (2 vCPU, 4 GiB RAM, 50 GiB disk, NAT, `ubuntu`, guest user `agent`) are
+  enforced by tests so a change to one is visible as a contract change.
+- The state directory, `vm.json`, and `manifest.json`, both carrying a
+  `schemaVersion` that the tool refuses to guess at, plus advisory file locks
+  that keep two `agent-vm` processes from racing on the same VM or base image.
+  A crashed process never leaves a lock behind for a human to clear.
+- NAT network management (`virsh net-define`/`net-start`/`net-autostart` from
+  embedded network XML) and host bridge validation via `ip -json link`.
+- `scripts/check.sh` (format, vet, lint, unit tests) and
+  `scripts/build-release.sh` (static binary per architecture).
 - Design documentation for `snaphop-agent-vm`: a tool that creates disposable
   QEMU/KVM virtual machines for AI coding agents, so an agent can run commands
   with root access on a throwaway machine instead of on the developer's host.
@@ -45,6 +72,16 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- The state directory now also contains `networks/`, holding the network XML
+  passed to `virsh net-define` as a record, and `locks/`. Both are documented in
+  `docs/cli.md`.
+- The NAT network is defined on `192.168.171.0/24` rather than colliding with
+  libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
+  bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
+- Subcommands specified in `docs/cli.md` but not implemented yet (`create`,
+  `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`, `destroy`,
+  `image`) report that they are unimplemented in this build instead of being
+  reported as unknown commands.
 - Replaced the repository's generic project-template documentation with
   project-specific instructions: `AGENTS.md` now describes the real layout,
   commands, contracts, and prohibited actions; `SECURITY.md` states the trust

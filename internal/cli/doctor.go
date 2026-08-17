@@ -1,0 +1,370 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os/user"
+	"strings"
+	"syscall"
+
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/network"
+)
+
+// MinFreeSpace is the free space doctor expects in the state directory. A base
+// image is 2–3 GiB and overlays grow as guests write, so less than this is a
+// problem waiting to happen rather than an immediate failure — it is reported
+// as a warning.
+const MinFreeSpace = 10 * config.GiB
+
+// checkStatus is the outcome of one readiness check. Only fail makes doctor
+// exit non-zero; warn is for something that works now but will bite later.
+type checkStatus string
+
+const (
+	statusPass checkStatus = "pass"
+	statusWarn checkStatus = "warn"
+	statusFail checkStatus = "fail"
+	statusSkip checkStatus = "skip"
+)
+
+// check is one line of doctor's report. The JSON shape is a public contract.
+type check struct {
+	Name   string      `json:"name"`
+	Status checkStatus `json:"status"`
+	Detail string      `json:"detail,omitempty"`
+	Remedy string      `json:"remedy,omitempty"`
+}
+
+type doctorReport struct {
+	OK     bool    `json:"ok"`
+	Checks []check `json:"checks"`
+}
+
+func doctorCommand() *command {
+	return &command{
+		name:    "doctor",
+		summary: "check that this host can run VMs",
+		usage:   "agent-vm doctor [--output json]",
+		run:     runDoctor,
+	}
+}
+
+// runDoctor reports every check rather than stopping at the first failure: an
+// operator setting up a host wants the whole list, not one problem at a time.
+// Because this tool delegates almost everything to host tools, this check is
+// load-bearing rather than a nicety.
+func runDoctor(ctx context.Context, app *App, args []string) error {
+	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	flags.SetOutput(app.Stderr)
+	if err := flags.Parse(args); err != nil {
+		return &ExitError{Code: ExitUsage, Err: err}
+	}
+	if flags.NArg() > 0 {
+		return exitf(ExitUsage, "doctor takes no arguments, got %q", flags.Arg(0))
+	}
+
+	cfg, err := app.Config()
+	if err != nil {
+		return err
+	}
+
+	report := doctorReport{}
+	report.Checks = append(report.Checks, checkKVM())
+	report.Checks = append(report.Checks, checkGroups(cfg)...)
+	report.Checks = append(report.Checks, checkTools(ctx, app)...)
+
+	libvirt := checkLibvirt(ctx, app, cfg)
+	report.Checks = append(report.Checks, libvirt)
+	report.Checks = append(report.Checks, checkStateDir(app, cfg))
+	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
+	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
+
+	report.OK = true
+	for _, c := range report.Checks {
+		if c.Status == statusFail {
+			report.OK = false
+		}
+	}
+
+	if err := app.renderDoctor(report); err != nil {
+		return err
+	}
+	if !report.OK {
+		return &ExitError{
+			Code: ExitHostNotReady,
+			Err:  errors.New("this host is not ready to run VMs; see the failing checks above"),
+		}
+	}
+	return nil
+}
+
+func (a *App) renderDoctor(report doctorReport) error {
+	if a.out.format == OutputJSON {
+		return a.out.JSON(report)
+	}
+
+	rows := make([][]string, 0, len(report.Checks))
+	for _, c := range report.Checks {
+		rows = append(rows, []string{statusLabel(c.Status), c.Name, c.Detail})
+	}
+	a.out.Table(rows)
+
+	for _, c := range report.Checks {
+		if c.Remedy != "" && (c.Status == statusFail || c.Status == statusWarn) {
+			a.out.Printf("\n%s: %s\n  %s\n", c.Name, c.Detail, c.Remedy)
+		}
+	}
+	if report.OK {
+		a.out.Printf("\nThis host can run VMs.\n")
+	}
+	return nil
+}
+
+func statusLabel(s checkStatus) string {
+	switch s {
+	case statusPass:
+		return "  ok  "
+	case statusWarn:
+		return " warn "
+	case statusFail:
+		return " FAIL "
+	default:
+		return " skip "
+	}
+}
+
+// checkKVM confirms hardware virtualization is available to this user.
+// Software emulation is not an acceptable fallback: it is slow enough that a
+// VM per task stops being viable.
+func checkKVM() check {
+	const path = "/dev/kvm"
+	if err := syscall.Access(path, unixReadWrite); err != nil {
+		if errors.Is(err, syscall.ENOENT) {
+			return check{
+				Name: "kvm", Status: statusFail,
+				Detail: path + " does not exist",
+				Remedy: "Enable virtualization in firmware and load the kvm_intel or kvm_amd module. Nested virtualization must be enabled if this host is itself a VM.",
+			}
+		}
+		return check{
+			Name: "kvm", Status: statusFail,
+			Detail: path + " is not readable and writable by this user",
+			Remedy: "Add your user to the kvm group and start a new login session: sudo usermod -aG kvm $USER",
+		}
+	}
+	return check{Name: "kvm", Status: statusPass, Detail: path + " is available"}
+}
+
+// unixReadWrite is R_OK|W_OK for syscall.Access.
+const unixReadWrite = 0x2 | 0x4
+
+// checkGroups reports group membership. It is a warning rather than a failure:
+// a host may grant access through udev rules or ACLs instead, and the KVM and
+// libvirt checks already test what actually matters.
+func checkGroups(cfg *config.Config) []check {
+	current, err := user.Current()
+	if err != nil {
+		return []check{{Name: "groups", Status: statusSkip, Detail: fmt.Sprintf("cannot determine the current user: %v", err)}}
+	}
+	groupIDs, err := current.GroupIds()
+	if err != nil {
+		return []check{{Name: "groups", Status: statusSkip, Detail: fmt.Sprintf("cannot read group membership: %v", err)}}
+	}
+
+	names := map[string]bool{}
+	for _, gid := range groupIDs {
+		if group, err := user.LookupGroupId(gid); err == nil {
+			names[group.Name] = true
+		}
+	}
+
+	required := []string{"kvm"}
+	if cfg.LibvirtURI != config.SessionURI {
+		required = append(required, "libvirt")
+	}
+
+	checks := make([]check, 0, len(required))
+	for _, group := range required {
+		if names[group] {
+			checks = append(checks, check{Name: "group " + group, Status: statusPass, Detail: current.Username + " is a member"})
+			continue
+		}
+		checks = append(checks, check{
+			Name: "group " + group, Status: statusWarn,
+			Detail: current.Username + " is not a member",
+			Remedy: fmt.Sprintf("sudo usermod -aG %s %s, then start a new login session. Ignore this if your host grants access another way and the other checks pass.", group, current.Username),
+		})
+	}
+	return checks
+}
+
+// checkTools verifies every tool this project delegates to, and its minimum
+// version. Because the design orchestrates rather than reimplements, a missing
+// or too-old tool is the most common reason the tool does not work.
+func checkTools(ctx context.Context, app *App) []check {
+	tools := hostexec.RequiredTools()
+	checks := make([]check, 0, len(tools))
+
+	for _, tool := range tools {
+		version, err := app.versions.Require(ctx, tool)
+
+		var (
+			missing *hostexec.NotFoundError
+			tooOld  *hostexec.VersionError
+			parse   *hostexec.ParseError
+		)
+		switch {
+		case errors.As(err, &missing):
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusFail,
+				Detail: "not found on PATH",
+				Remedy: fmt.Sprintf("Install %s (package %s).", tool.Name, tool.Package),
+			})
+		case errors.As(err, &tooOld):
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusFail,
+				Detail: fmt.Sprintf("version %s is older than the required %s", tooOld.Found, tooOld.Minimum),
+				Remedy: fmt.Sprintf("Upgrade %s to %s or newer.", tool.Name, tooOld.Minimum),
+			})
+		case errors.As(err, &parse):
+			// The tool works but reports its version in a form we do not know.
+			// That is our problem, not the operator's, so it is a warning.
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusWarn,
+				Detail: "installed, but its version could not be read",
+				Remedy: "This is an agent-vm bug: please report the output of `" + tool.Name + " " + strings.Join(tool.VersionArgs(), " ") + "`.",
+			})
+		case err != nil:
+			checks = append(checks, check{Name: tool.Name, Status: statusFail, Detail: err.Error()})
+		default:
+			detail := version.String()
+			if !tool.Minimum.IsZero() {
+				detail += fmt.Sprintf(" (minimum %s)", tool.Minimum)
+			}
+			checks = append(checks, check{Name: tool.Name, Status: statusPass, Detail: detail})
+		}
+	}
+	return checks
+}
+
+// checkLibvirt confirms the connection works. `virsh version` fails with a
+// clear message when the daemon is not running or not reachable, so its exit
+// status is the whole check — nothing needs parsing.
+func checkLibvirt(ctx context.Context, app *App, cfg *config.Config) check {
+	_, err := app.runner.Run(ctx, hostexec.Command{
+		Name:   hostexec.Virsh.Name,
+		Args:   []string{"--connect", cfg.LibvirtURI, "version"},
+		Effect: hostexec.Read,
+	})
+	if err != nil {
+		remedy := "Start libvirt with `sudo systemctl start libvirtd` (or `virtqemud`), and confirm your user may connect to " + cfg.LibvirtURI + "."
+		if cfg.LibvirtURI == config.SessionURI {
+			remedy = "Session mode needs a running user session daemon: `systemctl --user start virtqemud`."
+		}
+		return check{
+			Name: "libvirt connection", Status: statusFail,
+			Detail: "cannot connect to " + cfg.LibvirtURI,
+			Remedy: remedy,
+		}
+	}
+	return check{Name: "libvirt connection", Status: statusPass, Detail: "connected to " + cfg.LibvirtURI}
+}
+
+func checkStateDir(app *App, cfg *config.Config) check {
+	store, err := app.Store()
+	if err != nil {
+		return check{
+			Name: "state directory", Status: statusFail,
+			Detail: fmt.Sprintf("cannot use %s: %v", cfg.StateDir, err),
+			Remedy: "Choose a writable location with --state-dir or the state_dir config key.",
+		}
+	}
+
+	// Writability is tested by writing, not by inspecting permission bits,
+	// which say nothing about ACLs, read-only mounts, or full filesystems.
+	probe := store.Root() + "/.doctor-write-probe"
+	if err := store.WriteFile(probe, []byte("agent-vm doctor\n"), 0o600); err != nil {
+		return check{
+			Name: "state directory", Status: statusFail,
+			Detail: fmt.Sprintf("%s is not writable: %v", store.Root(), err),
+			Remedy: "Choose a writable location with --state-dir or the state_dir config key.",
+		}
+	}
+	if err := store.Remove(probe); err != nil {
+		return check{Name: "state directory", Status: statusWarn, Detail: fmt.Sprintf("left %s behind: %v", probe, err)}
+	}
+
+	free, err := store.FreeBytes()
+	if err != nil {
+		return check{Name: "state directory", Status: statusWarn, Detail: err.Error()}
+	}
+	if config.Size(free) < MinFreeSpace {
+		return check{
+			Name: "state directory", Status: statusWarn,
+			Detail: fmt.Sprintf("%s has %s free", store.Root(), config.Size(free).Human()),
+			Remedy: fmt.Sprintf("A cached base image needs 2–3 GiB and overlays grow as guests write; %s free is recommended.", MinFreeSpace.Human()),
+		}
+	}
+	return check{
+		Name: "state directory", Status: statusPass,
+		Detail: fmt.Sprintf("%s, %s free", store.Root(), config.Size(free).Human()),
+	}
+}
+
+// checkNATNetwork reports whether the NAT network is ready. A network that does
+// not exist yet is not a failure: `create` defines it on demand.
+func checkNATNetwork(ctx context.Context, app *App, cfg *config.Config, libvirtOK bool) check {
+	name := "NAT network " + cfg.NATNetwork
+	if !libvirtOK {
+		return check{Name: name, Status: statusSkip, Detail: "skipped: no libvirt connection"}
+	}
+
+	defined, active, err := network.NATStatus(ctx, app.runner, cfg.LibvirtURI, cfg.NATNetwork)
+	switch {
+	case err != nil:
+		return check{Name: name, Status: statusFail, Detail: err.Error()}
+	case defined && active:
+		return check{Name: name, Status: statusPass, Detail: "defined and active"}
+	case defined:
+		return check{
+			Name: name, Status: statusWarn, Detail: "defined but not active",
+			Remedy: fmt.Sprintf("agent-vm will start it on the next create, or start it now with `virsh --connect %s net-start %s`.", cfg.LibvirtURI, cfg.NATNetwork),
+		}
+	default:
+		return check{Name: name, Status: statusPass, Detail: "not defined yet; agent-vm will define it on the first create"}
+	}
+}
+
+// checkBridge validates the configured host bridge, and reports the
+// combinations that cannot work at all.
+func checkBridge(ctx context.Context, app *App, cfg *config.Config) []check {
+	if cfg.Bridge == "" {
+		return nil
+	}
+	name := "host bridge " + cfg.Bridge
+
+	if cfg.LibvirtURI == config.SessionURI {
+		return []check{{
+			Name: name, Status: statusWarn,
+			Detail: "bridged networking is not supported on " + config.SessionURI,
+			Remedy: "Use --libvirt-uri qemu:///system for bridged networking. NAT mode works either way.",
+		}}
+	}
+
+	if err := network.ValidateBridge(ctx, app.runner, cfg.Bridge); err != nil {
+		var berr *network.BridgeError
+		if errors.As(err, &berr) {
+			return []check{{
+				Name: name, Status: statusFail,
+				Detail: fmt.Sprintf("%s %s", cfg.Bridge, berr.Reason),
+				Remedy: "Create or bring up the bridge with your network manager. agent-vm never modifies host network configuration.",
+			}}
+		}
+		return []check{{Name: name, Status: statusFail, Detail: err.Error()}}
+	}
+	return []check{{Name: name, Status: statusPass, Detail: "exists and is up"}}
+}

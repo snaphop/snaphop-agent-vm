@@ -30,11 +30,16 @@
   the system map, and [`docs/decisions/`](./docs/decisions/) for the decisions
   that produced both.
 
-**Status: design phase.** The documentation in this repository describes the
-intended design and public contract. The Go implementation has not landed yet —
-`cmd/` and `internal/` are placeholders. When implementing, treat `docs/cli.md`
-and `docs/architecture.md` as the specification to satisfy, and update them in
-the same change if the implementation must diverge.
+**Status: implementation in progress.** The documentation in this repository
+describes the full intended design and public contract; the code implements part
+of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
+`internal/network`, `internal/image/distro`, and the `doctor`, `--version`, and
+`--dry-run` surfaces in `internal/cli`. Not yet landed: `image build`, `create`,
+`destroy`, the lifecycle and inspection commands, `internal/domain`, and
+`internal/guestinit`; those subcommands exist in the dispatch table and report
+that they are unimplemented rather than being reported as unknown. Treat
+`docs/cli.md` and `docs/architecture.md` as the specification to satisfy, and
+update them in the same change if the implementation must diverge.
 
 Users are developers and agent supervisors who need a throwaway machine per
 task: a VM is created in seconds from a cached base image, the agent works
@@ -159,9 +164,9 @@ work is possible once a base image is cached.
 ## 4. Common Commands
 
 Prefer repository scripts over ad hoc commands so local work and CI stay
-aligned. While the project is in the design phase there is no `go.mod` and
-`scripts/` is empty, so these are the commands the implementation must make work
-— create the script rather than substituting an ad hoc invocation for it.
+aligned. `scripts/check.sh` runs the full pre-handoff verification and
+`scripts/build-release.sh` builds the release binaries; where a script does not
+exist yet, create it rather than substituting an ad hoc invocation for it.
 
 | Task | Command |
 |---|---|
@@ -178,8 +183,10 @@ aligned. While the project is in the design phase there is no `go.mod` and
 | Regenerate golden files | `go test ./... -update-golden` |
 | Live/integration test | `go test -tags integration ./test/integration/...` |
 
-**Minimum verification before handoff:** `gofmt -l .` (empty), `go vet ./...`,
-`golangci-lint run`, and `go test ./...`.
+**Minimum verification before handoff:** `scripts/check.sh`, which runs
+`gofmt -l .` (must be empty), `go vet ./...`, `golangci-lint run`, and
+`go test ./...`. It warns loudly instead of passing silently when
+`golangci-lint` is not installed.
 
 Additional checks required for specific changes:
 
