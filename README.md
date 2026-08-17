@@ -8,10 +8,13 @@ An agent that can run arbitrary commands should not run them on your laptop. The
 kernel, real networking, and a hard isolation boundary — created in seconds and
 thrown away when the task is done.
 
-> **Status: design phase.** This repository currently contains the design,
-> the CLI contract, and the architecture decisions. The Go implementation has
-> not landed yet. [`docs/cli.md`](./docs/cli.md) is the specification the
-> implementation must satisfy — commands below describe intended behavior.
+> **Status: implementation in progress.** Every command in the documented
+> contract is implemented — `doctor`, `image build`/`list`/`inspect`/`rm`,
+> `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`, and
+> `destroy` — and the integration suite has booted all three supported distros
+> in NAT mode on a real KVM host. Bridged mode is not yet exercised end to end.
+> [`docs/cli.md`](./docs/cli.md) remains the specification the implementation
+> must satisfy; where the two disagree, one of them is a bug.
 
 ## Why VMs Instead Of Containers
 
