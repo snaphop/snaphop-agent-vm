@@ -10,7 +10,6 @@ import (
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/github"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/guestinit"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
@@ -20,30 +19,26 @@ import (
 // which is the only place that path is known for certain.
 const guestPublicKeyPath = ".ssh/id_ed25519.pub"
 
-// readGuestPublicKey reads the public key the guest generated for itself.
+// readGuestPublicKey reads the public key the guest generated for itself,
+// waiting for it: the first-boot unit that generates it runs after
+// cloud-final.service, which is after SSH starts answering, so it is normally
+// still missing at the moment `create` finishes waiting for the login.
 //
 // The guest is untrusted, so what comes back is validated as a single OpenSSH
 // public key line before it is used as an argument to anything (SECURITY.md).
-func (a *App) readGuestPublicKey(ctx context.Context, vm *state.VM, address string) (string, error) {
-	cmd, err := domain.SSHCommand(domain.SSHOptions{
+func (a *App) readGuestPublicKey(ctx context.Context, req createRequest, vm *state.VM, address string) (string, error) {
+	a.out.Progress("Reading %s's SSH key, which it generates on first boot\n", vm.Name)
+	out, err := req.manager.WaitForGuestFile(ctx, vm.Name, domain.SSHOptions{
 		User:         vm.Guest.User,
 		Address:      address,
 		IdentityFile: privateKeyFor(vm),
-		BatchMode:    true,
-		Command:      []string{"cat", guestPublicKeyPath},
-	})
-	if err != nil {
-		return "", err
-	}
-	cmd.Effect = hostexec.Read
-
-	res, err := a.runner.Run(ctx, cmd)
+	}, guestPublicKeyPath, req.waitForSSH)
 	if err != nil {
 		return "", fmt.Errorf("reading %s from %s, which the guest generates on first boot: %w",
 			guestPublicKeyPath, vm.Name, err)
 	}
 
-	key := strings.TrimSpace(string(res.Stdout))
+	key := strings.TrimSpace(string(out))
 	if key == "" {
 		return "", exitf(ExitConflict,
 			"%s has no %s yet, so there is no key to add to GitHub.\n"+
@@ -83,7 +78,7 @@ func (a *App) addGitHubKey(ctx context.Context, req createRequest, vm *state.VM,
 				"  The VM is still there: look at it with `agent-vm info %s`.", vm.Name, vm.Name)
 	}
 
-	key, err := a.readGuestPublicKey(ctx, vm, address)
+	key, err := a.readGuestPublicKey(ctx, req, vm, address)
 	if err != nil {
 		return err
 	}
