@@ -162,7 +162,7 @@ func completionSpecs() map[string]*completionSpec {
 
 	return map[string]*completionSpec{
 		"doctor":     {},
-		"create":     {flags: []string{"distro", "vcpus", "memory", "disk", "network", "bridge", "cloud-init", "no-start", "wait-for-ssh", "ssh-key", "virt-install-arg"}},
+		"create":     {flags: []string{"distro", "vcpus", "memory", "disk", "network", "bridge", "cloud-init", "no-start", "wait-for-ssh", "ssh-key", "virt-install-arg", "github-ssh-key"}},
 		"list":       {},
 		"info":       {args: vmName},
 		"start":      {args: vmName},
@@ -170,7 +170,7 @@ func completionSpecs() map[string]*completionSpec {
 		"restart":    {flags: timeoutFlags, args: vmName},
 		"ssh":        {args: vmName},
 		"console":    {args: vmName},
-		"destroy":    {flags: []string{"keep-disk", "force", "timeout"}, args: vmName},
+		"destroy":    {flags: []string{"keep-disk", "force", "timeout", "github-ssh-key"}, args: vmName},
 		"completion": {args: []argSource{func(*App) []string { return shellNames() }}},
 		"image": {subcommands: map[string]*completionSpec{
 			"build":   {flags: []string{"from", "platform", "force"}, args: []argSource{distroCandidates}},

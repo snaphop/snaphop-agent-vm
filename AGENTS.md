@@ -141,6 +141,8 @@ Prerequisites:
 - `virt-install` 4.0+ (`virtinst` on Debian/Ubuntu)
 - `qemu-img`, `podman` 4.0+ (or `skopeo` 1.11+), and libguestfs 1.50+
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`)
+- `gh` 2.0+ — optional, and needed only by `--github-ssh-key` on `create` and
+  `destroy`
 - `golangci-lint` for linting
 
 No libvirt development headers are needed — the build is pure Go and talks to

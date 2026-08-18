@@ -95,6 +95,9 @@ host firewall does not drop the guest's forwarded traffic; and, when a bridge is
 configured, that the bridge exists and is up. Bridged networking under
 `qemu:///session` is reported as unsupported rather than attempted.
 
+`gh` is checked too, but only ever reports `pass` or `skip`: it is needed solely
+by `--github-ssh-key`, so a host without it is still a ready host.
+
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
 `/dev/kvm` and libvirt access another way and the checks that test those directly
@@ -365,7 +368,8 @@ private key is ever placed in a base image or a cloud-init seed (see
 [SECURITY.md](../SECURITY.md)). An operator who supplies their own key through
 `--cloud-init` keeps it — an existing key is left alone. The public half is not
 added to `authorized_keys`; logging in still requires a key passed to
-`create`.
+`create`. `agent-vm create --github-ssh-key` adds the public half to your GitHub
+account, and `agent-vm destroy --github-ssh-key` removes it again.
 
 #### The tmux session menu
 
@@ -452,6 +456,7 @@ and must not already exist.
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
+| `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
 
 On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
@@ -476,6 +481,27 @@ SSH key and could not be reached afterwards. Create the VM and stop it instead:
 ```console
 $ agent-vm create build-01 && agent-vm stop build-01
 ```
+
+#### `--github-ssh-key`
+
+Every VM generates its own `ed25519` key pair on first boot (see [Per-account
+SSH keys](#per-account-ssh-keys)). With `--github-ssh-key`, `create` reads the
+**public** half back over SSH once the guest is reachable and adds it to your
+GitHub account as an authentication key titled `agent-vm <name> on <host>`, so
+an agent in the VM can push without a key being pasted in by hand.
+
+`gh` runs on the host, with your existing login; no GitHub credential ever
+enters the guest, and the private key never leaves it. `gh auth status` is
+checked before anything is created, so an expired login costs nothing. The key's
+numeric id is recorded in `vm.json` under `guest.githubKey`, which is what
+`destroy --github-ssh-key` removes it by.
+
+The flag needs a boot wait: with `--wait-for-ssh 0` there is no reachable guest
+to read the key from, so the combination exits `2`. If `gh` fails after the VM
+exists, the VM is **left in place** — the VM is not what failed — and the error
+names the `gh` command to rerun. Adding the key to a forge other than GitHub is
+not supported; do it by hand with the key `agent-vm ssh <name> cat
+.ssh/id_ed25519.pub` prints.
 
 The readiness probe and `agent-vm ssh` both run `ssh` with
 `StrictHostKeyChecking=no` and `UserKnownHostsFile=/dev/null`. A VM here is
@@ -551,6 +577,15 @@ overlay, and generated user-data. Prompts for confirmation unless `--yes` is giv
 | `--keep-disk` | off | Keep the overlay and state directory; only remove the libvirt domain. |
 | `--force` | off | Power off immediately instead of attempting graceful shutdown. |
 | `--timeout <duration>` | `60s` | How long to wait for the graceful shutdown. |
+| `--github-ssh-key` | off | Also remove this VM's SSH key from your GitHub account, using `gh`. |
+
+`--github-ssh-key` removes the key `create --github-ssh-key` added, by the id
+recorded in `vm.json`. It runs **first**, while the VM is still intact: if `gh`
+fails, nothing is destroyed and the record that names the key is still there to
+retry with. A key someone already deleted on github.com is not an error, and a
+VM with no recorded key exits `4`. Without the flag, a destroy of a VM that has
+one says so and prints the `gh` command that removes it — the key is never
+deleted implicitly.
 
 `destroy` only ever touches domains and paths recorded in this state directory.
 It refuses to remove a path that does not resolve inside the state directory,
@@ -615,6 +650,8 @@ any command; the table below is the summary.
 | Operation | Tools invoked |
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
+| `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
 | `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
@@ -622,7 +659,7 @@ any command; the table below is the summary.
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `virsh net-list` and — when a bridge is configured — `ip -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list` and — when a bridge is configured — `ip -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

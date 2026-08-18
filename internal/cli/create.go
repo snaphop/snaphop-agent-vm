@@ -10,6 +10,7 @@ import (
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/github"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/guestinit"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
@@ -58,6 +59,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	cloudInit := flags.String("cloud-init", "", "extra cloud-init user-data merged into the generated user-data")
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
+	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
 	var sshKeys repeatedFlag
 	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable")
 	var virtInstallArgs repeatedFlag
@@ -72,6 +74,14 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 	if *noStart {
 		return errNoStart(name)
+	}
+	// The key only exists inside the guest, so it can only be read once the
+	// guest is up. Asking for both would be asking for a key that cannot be
+	// fetched.
+	if *githubSSHKey && *waitForSSH <= 0 {
+		return exitf(ExitUsage,
+			"--github-ssh-key needs --wait-for-ssh: the key is generated inside the guest on first boot\n"+
+				"  and is read over SSH once it is reachable.")
 	}
 
 	cfg, err := app.ConfigWith(config.Overrides{
@@ -100,11 +110,22 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	if app.dryRun {
-		return app.printCreatePlan(cfg, name, virtInstallArgs)
+		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey)
 	}
 
-	if err := app.requireTools(ctx, hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg); err != nil {
+	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg}
+	if *githubSSHKey {
+		tools = append(tools, hostexec.GH)
+	}
+	if err := app.requireTools(ctx, tools...); err != nil {
 		return err
+	}
+	if *githubSSHKey {
+		// Checked before anything is created, so an expired login costs
+		// nothing more than the message.
+		if err := github.New(app.runner).CheckAuth(ctx); err != nil {
+			return err
+		}
 	}
 
 	store, err := app.Store()
@@ -163,6 +184,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		extraSource:     *cloudInit,
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
+		githubSSHKey:    *githubSSHKey,
 	})
 }
 
@@ -220,6 +242,7 @@ type createRequest struct {
 	extraSource     string
 	virtInstallArgs []string
 	waitForSSH      time.Duration
+	githubSSHKey    bool
 }
 
 // createVM performs the steps that change host state. Every one of them is
@@ -240,6 +263,14 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 	address, err := a.waitForGuest(ctx, req, vm)
 	if err != nil {
 		return err
+	}
+
+	// The key is added after the VM is usable and recorded, and a failure here
+	// is reported without undoing the VM: the VM is not the thing that failed.
+	if req.githubSSHKey {
+		if err := a.addGitHubKey(ctx, req, vm, address); err != nil {
+			return err
+		}
 	}
 
 	return a.reportCreated(req, vm, address)
@@ -424,6 +455,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if address != "" {
 		rows = append(rows, []string{"  address", address})
 	}
+	if key := vm.Guest.GitHubKey; key != nil {
+		rows = append(rows, []string{"  github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
+	}
 	rows = append(rows, []string{"  state dir", vm.Paths.Dir})
 	a.out.Table(rows)
 
@@ -484,7 +518,7 @@ func (r *createRollback) undo(ctx context.Context, cause error) error {
 // printCreatePlan prints what a create would run and write. Like the image
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
-func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string) error {
+func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool) error {
 	layout := state.NewLayout(cfg.StateDir)
 	vmDir := layout.VMDir(name)
 	ref := cfg.Distro
@@ -524,6 +558,12 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	a.out.Printf("virsh --connect %s domifaddr %s --source agent\n", cfg.LibvirtURI, name)
 	a.out.Printf("virsh --connect %s domiflist %s\n", cfg.LibvirtURI, name)
 	a.out.Printf("virsh --connect %s dumpxml %s\n", cfg.LibvirtURI, name)
+	if githubSSHKey {
+		a.out.Printf("gh auth status --hostname github.com\n")
+		a.out.Printf("ssh %s@<guest address> cat %s\n", cfg.GuestUser, guestPublicKeyPath)
+		a.out.Printf("gh api --method POST user/keys -f title=%q -f key=<the guest's public key> --jq .id\n",
+			githubKeyTitle(name))
+	}
 
 	for _, note := range []string{
 		fmt.Sprintf("create the state directory %s", vmDir),

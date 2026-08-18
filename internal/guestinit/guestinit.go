@@ -103,7 +103,7 @@ func (o Options) validate() error {
 		}
 	}
 	for _, key := range o.SSHAuthorizedKeys {
-		if err := validatePublicKeyLine(key); err != nil {
+		if err := ValidatePublicKeyLine(key); err != nil {
 			return err
 		}
 	}
@@ -232,7 +232,7 @@ func LoadPublicKeys(paths []string) ([]string, error) {
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-			if err := validatePublicKeyLine(line); err != nil {
+			if err := ValidatePublicKeyLine(line); err != nil {
 				return nil, &config.ValidationError{
 					Field: "ssh key", Value: path,
 					Err: fmt.Errorf("line %d is not an SSH public key", found+1),
@@ -261,7 +261,11 @@ func LoadPublicKeys(paths []string) ([]string, error) {
 // value can be emitted into YAML as a quoted scalar with confidence.
 var keyLinePattern = regexp.MustCompile(`^[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}( [^\x00-\x1f]*)?$`)
 
-func validatePublicKeyLine(line string) error {
+// ValidatePublicKeyLine reports whether line is a single OpenSSH public key.
+// It is exported because keys also arrive from outside this package — the one
+// a guest generates for itself is read back over ssh, and everything crossing
+// that boundary is untrusted (SECURITY.md).
+func ValidatePublicKeyLine(line string) error {
 	if strings.Contains(line, "PRIVATE KEY") {
 		return &config.ValidationError{
 			Field: "ssh key", Value: "(not shown)",

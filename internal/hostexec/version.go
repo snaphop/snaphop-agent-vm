@@ -113,6 +113,14 @@ var (
 		versionArgs: []string{"-V"},
 		versionRe:   regexp.MustCompile(`iproute2-(\d+\.\d+(?:\.\d+)?)`),
 	}
+	// GH is optional: it is required only for `create --github-ssh-key` and
+	// `destroy --github-ssh-key`, so it is not in RequiredTools and doctor
+	// never fails a host for its absence.
+	GH = Tool{
+		Name: "gh", Package: "gh", Minimum: Version{Major: 2},
+		versionArgs: []string{"--version"},
+		versionRe:   regexp.MustCompile(`gh version (\d+\.\d+(?:\.\d+)?)`),
+	}
 	SSH = Tool{
 		Name: "ssh", Package: "openssh-client",
 		versionArgs:   []string{"-V"},
@@ -137,6 +145,13 @@ func libguestfsTool(name string) Tool {
 // them is a thing we deliberately do not implement ourselves (ADR-0009).
 func RequiredTools() []Tool {
 	return []Tool{Virsh, VirtInstall, QemuImg, Podman, VirtMakeFS, VirtLs, VirtCopyOut, VirtSysprep, IP, SSH}
+}
+
+// OptionalTools are tools only some flags need. doctor reports them so an
+// operator can see whether those flags will work, but a host without them is
+// still a working host.
+func OptionalTools() []Tool {
+	return []Tool{GH}
 }
 
 // Versions resolves and caches tool versions for the lifetime of one run, so a

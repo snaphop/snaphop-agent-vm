@@ -17,6 +17,21 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create --github-ssh-key` adds the SSH key a VM generates for itself
+  on first boot to your GitHub account, so an agent inside the VM can push
+  without a key being pasted in by hand. The key is titled
+  `agent-vm <name> on <host>`, and `agent-vm destroy --github-ssh-key` removes
+  that same key again when the VM goes away.
+
+  `gh` does the talking, on the host, with your existing login: no GitHub
+  credential ever enters the untrusted guest, and the guest's private key never
+  leaves it. `gh` is optional — `doctor` reports it as `skip` when it is absent,
+  and every other command works without it.
+
+  Removing the key is opt-in on both ends. A `destroy` without the flag says the
+  key is still on your account and prints the `gh` command that removes it,
+  rather than deleting anything you did not ask it to.
+
 - An interactive SSH login now lands on a tmux session menu: start a session,
   attach to one (by number, or by name with TAB completion), list them, or quit
   to a plain shell. Detaching returns to the menu, and the menu is
