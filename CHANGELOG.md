@@ -15,6 +15,16 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Fixed
+
+- `agent-vm create --github-ssh-key` no longer fails with `cat:
+  .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
+  booted. The guest generates that key from a first-boot unit that runs after
+  cloud-init's final stage, which is later than the point where SSH starts
+  answering, so the read raced the guest. It is now retried for up to
+  `--wait-for-ssh` and, if the key never appears, the error names the
+  `agent-vm-user-setup.service` unit to look at.
+
 ### Added
 
 - `agent-vm create` no longer needs `--ssh-key` on a host where you already

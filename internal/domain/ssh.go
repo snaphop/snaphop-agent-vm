@@ -137,3 +137,48 @@ func (m *Manager) WaitForSSH(ctx context.Context, name string, opts SSHOptions, 
 	}
 	return nil
 }
+
+// WaitForGuestFile reads a file from the guest, retrying until it appears.
+//
+// A file the guest itself creates on first boot is not there the moment SSH
+// starts answering: sshd accepts a login as soon as cloud-init has created the
+// account, while a unit ordered after cloud-final.service runs later still. A
+// single read would therefore race the guest and fail on a VM that is merely a
+// few seconds young, so this waits for the file the same way WaitForSSH waits
+// for the login.
+func (m *Manager) WaitForGuestFile(ctx context.Context, name string, opts SSHOptions, path string, timeout time.Duration) ([]byte, error) {
+	read := opts
+	read.BatchMode = true
+	read.Command = []string{"cat", path}
+
+	cmd, err := SSHCommand(read)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Effect = hostexec.Read
+	cmd.Timeout = sshProbeTimeout
+
+	var lastErr error
+	contents, err := poll(ctx, timeout, func() ([]byte, bool, error) {
+		res, err := m.runner.Run(ctx, cmd)
+		if err != nil {
+			// "No such file yet" and "the guest stopped answering" look the
+			// same here; both are expected while it boots, and both are worth
+			// reporting if the time runs out.
+			lastErr = err
+			return nil, false, nil
+		}
+		return res.Stdout, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if contents == nil {
+		return nil, &TimeoutError{
+			What: "produce " + path, Name: name, Waited: timeout, LastErr: lastErr,
+			Remedy: "The VM is still running. Check the first-boot setup with " +
+				"`agent-vm ssh " + name + " -- systemctl status agent-vm-user-setup.service`.",
+		}
+	}
+	return contents, nil
+}

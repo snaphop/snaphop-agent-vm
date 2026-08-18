@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,6 +67,41 @@ func TestCreate_AddsTheGuestGeneratedKeyToGitHub(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "github key") {
 		t.Errorf("create did not report the key it added:\n%s", stdout)
+	}
+}
+
+// The unit that generates the key runs after cloud-final.service, so the file
+// is normally still missing when SSH first answers. create has to wait for it
+// rather than fail on the first read.
+func TestCreate_WaitsForTheGuestToGenerateItsKey(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := withGitHub(createHost(t), "119548016")
+
+	var reads int
+	generated := fake.MatchFunc
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == hostexec.SSH.Name && len(c.Args) > 0 && c.Args[len(c.Args)-1] == guestPublicKeyPath {
+			reads++
+			if reads == 1 {
+				return hostexec.FakeResponse{
+					ExitCode: 1,
+					Stderr:   "cat: .ssh/id_ed25519.pub: No such file or directory\n",
+					Err:      errors.New("exit status 1"),
+				}, true
+			}
+		}
+		return generated(c)
+	}
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--github-ssh-key")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if reads < 2 {
+		t.Errorf("the key was read %d time(s); create did not retry after it was missing", reads)
+	}
+	if !strings.Contains(strings.Join(fake.Argvs(), "\n"), "-f key="+strings.TrimSpace(guestPublicKey)) {
+		t.Errorf("the key was not added after the retry succeeded:\n%s", strings.Join(fake.Argvs(), "\n"))
 	}
 }
 

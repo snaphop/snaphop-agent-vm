@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,11 +34,16 @@ func New(runner hostexec.Runner) *Client {
 	return &Client{runner: runner}
 }
 
-// CheckAuth confirms gh has credentials for GitHub. It is worth running before
-// anything is created, so that an expired login is a refusal up front rather
-// than a failure after a VM exists.
+// keyScope is the token scope POST /user/keys needs. A login without it gets a
+// 404 from the API, which says nothing useful on its own.
+const keyScope = "admin:public_key"
+
+// CheckAuth confirms gh has credentials for GitHub, and the scope that lets it
+// add a key. It is worth running before anything is created, so that an
+// expired login or a token that cannot manage keys is a refusal up front
+// rather than a failure after a VM exists.
 func (c *Client) CheckAuth(ctx context.Context) error {
-	_, err := c.runner.Run(ctx, hostexec.Command{
+	res, err := c.runner.Run(ctx, hostexec.Command{
 		Name:   hostexec.GH.Name,
 		Args:   []string{"auth", "status", "--hostname", "github.com"},
 		Effect: hostexec.Read,
@@ -45,7 +51,40 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("gh is not logged in to github.com; run `gh auth login`: %w", err)
 	}
+	// gh prints the scopes for a login it holds a token for. A login it cannot
+	// enumerate scopes for -- a GITHUB_TOKEN from the environment, or a future
+	// format for this output -- is left alone: the API is still the authority,
+	// and refusing on a line we failed to find would be worse than letting the
+	// request be tried.
+	scopes, found := tokenScopes(string(res.Stdout))
+	if found && !slices.Contains(scopes, keyScope) {
+		return fmt.Errorf("gh is logged in to github.com, but its token does not have the %q scope "+
+			"that adding an SSH key needs; add it with `gh auth refresh -h github.com -s %s`",
+			keyScope, keyScope)
+	}
 	return nil
+}
+
+// tokenScopes pulls the scopes out of `gh auth status` output
+// (test/toolout/gh-auth-status.txt). The second result is false when the
+// output has no scope line at all, which is not the same as an empty scope
+// list.
+func tokenScopes(status string) ([]string, bool) {
+	const marker = "Token scopes:"
+	for _, line := range strings.Split(status, "\n") {
+		_, rest, ok := strings.Cut(line, marker)
+		if !ok {
+			continue
+		}
+		var scopes []string
+		for _, field := range strings.Split(rest, ",") {
+			if scope := strings.Trim(strings.TrimSpace(field), "'\""); scope != "" {
+				scopes = append(scopes, scope)
+			}
+		}
+		return scopes, true
+	}
+	return nil, false
 }
 
 // AddKey uploads publicKey as an authentication key and returns its id, which

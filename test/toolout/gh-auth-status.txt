@@ -1,0 +1,6 @@
+github.com
+  ✓ Logged in to github.com account wensington (/home/wensington/.config/gh/hosts.yml)
+  - Active account: true
+  - Git operations protocol: ssh
+  - Token: ghp_************************************
+  - Token scopes: 'read:org', 'repo'
