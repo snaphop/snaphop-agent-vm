@@ -230,12 +230,19 @@ three. Docker always comes from the distro's own repository, so a build needs
 no third-party repository, GPG key, or installation script.
 
 The Docker daemon is enabled, so it is running when the VM becomes reachable.
-The login user is added to the `docker` group by a one-shot unit that runs after
-cloud-init has created the account, so `docker` works without `sudo` — usually
-by the time the first SSH session lands, and always for later ones. `sudo
-docker` works regardless. This grants the login user nothing it did not already
-have: that account has passwordless `sudo` by design (the guest is untrusted and
-root inside it is expected — see [SECURITY.md](../SECURITY.md)).
+The login user is placed in the `docker` group by the generated cloud-init
+user-data, at the moment the account is created, so `docker` works without
+`sudo` in the very first SSH session. The base image also carries a one-shot
+unit that adds any other interactive account to the group after cloud-init has
+finished, which covers accounts an operator's own `--cloud-init` file creates.
+This grants the login user nothing it did not already have: that account has
+passwordless `sudo` by design (the guest is untrusted and root inside it is
+expected — see [SECURITY.md](../SECURITY.md)).
+
+A base image built before Docker was installed into it has no `docker` group.
+Such an image still boots: the generated user-data declares the group, and
+cloud-init creates groups before users, so the account is never left uncreated
+by a missing group.
 
 Base images built before this tooling was added remain valid and bootable; they
 simply lack these packages. Run `agent-vm image build <distro> --force` to

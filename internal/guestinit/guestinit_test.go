@@ -61,6 +61,24 @@ func TestGenerate_AuthorizesEveryKeyAndNoPassword(t *testing.T) {
 	}
 }
 
+func TestGenerate_PutsTheLoginUserInTheDockerGroup(t *testing.T) {
+	got, err := Generate(options())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// The membership has to be part of creating the account: a group added
+	// afterwards does not apply to a session that has already started, and the
+	// first SSH session can land before any boot-time unit has run.
+	if !strings.Contains(string(got), "    groups:\n      - docker\n") {
+		t.Errorf("the login user is not created in the docker group:\n%s", got)
+	}
+	// Declaring the group is what lets a base image that has no Docker — one
+	// built before the guest tooling landed — still create the account.
+	if !strings.Contains(string(got), "\ngroups:\n  - docker\n") {
+		t.Errorf("the docker group is not declared, so a VM on an older base image would lose its login user:\n%s", got)
+	}
+}
+
 func TestGenerate_RejectsAVMWithNoAuthorizedKey(t *testing.T) {
 	opts := options()
 	opts.SSHAuthorizedKeys = nil
