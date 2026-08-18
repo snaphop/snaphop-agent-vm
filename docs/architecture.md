@@ -146,7 +146,9 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   artifact, by sequencing existing tools: `podman pull` (digest-pinned) →
   `podman build` of the embedded per-distro `Containerfile`, which adds what a VM
   needs and a container lacks (kernel, `systemd`, `cloud-init`,
-  `openssh-server`, `sudo`, `qemu-guest-agent`) → `podman export` to flatten →
+  `openssh-server`, `sudo`, `qemu-guest-agent`) plus the tooling an agent expects
+  to find already installed (networking and diagnostic tools, `curl`/`wget`,
+  `git`, a C toolchain, Python, and Docker) → `podman export` to flatten →
   `virt-make-fs` to produce `base.qcow2` → `virt-ls`/`virt-copy-out` to extract
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and

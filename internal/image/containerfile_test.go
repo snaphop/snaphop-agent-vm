@@ -75,3 +75,65 @@ func TestUbuntuContainerfile_InstallsLsbRelease(t *testing.T) {
 		t.Errorf("%s installs cloud-init with --no-install-recommends but does not install lsb-release; cloud-init will write \"UNAVAILABLE\" as the suite in every guest's apt sources", distro.Ubuntu.Containerfile)
 	}
 }
+
+// TestContainerfiles_InstallCommonGuestTooling guards the guest contract
+// documented under "Guest tooling" in docs/cli.md: an agent that lands in a VM
+// finds the ordinary tools already there instead of having to install them,
+// which is only true if every family's recipe installs them.
+//
+// The package names differ per family, so this checks the name each family
+// actually uses; a family that grows a fourth spelling belongs in this table
+// rather than in a loosened assertion.
+func TestContainerfiles_InstallCommonGuestTooling(t *testing.T) {
+	packages := map[string][]string{
+		distro.Ubuntu.Containerfile: {
+			"iputils-ping", "curl", "wget", "git", "build-essential",
+			"python3", "jq", "docker.io", "docker-compose-v2",
+		},
+		distro.Fedora.Containerfile: {
+			"iputils", "curl", "wget", "git", "gcc", "make",
+			"python3", "jq", "moby-engine", "docker-compose",
+		},
+		distro.Arch.Containerfile: {
+			"iputils", "curl", "wget", "git", "base-devel",
+			"python", "jq", "docker", "docker-compose",
+		},
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		wanted, ok := packages[d.Containerfile]
+		if !ok {
+			t.Fatalf("%s has no expected package list here; a new family must state the tooling it installs", d.Containerfile)
+		}
+		for _, pkg := range wanted {
+			if !strings.Contains(recipe, pkg) {
+				t.Errorf("%s does not install %q; guests built from it will be missing tooling docs/cli.md promises", d.Containerfile, pkg)
+			}
+		}
+
+		// A Docker daemon that is installed but never started is the same
+		// thing as no Docker at all from inside the guest.
+		if !strings.Contains(recipe, "enable docker.service") {
+			t.Errorf("%s installs Docker without enabling docker.service; the daemon will not be running when the VM becomes reachable", d.Containerfile)
+		}
+
+		// The login user only exists after cloud-init has run, so socket
+		// access is granted by the unit the image ships rather than by the
+		// generated user-data — which must keep working against base images
+		// built before Docker was added.
+		if !strings.Contains(recipe, "enable agent-vm-docker-group.service") {
+			t.Errorf("%s does not enable agent-vm-docker-group.service; the login user will need sudo for every docker command", d.Containerfile)
+		}
+	}
+}

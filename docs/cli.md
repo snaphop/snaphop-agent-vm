@@ -173,7 +173,9 @@ agent-vm doctor --output json
 Builds (or rebuilds) the cached base image for a distro. Each step is an existing
 tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
-(kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`),
+(kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`)
+along with the tooling an agent expects to already be there (`ping`, `curl`,
+`wget`, `git`, a C toolchain, Python, and Docker — see “Guest tooling” below),
 `podman export` to flatten it, `virt-make-fs` to write `base.qcow2`,
 `virt-ls`/`virt-copy-out` to extract `vmlinuz`/`initrd`, and `virt-sysprep` to
 clear the machine ID and SSH host keys. Finishes by recording `manifest.json`,
@@ -205,6 +207,39 @@ no other datasource, so a guest never contacts a metadata service on the
 network; and the image carries no identity — `virt-sysprep` empties the machine
 ID and removes SSH host keys, so no two VMs share either. Changing any of these
 changes what every script that SSHes into these VMs can assume.
+
+#### Guest tooling
+
+Beyond the packages that make a container image boot as a VM, every base image
+carries the tools an agent working inside the guest expects to find already
+installed. They live in the base image rather than in per-VM cloud-init
+packages so `create` stays fast: the download is paid once per cached image
+instead of on every first boot, and a VM works the same way offline.
+
+| Group | What is installed |
+|---|---|
+| Networking and diagnostics | `ping`, `traceroute`, `dig`/`nslookup`, `netcat`, `ip`, `ss` |
+| Fetching and transferring | `curl`, `wget`, `rsync`, `ssh`, `ca-certificates` |
+| Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
+| Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux`, `htop`, `tree`, `file`, `man` |
+| Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
+
+Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
+`moby-engine`, Arch takes `docker` — but the commands above are present on all
+three. Docker always comes from the distro's own repository, so a build needs
+no third-party repository, GPG key, or installation script.
+
+The Docker daemon is enabled, so it is running when the VM becomes reachable.
+The login user is added to the `docker` group by a one-shot unit that runs after
+cloud-init has created the account, so `docker` works without `sudo` — usually
+by the time the first SSH session lands, and always for later ones. `sudo
+docker` works regardless. This grants the login user nothing it did not already
+have: that account has passwordless `sudo` by design (the guest is untrusted and
+root inside it is expected — see [SECURITY.md](../SECURITY.md)).
+
+Base images built before this tooling was added remain valid and bootable; they
+simply lack these packages. Run `agent-vm image build <distro> --force` to
+refresh one.
 
 Under `--dry-run`, `image build` prints the pipeline and the file operations it
 would perform and exits without touching anything, including the state
