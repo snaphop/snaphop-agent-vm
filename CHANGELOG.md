@@ -223,6 +223,35 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Ubuntu guests can install packages again. Every Ubuntu base image produced a
+  guest whose apt sources named a suite called `UNAVAILABLE`, so `apt update`
+  returned `404 Not Found` for every repository and nothing could be installed.
+  cloud-init rewrites `/etc/apt/sources.list.d/ubuntu.sources` on first boot and
+  asks the `lsb_release` command for the codename to write into it; cloud-init
+  only *recommends* the package providing that command, and the image is built
+  with `--no-install-recommends`, so it was absent and cloud-init substituted
+  the literal string `UNAVAILABLE`. The Ubuntu image now installs `lsb-release`
+  explicitly. Requires the same image rebuild as the DNS fix below.
+- Guests can resolve DNS names again. Every base image was built with an empty
+  `/etc/resolv.conf`, so a VM came up with a working DHCP lease, a working
+  default route and `systemd-resolved` running and holding the correct DNS
+  server, and still failed every name lookup — `ping 1.1.1.1` worked while
+  `ping github.com` did not, and anything an agent tried to install or clone
+  inside the VM failed. The cause is that `podman` bind-mounts
+  `/etc/resolv.conf` over the image's own copy for the duration of each build
+  step, so `systemd-resolved`'s packaging can never replace that path with the
+  symlink it normally installs, and the empty file from the upstream container
+  image is what gets committed. Nothing repaired it at boot either, because
+  systemd's own rule for the path refuses to overwrite a file that already
+  exists. All three base images now ship a rule that forces `/etc/resolv.conf`
+  to `systemd-resolved`'s stub on every boot.
+
+  **Rebuild step:** base images are cached by distro and tag, and an image that
+  is already cached is not rebuilt just because the recipe changed. Existing
+  cached images still produce guests without DNS, so rebuild each one you use
+  with `agent-vm image build --force <distro>:<tag>`. VMs created from a
+  rebuilt image pick the fix up on their next boot; VMs already created from an
+  old image do not, and need to be recreated.
 - `create`, `ssh`, and `list` no longer report a VM's address as `127.0.0.1`.
   Once the QEMU guest agent starts answering, `virsh domifaddr --source agent`
   lists the guest's loopback interface first, and the tool took that address at
