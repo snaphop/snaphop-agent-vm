@@ -480,6 +480,29 @@ RUN set -eu; \
 RUN systemctl --root=/ enable qemu-guest-agent.service \
  || echo "qemu-guest-agent has no [Install] section here; it is udev-activated instead"
 
+# systemd-firstboot must never run: it is interactive, and it blocks the boot.
+#
+# The image ships no /etc/machine-id, which is exactly the condition systemd
+# reads as "this is a first boot", and Arch enables systemd-firstboot.service in
+# sysinit.target.wants. With a serial console attached the unit decides it has a
+# human in front of it and prompts — "Please enter the new timezone name or
+# number" — then waits forever. Boot stops there, so cloud-init never runs, the
+# guest never configures a network, and `agent-vm create` times out waiting for
+# an address with no sign that anything asked a question.
+#
+# Masking rather than presetting a timezone and locale: nothing this unit
+# configures matters to a disposable VM. cloud-init sets the hostname, and
+# /etc/locale.conf is already in the image. Masking cannot be undone by a
+# package update the way a preset value could be overwritten.
+#
+# This does not affect the machine ID. systemd itself initializes that from the
+# SMBIOS/DMI UUID during early boot, independently of this unit, so every VM
+# still gets its own.
+RUN set -eu; \
+    systemctl --root=/ mask systemd-firstboot.service; \
+    test -L /etc/systemd/system/systemd-firstboot.service \
+      || { echo "systemd-firstboot.service is not masked; this guest would block at boot" >&2; exit 1; }
+
 RUN printf '/dev/vda1 / ext4 defaults 0 1\n' > /etc/fstab
 
 # NoCloud only: a guest must never probe a metadata service on the network.
