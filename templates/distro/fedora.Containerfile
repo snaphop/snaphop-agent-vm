@@ -473,6 +473,38 @@ RUN set -eu; \
     go version >/dev/null || { echo "the Go toolchain installed but cannot run" >&2; exit 1; }; \
     golangci-lint --version >/dev/null || { echo "golangci-lint installed but cannot run" >&2; exit 1; }
 
+# SELinux is turned off in this image, and has to be.
+#
+# The root filesystem is built by virt-make-fs from a flattened container
+# export, so not one file carries a security.selinux xattr. The upstream
+# container image has no policy installed and does not care, but
+# container-selinux — pulled in by podman and libvirt above — brings
+# selinux-policy-targeted with it, and that ships /etc/selinux/config set to
+# enforcing. systemd then tries to relabel an entirely unlabeled filesystem on
+# first boot, fails, and freezes PID 1 with "Failed to allocate manager object"
+# about three seconds in. The guest never reaches networking, so the symptom an
+# operator sees is `agent-vm create` timing out waiting for an address, with no
+# hint that init died.
+#
+# Disabling the policy rather than removing it keeps podman and libvirt
+# installable, since container-selinux depends on it. Doing it here rather than
+# with selinux=0 on the kernel command line keeps one command line shared across
+# all three families (internal/image/distro), which is a recorded contract.
+# SELinux stays enabled in the kernel with no policy loaded, and a kernel with
+# no policy loaded permits everything.
+#
+# The config file is written from scratch when it is absent, because whether it
+# exists at all depends on a dependency this recipe does not ask for directly.
+RUN set -eu; \
+    mkdir -p /etc/selinux; \
+    if [ -f /etc/selinux/config ]; then \
+      sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config; \
+    else \
+      printf 'SELINUX=disabled\nSELINUXTYPE=targeted\n' > /etc/selinux/config; \
+    fi; \
+    grep -q '^SELINUX=disabled$' /etc/selinux/config \
+      || { echo "/etc/selinux/config is not disabled; this guest would freeze at boot" >&2; exit 1; }
+
 # There is no running systemd inside a build, so units are enabled offline with
 # --root=/, which only writes the symlinks an enable would create. This must not
 # be allowed to fail quietly: a guest without sshd looks exactly like a guest
@@ -527,6 +559,33 @@ RUN set -eu; \
     if [ "${last}" != "/etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg" ]; then \
       echo "${last} sets datasource_list after this image's own pin does;" >&2; \
       echo "cloud-init would use it and the guest could probe a metadata service" >&2; \
+      exit 1; \
+    fi
+
+# Apply the hostname agent-vm asked for, not this family's fallback FQDN.
+#
+# cloud-init's RHEL/Fedora distro class sets prefer_fqdn = True, so when both a
+# hostname and an FQDN are available it applies the FQDN. The generated
+# user-data sets `hostname:` and deliberately does not set `fqdn:` — a
+# disposable VM has no domain — so cloud-init falls back to the *system* FQDN
+# for that value, which on Fedora is systemd's compiled-in fallback, the
+# literal string "fedora". Every guest then came up named "fedora" no matter
+# what the VM was called, and `agent-vm ssh <vm> hostname` answered for a name
+# that identified nothing.
+#
+# Ubuntu and Arch do not prefer the FQDN, so this belongs to this family rather
+# than to the shared user-data template — which is a golden-pinned public
+# contract (AGENTS.md §8) and should not gain a field to work around one
+# distro's default.
+RUN printf 'prefer_fqdn_over_hostname: false\n' > /etc/cloud/cloud.cfg.d/99-agent-vm-hostname.cfg
+
+# Prove nothing later in the directory turns the preference back on, for the
+# same reason the datasource pin is checked rather than trusted.
+RUN set -eu; \
+    last="$(grep -l '^prefer_fqdn_over_hostname:' /etc/cloud/cloud.cfg.d/*.cfg | sort | tail -n1)"; \
+    if [ "${last}" != "/etc/cloud/cloud.cfg.d/99-agent-vm-hostname.cfg" ]; then \
+      echo "${last} sets prefer_fqdn_over_hostname after this image's own pin does;" >&2; \
+      echo "guests would be named for the fallback FQDN instead of the VM" >&2; \
       exit 1; \
     fi
 
