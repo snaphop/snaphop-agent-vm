@@ -238,7 +238,7 @@ func runImageInspect(_ context.Context, app *App, args []string) error {
 	return nil
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for key := range m {
 		keys = append(keys, key)

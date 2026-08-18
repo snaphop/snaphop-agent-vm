@@ -115,7 +115,13 @@ func TestRun_EveryCommandInTheDocumentedContractExists(t *testing.T) {
 			t.Errorf("docs/cli.md documents `agent-vm %s`, but it is not in the dispatch table", name)
 		}
 	}
-	for name := range implemented {
+	for name, cmd := range implemented {
+		if cmd.hidden {
+			// Hidden commands are interfaces for other programs — the shell
+			// completion helper — and have no heading of their own. The
+			// section that describes them is checked in completion_test.go.
+			continue
+		}
 		if !documented[name] {
 			t.Errorf("`agent-vm %s` is implemented but not documented in docs/cli.md", name)
 		}

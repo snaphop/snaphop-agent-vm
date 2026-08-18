@@ -408,6 +408,41 @@ Execs `virsh console` for the VM. The console is also logged to
 that is not running exits `5` and names that log, which is what you actually
 want when a guest failed to boot.
 
+### `agent-vm completion <bash|zsh|fish>`
+
+Prints a tab-completion script for the named shell to stdout. Naming an
+unsupported shell, or no shell at all, exits `2`.
+
+```bash
+# bash, for one user
+agent-vm completion bash > ~/.local/share/bash-completion/completions/agent-vm
+
+# zsh, into the first directory on $fpath (compinit must run in ~/.zshrc)
+agent-vm completion zsh > "${fpath[1]}/_agent-vm"
+
+# fish
+agent-vm completion fish > ~/.config/fish/completions/agent-vm.fish
+```
+
+Completion covers command and subcommand names, each command's own flags, the
+global flags, the values of flags whose set of values is closed (`--output`,
+`--network`, `--platform`), the supported distro families for `image build`,
+and — read from the state directory — the recorded VM names for `info`, `start`,
+`stop`, `restart`, `ssh`, `console`, and `destroy`, and the cached images for
+`image inspect`, `image rm`, and `--distro`. Where `agent-vm` offers nothing,
+the shell falls back to filenames, which is what `--config`, `--ssh-key`, and
+`--cloud-init` want. Nothing is offered after `--` in `agent-vm ssh <name> --`,
+because what follows runs in the guest.
+
+The scripts call `agent-vm __complete <word>...`, a hidden command that takes
+the words typed so far — the last being the word under the cursor — and prints
+one candidate per line. It is an interface for shells, not for operators: it
+reads the state directory without creating it, never runs a host tool, and
+always exits `0`, because an error printed by a completion helper would land in
+the middle of what the operator is typing. Its output format is not a stable
+contract; the shell scripts are generated from the same build, so the two
+cannot drift apart.
+
 ## Underlying Commands
 
 The tool orchestrates standard host tools rather than reimplementing them
@@ -424,6 +459,7 @@ any command; the table below is the summary.
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
+| `completion` / `__complete` | none — completion reads the state directory and spawns no process |
 | `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `virsh net-list` and — when a bridge is configured — `ip -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything

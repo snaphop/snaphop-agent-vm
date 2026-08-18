@@ -17,6 +17,15 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm completion <bash|zsh|fish>` prints a tab-completion script for the
+  shell you name, so `agent-vm ` and Tab offers command names, a command's own
+  flags, the recorded VM names for the commands that take one, the cached base
+  images for `image inspect`/`image rm`/`--distro`, and the supported distro
+  families for `image build`. Install it with, for example, `agent-vm
+  completion bash > ~/.local/share/bash-completion/completions/agent-vm`;
+  `docs/cli.md` has the line for each shell. The scripts ask the binary for
+  candidates as you type, so they keep working as commands and flags change.
+
 - Base images now ship the tools an agent expects to find on a working
   machine, so a new VM is usable immediately instead of starting with a package
   install. That means networking and diagnostic tools (`ping`, `traceroute`,
