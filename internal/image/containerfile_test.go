@@ -1,6 +1,7 @@
 package image
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -189,6 +190,223 @@ func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
 		}
 		if len(contents) == 0 {
 			t.Errorf("embedded build context file %q is empty", name)
+		}
+	}
+}
+
+// agentNPMPackages are the coding agents installed from npm. agy is absent
+// because it has no npm package and arrives through its vendor's installer.
+var agentNPMPackages = []string{
+	"@anthropic-ai/claude-code",
+	"@openai/codex",
+	"opencode-ai",
+	"@earendil-works/pi-coding-agent",
+}
+
+// TestContainerfiles_InstallTheCodingAgents guards the guest contract that a VM
+// comes up with claude, codex, opencode, pi and agy already installed.
+//
+// None of the five is packaged by any distro, so nothing else in the image
+// would pull them in by accident: if a recipe stops naming one, guests simply
+// stop having it, and that only shows up when someone SSHes in.
+func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		// Four of the five are npm packages, so a Node runtime is not
+		// optional; without it the npm step fails the build outright.
+		if !strings.Contains(recipe, "nodejs") {
+			t.Errorf("%s does not install Node.js; the npm-published agents cannot be installed without it", d.Containerfile)
+		}
+		for _, pkg := range agentNPMPackages {
+			if !strings.Contains(recipe, pkg) {
+				t.Errorf("%s does not install %q; guests built from it will be missing an agent docs/cli.md promises", d.Containerfile, pkg)
+			}
+		}
+
+		// agy has no npm package. Installing it anywhere but a directory on
+		// the default PATH leaves it invisible to every account but the one
+		// that ran the build.
+		if !strings.Contains(recipe, "antigravity.google/cli/install.sh") {
+			t.Errorf("%s does not install the Antigravity CLI (agy)", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "--dir /usr/local/bin") {
+			t.Errorf("%s installs agy without pointing it at /usr/local/bin; it will land in the build user's home and no guest account will find it", d.Containerfile)
+		}
+
+		// pi and claude refuse to start on Node older than 22.19. Catching
+		// that during the build is the difference between a failed build and
+		// a guest whose agents silently do not run.
+		if !strings.Contains(recipe, "the agent CLIs require >= 22.19") {
+			t.Errorf("%s does not assert a minimum Node version; a distro that ships Node older than 22.19 would produce an image whose agents cannot start", d.Containerfile)
+		}
+	}
+}
+
+// TestContainerfiles_ConfigureTheAgentsForUnattendedUse guards the reason the
+// agents are in the image at all: they have to work without a human approving
+// each tool call.
+//
+// The configuration has to reach both /etc/skel, which useradd copies into the
+// login user cloud-init creates, and /root, whose home already exists in the
+// image and so never consults skel.
+func TestContainerfiles_ConfigureTheAgentsForUnattendedUse(t *testing.T) {
+	configs := []struct{ file, dest string }{
+		{"claude-settings.json", "/etc/skel/.claude/settings.json"},
+		{"codex-config.toml", "/etc/skel/.codex/config.toml"},
+		{"opencode.json", "/etc/skel/.config/opencode/opencode.json"},
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		for _, config := range configs {
+			if !strings.Contains(recipe, "COPY "+config.file+" "+config.dest) {
+				t.Errorf("%s does not copy %s to %s; the login user cloud-init creates will get that agent's default, which prompts for approval", d.Containerfile, config.file, config.dest)
+			}
+		}
+		if !strings.Contains(recipe, `install -D -m 0644 "/etc/skel/${file}" "/root/${file}"`) {
+			t.Errorf("%s does not install the agent configuration for root; skel is only consulted when a home directory is created and /root already exists", d.Containerfile)
+		}
+
+		// agy has no configuration file, so the alias is the only thing
+		// standing between it and an approval prompt.
+		if !strings.Contains(recipe, "COPY agent-aliases.sh /etc/profile.d/agent-vm-agents.sh") {
+			t.Errorf("%s does not install the agy alias into /etc/profile.d; agy will prompt for approval in every interactive session", d.Containerfile)
+		}
+	}
+}
+
+// TestAgentConfigs_SelectTheMostPermissiveMode checks the settings themselves
+// rather than that a file exists. A config file shipped with a default or
+// misspelled value is worse than none: it looks configured and still blocks.
+func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
+	claude := struct {
+		Permissions struct {
+			DefaultMode string `json:"defaultMode"`
+		} `json:"permissions"`
+	}{}
+	readJSON(t, "distro/claude-settings.json", &claude)
+	if claude.Permissions.DefaultMode != "bypassPermissions" {
+		t.Errorf("claude-settings.json sets permissions.defaultMode to %q, want \"bypassPermissions\"; any other mode stops to ask", claude.Permissions.DefaultMode)
+	}
+
+	opencode := struct {
+		Permission map[string]string `json:"permission"`
+	}{}
+	readJSON(t, "distro/opencode.json", &opencode)
+	for _, action := range []string{"edit", "bash", "webfetch"} {
+		if got := opencode.Permission[action]; got != "allow" {
+			t.Errorf("opencode.json sets permission.%s to %q, want \"allow\"; opencode will ask before every %s", action, got, action)
+		}
+	}
+
+	// Codex takes TOML, and pulling in a parser for two keys is not worth a
+	// dependency (AGENTS.md §11).
+	codex := readTemplate(t, "distro/codex-config.toml")
+	for _, setting := range []string{`approval_policy = "never"`, `sandbox_mode = "danger-full-access"`} {
+		if !strings.Contains(codex, setting) {
+			t.Errorf("codex-config.toml does not set %s; codex will either ask for approval or sandbox itself inside a VM that is already the sandbox", setting)
+		}
+	}
+
+	// agy's only lever is the flag.
+	aliases := readTemplate(t, "distro/agent-aliases.sh")
+	if !strings.Contains(aliases, "--dangerously-skip-permissions") {
+		t.Errorf("agent-aliases.sh does not pass --dangerously-skip-permissions to agy, which is the only way it runs unattended")
+	}
+}
+
+// TestAgentConfigs_CarryNoCredentials is the SECURITY.md guard on this whole
+// change. A base image is shared by every VM built on it and cached
+// indefinitely, so an API key that reached one of these files would be handed
+// to every guest and every operator who copied the cache. Credentials belong
+// in per-VM cloud-init, never here.
+func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
+	secretish := []string{"api_key", "apikey", "api-key", "token", "secret", "password", "sk-", "bearer"}
+
+	for _, name := range buildContextFiles {
+		contents := strings.ToLower(readTemplate(t, "distro/"+name))
+		for _, needle := range secretish {
+			if strings.Contains(contents, needle) {
+				t.Errorf("build context file %q contains %q; a base image is shared by every VM built on it and must carry no credentials (SECURITY.md)", name, needle)
+			}
+		}
+	}
+}
+
+// TestAgentConfigs_AreShippedInTheBuildContext ties the COPYs above to the
+// files the builder actually writes next to the Containerfile. A COPY of a
+// file missing from the build context fails the build minutes in, after the
+// package installation has already been paid for.
+func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
+	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "agent-aliases.sh"} {
+		if !slices.Contains(buildContextFiles, name) {
+			t.Errorf("%s is not in buildContextFiles %v, so podman's build context will not contain it", name, buildContextFiles)
+		}
+	}
+}
+
+func readTemplate(t *testing.T, path string) string {
+	t.Helper()
+	contents, err := templates.FS.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(contents)
+}
+
+func readJSON(t *testing.T, path string, into any) {
+	t.Helper()
+	if err := json.Unmarshal([]byte(readTemplate(t, path)), into); err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+}
+
+// TestContainerfiles_SmokeTestTheAgents guards against the failure mode that
+// this whole feature is most exposed to: an agent that installs cleanly and
+// cannot run.
+//
+// claude and opencode both download a native binary in an npm postinstall
+// script. npm 12 does not run those scripts, so the install succeeds and the
+// command fails at first use — inside a VM, long after the image was built and
+// cached. The recipes hold npm to the 11 line, and run every agent once so
+// that a future npm or Node change fails the build instead of shipping a guest
+// whose agents do not work.
+func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "npm install -g npm@11") {
+			t.Errorf("%s does not hold npm to the 11 line; npm 12 skips the postinstall scripts claude and opencode use to fetch their native binaries, and both install cleanly then fail at first run", d.Containerfile)
+		}
+		if !strings.Contains(recipe, `for agent in claude codex opencode pi agy; do`) {
+			t.Errorf("%s does not run each agent once at build time; an agent that installs but cannot start would ship undetected", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "installed but cannot run") {
+			t.Errorf("%s does not fail the build when an agent cannot start", d.Containerfile)
 		}
 	}
 }

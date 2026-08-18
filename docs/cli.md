@@ -175,7 +175,8 @@ tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
 (kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`)
 along with the tooling an agent expects to already be there (`ping`, `curl`,
-`wget`, `git`, a C toolchain, Python, and Docker — see “Guest tooling” below),
+`wget`, `git`, a C toolchain, Python, Docker, and the coding agents themselves
+— see “Guest tooling” below),
 `podman export` to flatten it, `virt-make-fs` to write `base.qcow2`,
 `virt-ls`/`virt-copy-out` to extract `vmlinuz`/`initrd`, and `virt-sysprep` to
 clear the machine ID and SSH host keys. Finishes by recording `manifest.json`,
@@ -223,11 +224,59 @@ instead of on every first boot, and a VM works the same way offline.
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux`, `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
+| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
-three. Docker always comes from the distro's own repository, so a build needs
-no third-party repository, GPG key, or installation script.
+three. Everything except the coding agents comes from the distro's own
+repository.
+
+#### Coding agents
+
+Every base image carries five coding agents, so a VM is usable by an agent the
+moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. Four are
+installed from npm and need a Node.js runtime, which is installed alongside
+them; `agy` has no npm package and is installed from its vendor's script into
+`/usr/local/bin`, where every account on the VM finds it. Their versions are not
+pinned — they are whatever was current when the image was built, and rebuilding
+the image is how a guest gets newer ones.
+
+This is the only software in a base image that does not come from the distro's
+own repository, and on Ubuntu it is also the only third-party repository and GPG
+key a build adds: Ubuntu 24.04 ships Node.js 18 and the agents require 22.19 or
+newer, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
+Node.js of their own, and `npm` itself is held to the 11 line on all three:
+npm 12 does not run the postinstall scripts `claude` and `opencode` use to fetch
+their native binaries, so they would install cleanly and then fail at first use.
+
+A build fails outright if the Node.js it ends up with is older than 22.19, and it
+runs each of the five agents once at the end and fails if any of them cannot
+start. Installing an agent and having a working agent are different things, and
+the difference would otherwise only surface inside a VM long after the image was
+built and cached.
+
+Each agent is configured in its **most permissive mode**, so it acts without
+stopping to ask a human to approve individual tool calls: `claude` defaults to
+`bypassPermissions`, `codex` to `approval_policy = "never"` with
+`sandbox_mode = "danger-full-access"`, and `opencode` allows `edit`, `bash`, and
+`webfetch`. `pi` does not gate tool calls at all. `agy` has no configuration file
+for permissions, so the image ships a shell alias that adds
+`--dangerously-skip-permissions`; that alias reaches interactive shells only, and
+a non-interactive caller such as `ssh <vm> agy -p '…'` must pass the flag itself.
+
+This is deliberate and depends on the VM being the sandbox: it is disposable and
+network-isolated by default, and nothing the host cares about is reachable from
+inside it (see [SECURITY.md](../SECURITY.md)). Restricting an agent inside a VM
+that already contains it only stops it doing the work the VM exists for.
+
+These configuration files land in `/etc/skel`, so the login user cloud-init
+creates gets them, and in `/root`. They can be replaced per VM through
+`--cloud-init` without rebuilding the image.
+
+**No credentials are baked in.** A base image is shared by every VM built on it
+and cached indefinitely, so the agents ship configured but unauthenticated. API
+keys or logins have to reach each VM separately — through `--cloud-init`, or by
+authenticating inside the guest.
 
 The Docker daemon is enabled, so it is running when the VM becomes reachable.
 The login user is placed in the `docker` group by the generated cloud-init

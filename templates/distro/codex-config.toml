@@ -1,0 +1,8 @@
+# Codex CLI configuration for an agent-vm guest.
+#
+# "never" stops Codex asking a human to approve each command, and
+# "danger-full-access" turns off the sandbox it would otherwise impose on
+# itself. The VM is the sandbox: a second one inside it only stops the agent
+# from doing the work the VM exists for.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
