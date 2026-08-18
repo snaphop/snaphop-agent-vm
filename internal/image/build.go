@@ -70,6 +70,7 @@ var buildContextFiles = []string{
 	"agent-aliases.sh",
 	"chromium.sh",
 	"sdkman.sh",
+	"user-setup.sh",
 }
 
 // Builder produces base images.

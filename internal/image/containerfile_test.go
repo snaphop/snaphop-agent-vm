@@ -134,8 +134,21 @@ func TestContainerfiles_InstallCommonGuestTooling(t *testing.T) {
 		// access is granted by the unit the image ships rather than by the
 		// generated user-data — which must keep working against base images
 		// built before Docker was added.
-		if !strings.Contains(recipe, "enable agent-vm-docker-group.service") {
-			t.Errorf("%s does not enable agent-vm-docker-group.service; the login user will need sudo for every docker command", d.Containerfile)
+		if !strings.Contains(recipe, "enable agent-vm-user-setup.service") {
+			t.Errorf("%s does not enable agent-vm-user-setup.service; the login user will need sudo for every docker command and will have no SSH key of its own", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY user-setup.sh /usr/local/sbin/agent-vm-user-setup") {
+			t.Errorf("%s does not install the first-boot account setup script the unit runs", d.Containerfile)
+		}
+		// The unit waits for cloud-final.service, which cloud-init orders
+		// after multi-user.target. Hanging it off that target as well is an
+		// ordering cycle, and systemd breaks a cycle by deleting the job: the
+		// unit stays enabled and inactive for the life of the VM, silently.
+		if !strings.Contains(recipe, "'WantedBy=cloud-final.service'") {
+			t.Errorf("%s does not install the first-boot unit into cloud-final.service; wanted by multi-user.target it would be an ordering cycle and would never run", d.Containerfile)
+		}
+		if strings.Contains(recipe, "'WantedBy=multi-user.target'") {
+			t.Errorf("%s installs a unit into multi-user.target; combined with After=cloud-final.service that job is deleted at boot", d.Containerfile)
 		}
 	}
 }
@@ -535,6 +548,125 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh") {
 			t.Errorf("%s does not install the SDKMAN shell init; `sdk` is a shell function and does not exist until it is sourced", d.Containerfile)
 		}
+
+		// The JVM toolchain has to be installed into the skel copy, before it
+		// is cloned to /root: a JDK downloaded per account at first use would
+		// be a download a network-isolated guest cannot make.
+		if !strings.Contains(recipe, `sdk install java "$java_id"`) {
+			t.Errorf("%s does not install a JDK with SDKMAN; a guest would come up with `sdk` and no Java", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "-tem") {
+			t.Errorf("%s does not select a Temurin JDK", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "sdk install maven") {
+			t.Errorf("%s does not install Maven with SDKMAN", d.Containerfile)
+		}
+	}
+}
+
+// TestUserSetupScript_DoesBothJobsItIsThereFor guards the first-boot script
+// that finishes every interactive account.
+//
+// Neither job can be done at build time — the accounts do not exist yet — and
+// neither can be done from the seed: cloud-init only knows about the login
+// user agent-vm asks for, and a private key must never be written into a seed
+// (SECURITY.md).
+func TestUserSetupScript_DoesBothJobsItIsThereFor(t *testing.T) {
+	script := readTemplate(t, "distro/user-setup.sh")
+
+	for _, group := range []string{"docker", "libvirt", "kvm"} {
+		if !strings.Contains(script, group) {
+			t.Errorf("the first-boot script does not add accounts to the %q group", group)
+		}
+	}
+	// A group the image does not have must be skipped, not created: base
+	// images built before that software was installed have none of them.
+	if !strings.Contains(script, `getent group "${group}" >/dev/null 2>&1 || continue`) {
+		t.Error("the first-boot script does not skip groups the image lacks; it would fail on an older base image")
+	}
+
+	if !strings.Contains(script, "ssh-keygen") || !strings.Contains(script, "id_ed25519") {
+		t.Error("the first-boot script does not generate an SSH key pair for each account")
+	}
+	// An operator may have supplied their own key through --cloud-init, and a
+	// re-run must not replace a key the account has already published.
+	if !strings.Contains(script, `if [ -e "${home}/.ssh/id_ed25519" ]; then`) {
+		t.Error("the first-boot script does not leave an existing key alone, so a re-run could replace a published key")
+	}
+	// A key readable by other accounts on the VM is not a key.
+	if !strings.Contains(script, `chmod 0600 "${home}/.ssh/id_ed25519"`) {
+		t.Error("the first-boot script does not restrict the private key's mode")
+	}
+	// Arch installs no hostname binary at all, so the comment naming the
+	// account has to come from coreutils.
+	if strings.Contains(script, "$(hostname)") {
+		t.Error("the first-boot script calls hostname, which Arch does not install; use uname -n")
+	}
+}
+
+// TestContainerfiles_InstallTheVirtualizationStack guards the tooling that
+// lets a guest run VMs of its own.
+//
+// It is the same set of host tools agent-vm itself drives, so a guest that has
+// them can run agent-vm — and the guest half of nested virtualization is
+// worthless without them. Names differ per family; the commands do not.
+func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
+	packages := map[string][]string{
+		distro.Ubuntu.Containerfile: {
+			"qemu-kvm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
+			"dnsmasq-base", "guestfs-tools", "podman", "golang-go",
+		},
+		distro.Fedora.Containerfile: {
+			"qemu-kvm", "libvirt", "libvirt-client", "virt-install",
+			"dnsmasq", "guestfs-tools", "podman", "golang",
+		},
+		distro.Arch.Containerfile: {
+			"qemu-base", "libvirt", "virt-install",
+			"dnsmasq", "guestfs-tools", "podman", "go",
+		},
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		wanted, ok := packages[d.Containerfile]
+		if !ok {
+			t.Fatalf("%s has no expected package list here; a new family must state the virtualization stack it installs", d.Containerfile)
+		}
+		for _, pkg := range wanted {
+			if !strings.Contains(recipe, pkg) {
+				t.Errorf("%s does not install %q, so a guest built from it could not run a VM of its own", d.Containerfile, pkg)
+			}
+		}
+
+		// Ubuntu's full dnsmasq package additionally enables a system-wide
+		// resolver on port 53, which fights with the instance libvirt starts
+		// per network. libvirt only needs the binary.
+		if d.Containerfile == distro.Ubuntu.Containerfile && strings.Contains(recipe, "\n      dnsmasq \\\n") {
+			t.Errorf("%s installs the full dnsmasq package; libvirt needs dnsmasq-base, and the daemon package would contend with libvirt's own instances", d.Containerfile)
+		}
+
+		// golangci-lint is not packaged by Ubuntu at all, and where it is
+		// packaged the version differs per family.
+		if !strings.Contains(recipe, "golangci-lint/HEAD/install.sh") {
+			t.Errorf("%s does not install golangci-lint from its own installer", d.Containerfile)
+		}
+
+		// The guest half of nested virtualization. The host half is
+		// virt-install's --cpu host-passthrough, in internal/domain.
+		if !strings.Contains(recipe, "options kvm_intel nested=1") || !strings.Contains(recipe, "options kvm_amd nested=1") {
+			t.Errorf("%s does not enable nested virtualization in the guest, so a VM inside this VM could not nest further", d.Containerfile)
+		}
+
+		// A libvirt that is installed but never started is the same thing as
+		// no libvirt at all from inside the guest.
+		if !strings.Contains(recipe, "libvirtd.service") || !strings.Contains(recipe, "virtqemud.service") {
+			t.Errorf("%s does not enable a libvirt daemon; a nested `agent-vm create` would fail to connect", d.Containerfile)
+		}
 	}
 }
 
@@ -590,6 +722,25 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		// whether it is actually defined in a login shell.
 		if !strings.Contains(recipe, `bash -lc 'type sdk'`) {
 			t.Errorf("%s does not check that `sdk` is defined in a login shell; the profile script could be missing and the file check would still pass", d.Containerfile)
+		}
+		for _, check := range []string{`bash -lc 'java -version'`, `bash -lc 'mvn -version'`} {
+			if !strings.Contains(recipe, check) {
+				t.Errorf("%s does not run %s at build time; a JDK or Maven that did not install would only surface inside a VM", d.Containerfile, check)
+			}
+		}
+		for _, check := range []string{
+			"virsh --version", "virt-install --version", "qemu-img --version",
+			"virt-make-fs --version", "podman --version", "dnsmasq --version",
+			"go version", "golangci-lint --version",
+		} {
+			if !strings.Contains(recipe, check) {
+				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
+			}
+		}
+		// The binary is named for the architecture, so an image can be missing
+		// it while every other check passes.
+		if !strings.Contains(recipe, `command -v "qemu-system-$(uname -m)"`) {
+			t.Errorf("%s does not check that a qemu-system binary for this architecture is present", d.Containerfile)
 		}
 	}
 }

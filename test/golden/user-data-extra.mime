@@ -19,8 +19,8 @@ Content-Type: text/cloud-config; charset="utf-8"
 # the guest was configured with.
 #
 # This is the whole guest-side contract. It authorizes public keys, creates the
-# login user and the group that lets it reach the Docker socket, and does
-# nothing else — no packages, no commands, no credentials.
+# login user and the groups that let it reach the Docker socket and libvirt,
+# and does nothing else — no packages, no commands, no credentials.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -29,23 +29,29 @@ Content-Type: text/cloud-config; charset="utf-8"
 hostname: "agent-01"
 preserve_hostname: false
 
-# Docker's socket is owned by root:docker, so the login user has to be in that
-# group to run `docker` without sudo. The group is declared here rather than
-# only in the base image's boot-time unit because a group added to an account
-# after it has already logged in does not apply to that session, and the first
-# SSH session can land before a post-cloud-init unit has run.
+# Docker's socket is owned by root:docker, and libvirt's by root:libvirt, so
+# the login user has to be in those groups to run `docker` and `virsh` without
+# sudo; kvm is what lets the VMs it starts use /dev/kvm. They are declared here
+# rather than only in the base image's boot-time unit because a group added to
+# an account after it has already logged in does not apply to that session, and
+# the first SSH session can land before a post-cloud-init unit has run.
 #
-# Declaring the group is what keeps this safe on a base image that has no
-# Docker — one built before the guest tooling landed. cloud-init creates groups
-# before users, so the account is created either way; without this, a missing
-# group would fail user creation and leave the VM unreachable (AGENTS.md §8).
+# Declaring the groups is what keeps this safe on a base image that has none of
+# that software — one built before the guest tooling landed. cloud-init creates
+# groups before users, so the account is created either way; without this, a
+# missing group would fail user creation and leave the VM unreachable
+# (AGENTS.md §8).
 groups:
   - docker
+  - libvirt
+  - kvm
 
 users:
   - name: "agent"
     groups:
       - docker
+      - libvirt
+      - kvm
     # No password is ever set, so the account is reachable by key only. sudo is
     # granted through a sudoers drop-in rather than by adding the user to a
     # group, because the group that confers sudo differs per distro and this

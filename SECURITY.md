@@ -84,6 +84,9 @@ do with `--network bridge` or an explicit host-path share.
   data, production data, or PII.
 - Only SSH **public** keys are injected into a guest. A private key MUST NEVER be
   written into a base image, a cloud-init seed, a disk image, or this repository.
+  A guest generating a key pair for its own accounts at first boot is a
+  different thing and is allowed: that key is created inside the VM, never
+  leaves it, and is destroyed with it.
 - MUST NOT bake credentials, tokens, or registry secrets into a base image.
   Base images are shared by every VM built on them and are cached indefinitely.
 - Registry credentials, when needed, MUST come from the host's existing container
