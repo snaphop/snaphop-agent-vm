@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +39,18 @@ import (
 // In NAT mode the tool defines the libvirt network agent-vm-nat if it is
 // absent. That network is host state shared with real use, so the tests leave
 // it in place rather than removing something they may not have created.
+//
+// Bridged mode is the other half of the networking contract and must be run
+// explicitly, because it puts the test guest directly on the operator's LAN
+// (SECURITY.md, "Networking Boundaries") and needs a bridge that already
+// exists — this suite never creates one:
+//
+//	go test -tags integration ./test/integration/... -run TestVMLifecycle \
+//	    -lifecycle-network bridge -lifecycle-bridge br0
+//
+// A bridged guest gets its address from whatever DHCP server serves that
+// segment rather than from libvirt, so a segment without one will fail the
+// wait for SSH — that is a host-environment problem, not a defect in the tool.
 
 var (
 	lifecycleStateDir = flag.String("lifecycle-state-dir", "",
@@ -45,6 +59,10 @@ var (
 		"distro to boot in the lifecycle tests")
 	lifecycleURI = flag.String("lifecycle-libvirt-uri", "qemu:///system",
 		"libvirt connection the lifecycle tests use")
+	lifecycleNetwork = flag.String("lifecycle-network", string(config.NetworkNAT),
+		"network mode the lifecycle tests create VMs in: nat or bridge")
+	lifecycleBridge = flag.String("lifecycle-bridge", "",
+		"host bridge the lifecycle tests attach to; required with -lifecycle-network bridge")
 )
 
 const (
@@ -61,6 +79,11 @@ const (
 	createTimeout  = 60 * time.Minute
 	commandTimeout = 5 * time.Minute
 )
+
+// guestHostnameCommand asks the guest its own name. `uname -n` rather than
+// `hostname` for the same reason templates/distro/user-setup.sh gives: Arch
+// installs no hostname binary at all, while coreutils is present everywhere.
+var guestHostnameCommand = []string{"uname", "-n"}
 
 // harness runs the built agent-vm binary against a dedicated state directory.
 type harness struct {
@@ -191,6 +214,26 @@ func (h *harness) run(t *testing.T, timeout time.Duration, args ...string) resul
 	return res
 }
 
+// networkArgs turns the suite's network flags into create arguments. NAT is
+// the documented default and passes nothing, so the default run exercises the
+// same argument vector an operator gets from a bare `agent-vm create`.
+func networkArgs(t *testing.T) []string {
+	t.Helper()
+
+	switch mode := config.NetworkMode(*lifecycleNetwork); mode {
+	case config.NetworkNAT:
+		return nil
+	case config.NetworkBridge:
+		if *lifecycleBridge == "" {
+			t.Fatal("-lifecycle-network bridge needs -lifecycle-bridge; this suite never creates a host bridge")
+		}
+		return []string{"--network", string(mode), "--bridge", *lifecycleBridge}
+	default:
+		t.Fatalf("-lifecycle-network %q is not a network mode; want nat or bridge", *lifecycleNetwork)
+		return nil
+	}
+}
+
 // mustRun fails the test when the command did not succeed, quoting what the
 // tool said. An integration failure is only useful with the tool's own
 // diagnosis attached.
@@ -252,14 +295,15 @@ func TestVMLifecycle(t *testing.T) {
 	var created state.VM
 
 	t.Run("create", func(t *testing.T) {
-		res := h.mustRun(t, createTimeout, "--output", "json", "create", lifecycleVM,
+		args := append([]string{"--output", "json", "create", lifecycleVM,
 			"--distro", *lifecycleDistro,
 			"--ssh-key", h.publicKey,
 			// Smaller than the documented default: the test needs a guest that
 			// boots, not a realistic workstation.
 			"--memory", "2G",
 			"--vcpus", "2",
-		)
+		}, networkArgs(t)...)
+		res := h.mustRun(t, createTimeout, args...)
 		created = decode[state.VM](t, res, "create")
 
 		if created.Name != lifecycleVM {
@@ -270,6 +314,32 @@ func TestVMLifecycle(t *testing.T) {
 		}
 		if created.Network.MAC == "" {
 			t.Error("create recorded no MAC address; the domain's NIC was never read back")
+		}
+		// How the guest is attached is recorded so that exposure is auditable
+		// after the fact (internal/state), which only holds if the record
+		// matches the mode the VM was actually created in.
+		if got, want := created.Network.Mode, config.NetworkMode(*lifecycleNetwork); got != want {
+			t.Errorf("vm.json network.mode = %q, want %q", got, want)
+		}
+		switch created.Network.Mode {
+		case config.NetworkBridge:
+			if created.Network.Bridge != *lifecycleBridge {
+				t.Errorf("vm.json network.bridge = %q, want %q", created.Network.Bridge, *lifecycleBridge)
+			}
+			// A bridged guest must be on the host bridge and not on a libvirt
+			// network; recording a network name here would mean the attachment
+			// silently fell back to NAT.
+			if created.Network.Name != "" {
+				t.Errorf("vm.json records the libvirt network %q for a bridged VM", created.Network.Name)
+			}
+			if !containsArg(created.CreatedBy.VirtInstallArgv, "bridge="+*lifecycleBridge) {
+				t.Errorf("virt-install argv does not attach the guest to bridge %s: %v",
+					*lifecycleBridge, created.CreatedBy.VirtInstallArgv)
+			}
+		case config.NetworkNAT:
+			if created.Network.Name == "" {
+				t.Error("vm.json records no libvirt network for a NAT VM")
+			}
 		}
 		if !strings.HasPrefix(created.BaseImage.SourceDigest, "sha256:") {
 			t.Errorf("baseImage.sourceDigest = %q, want the digest the image was pinned to",
@@ -341,10 +411,39 @@ func TestVMLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("the guest is attached where the mode says it is", func(t *testing.T) {
+		if config.NetworkMode(*lifecycleNetwork) != config.NetworkBridge {
+			t.Skip("only bridged mode puts the guest somewhere the host can independently verify")
+		}
+
+		res := h.mustRun(t, commandTimeout, "--output", "json", "info", lifecycleVM)
+		address := decode[vmStatus](t, res, "info").Address
+		guest := net.ParseIP(address)
+		if guest == nil {
+			t.Fatalf("info reported %q, which is not an address", address)
+		}
+
+		// The point of bridged mode is that the guest is on the operator's LAN
+		// rather than behind libvirt's NAT (SECURITY.md). The host bridge's own
+		// subnet is what "the LAN" means here, and it is read from the host so
+		// the assertion does not hard-code anyone's addressing.
+		subnets := bridgeSubnets(t, *lifecycleBridge)
+		if len(subnets) == 0 {
+			t.Skipf("bridge %s has no address, so there is no subnet to check the guest against", *lifecycleBridge)
+		}
+		for _, subnet := range subnets {
+			if subnet.Contains(guest) {
+				return
+			}
+		}
+		t.Errorf("the guest answered on %s, which is outside bridge %s's subnets %v; it is not on the bridged segment",
+			address, *lifecycleBridge, subnets)
+	})
+
 	t.Run("ssh runs a command in the guest", func(t *testing.T) {
 		// The hostname proves this is the VM under test and not another guest
 		// that happens to answer on that address.
-		if got := h.ssh(t, "hostname"); got != lifecycleVM {
+		if got := h.ssh(t, guestHostnameCommand...); got != lifecycleVM {
 			t.Errorf("hostname in the guest = %q, want %q", got, lifecycleVM)
 		}
 		if got := h.ssh(t, "id", "-un"); got != created.Guest.User {
@@ -378,7 +477,7 @@ func TestVMLifecycle(t *testing.T) {
 
 		// A VM that boots once but is unreachable after a restart is a VM an
 		// operator cannot use, so reachability is asserted rather than state.
-		if got := h.sshWhenReachable(t, "hostname"); got != lifecycleVM {
+		if got := h.sshWhenReachable(t, guestHostnameCommand...); got != lifecycleVM {
 			t.Errorf("hostname after start = %q, want %q", got, lifecycleVM)
 		}
 	})
@@ -388,7 +487,7 @@ func TestVMLifecycle(t *testing.T) {
 		if status := decode[vmStatus](t, res, "restart"); status.State != "running" {
 			t.Errorf("state after restart = %q, want running", status.State)
 		}
-		if got := h.sshWhenReachable(t, "hostname"); got != lifecycleVM {
+		if got := h.sshWhenReachable(t, guestHostnameCommand...); got != lifecycleVM {
 			t.Errorf("hostname after restart = %q, want %q", got, lifecycleVM)
 		}
 	})
@@ -458,11 +557,12 @@ func TestCreate_RollsBackAfterAFailedDefine(t *testing.T) {
 	h.removeLeftoverVM(t, rollbackVM)
 	t.Cleanup(func() { h.removeLeftoverVM(t, rollbackVM) })
 
-	res := h.run(t, createTimeout, "create", rollbackVM,
+	args := append([]string{"create", rollbackVM,
 		"--distro", *lifecycleDistro,
 		"--ssh-key", h.publicKey,
 		"--virt-install-arg", "--not-a-real-virt-install-flag",
-	)
+	}, networkArgs(t)...)
+	res := h.run(t, createTimeout, args...)
 	if res.code == 0 {
 		t.Fatal("create succeeded despite an invalid virt-install argument")
 	}
@@ -509,6 +609,52 @@ func TestDestroy_RefusesAVMItHasNoRecordOf(t *testing.T) {
 	if res := h.run(t, commandTimeout, "destroy", testVMPrefix+"never-created"); res.code != 4 {
 		t.Errorf("destroy of an unknown name exited %d, want 4 (not found)\n%s", res.code, res.stderr)
 	}
+}
+
+// bridgeSubnets reads the networks the host bridge itself sits on, so a
+// bridged guest's address can be checked against the segment it was supposed
+// to land on without the test knowing anything about the host's addressing.
+func bridgeSubnets(t *testing.T, iface string) []*net.IPNet {
+	t.Helper()
+
+	out, err := exec.Command("ip", "-json", "addr", "show", iface).Output()
+	if err != nil {
+		t.Fatalf("reading the addresses of bridge %s: %v", iface, err)
+	}
+
+	var links []struct {
+		AddrInfo []struct {
+			Local     string `json:"local"`
+			PrefixLen int    `json:"prefixlen"`
+		} `json:"addr_info"`
+	}
+	if err := json.Unmarshal(out, &links); err != nil {
+		t.Fatalf("parsing `ip -json addr show %s`: %v\n%s", iface, err, out)
+	}
+
+	var subnets []*net.IPNet
+	for _, link := range links {
+		for _, addr := range link.AddrInfo {
+			_, subnet, err := net.ParseCIDR(fmt.Sprintf("%s/%d", addr.Local, addr.PrefixLen))
+			if err != nil {
+				continue
+			}
+			subnets = append(subnets, subnet)
+		}
+	}
+	return subnets
+}
+
+// containsArg reports whether any recorded virt-install argument carries the
+// given fragment. The argv pairs a flag with a comma-separated value, so the
+// attachment is a substring of one element rather than an element of its own.
+func containsArg(argv []string, fragment string) bool {
+	for _, arg := range argv {
+		if strings.Contains(arg, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // ssh runs one command in the guest through `agent-vm ssh` and returns its
