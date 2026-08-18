@@ -17,6 +17,20 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm doctor` now checks whether the host firewall will drop the guest's
+  outbound traffic. libvirt accepting a packet in its own nftables table is not
+  the last word on it: every base chain registered on the forward hook runs, so
+  a firewall with a drop policy there discards traffic libvirt already accepted.
+  `ufw` ships exactly that (`DEFAULT_FORWARD_POLICY="DROP"`), and the result is
+  a VM that looks healthy in every way an operator normally checks — it boots,
+  accepts SSH, and resolves DNS, because the resolver is dnsmasq on the host
+  bridge and that traffic is never forwarded — while every outbound connection
+  hangs instead of failing, because the packets are dropped rather than
+  rejected. The check reads `ufw`'s configuration only, never running `ufw` or
+  changing a rule, and passes when `ufw` is absent, disabled, forwarding by
+  default, or has a rule accepting forwarded traffic, naming the interfaces
+  those rules cover. It warns rather than fails, because the live ruleset needs
+  root to read and a false failure would exit non-zero on a working host.
 - `agent-vm doctor` now reports whether the account the hypervisor runs as can
   reach the state directory. Under `qemu:///system` QEMU runs as libvirt's own
   user (`libvirt-qemu`, `qemu`, or whatever `/etc/libvirt/qemu.conf` sets), which

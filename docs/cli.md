@@ -90,9 +90,10 @@ remedy. Exits `0` only if every required check passes.
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is `qemu:///system`;
 state directory writable with sufficient free space; state directory reachable by
-the account the hypervisor runs as; the configured NAT network is definable; and,
-when a bridge is configured, that the bridge exists and is up. Bridged networking
-under `qemu:///session` is reported as unsupported rather than attempted.
+the account the hypervisor runs as; the configured NAT network is definable; the
+host firewall does not drop the guest's forwarded traffic; and, when a bridge is
+configured, that the bridge exists and is up. Bridged networking under
+`qemu:///session` is reported as unsupported rather than attempted.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
@@ -101,6 +102,31 @@ are the ones that matter. Free space below 10 GiB is a warning: a cached base
 image needs 2–3 GiB and thin overlays grow as guests write. A NAT network that is
 not defined yet is a pass — `create` defines it on demand. `doctor` only inspects;
 it never changes host state.
+
+The **host firewall forwarding** check exists because libvirt accepting the
+guest's packets is not the last word on them. Every nftables base chain
+registered on the forward hook runs, so a host firewall with a drop policy there
+silently discards traffic libvirt already accepted, and `ufw` ships exactly that
+configuration (`DEFAULT_FORWARD_POLICY="DROP"`). The resulting VM looks healthy
+in every way an operator normally checks — it boots, accepts SSH, and resolves
+DNS, because the resolver is dnsmasq on the host bridge and that traffic is
+delivered locally rather than forwarded — while every outbound connection hangs
+rather than failing, because the packets are dropped rather than rejected.
+
+The check reads `ufw`'s configuration only; it never runs `ufw` and never
+changes a rule. It reports `pass` when `ufw` is absent, disabled, forwarding by
+default, or has a rule accepting forwarded traffic (naming the interfaces those
+rules cover, so you can confirm the right bridge is among them). It reports
+`warn` — never `fail` — when `ufw` is enabled and dropping, because the live
+ruleset cannot be read without root and a false failure would exit non-zero on a
+working host. The remedy names the NAT network to look the bridge up with, since
+libvirt allocates the bridge (`virbrN`) and its name is not knowable from
+configuration alone. The check is skipped for bridged mode, where guest traffic
+is not routed through the host at all. Only `ufw` is understood, so a pass means
+"no `ufw` problem" rather than "no firewall problem";
+[`docs/host-setup.md`](./host-setup.md#host-firewalls-and-the-virbrn-bridge)
+covers the rule to add, why it can stop matching when libvirt allocates a
+different `virbrN`, and how to keep the guest off your LAN while allowing it out.
 
 The **state directory access** check is separate from the writability check
 because they ask about different users. Under `qemu:///system` the QEMU process

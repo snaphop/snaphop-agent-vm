@@ -82,6 +82,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkStateDir(app, cfg))
 	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
+	report.Checks = append(report.Checks, checkForwarding(cfg))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
 	report.OK = true
