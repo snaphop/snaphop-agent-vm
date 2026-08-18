@@ -75,12 +75,12 @@ RUN systemctl --root=/ enable docker.service containerd.service
 
 # Give the accounts cloud-init creates access to the Docker socket.
 #
-# It cannot be done here — the account does not exist until first boot — and it
-# cannot be done in the generated cloud-init user-data either, because that
-# would name a group base images built before this change do not have, and
-# those must keep booting (AGENTS.md §8). So the image carries a one-shot unit
-# that adds every non-system account to the group after cloud-init has finished
-# creating it.
+# It cannot be done here — the accounts do not exist until first boot. The
+# login user agent-vm asks for is placed in the group by the generated
+# cloud-init user-data, which is what makes the membership effective in the
+# very first SSH session. This one-shot unit is the backstop for every other
+# interactive account: ones an operator's own --cloud-init file creates, and
+# ones created on a VM whose seed predates that change.
 RUN printf '%s\n' \
       '#!/bin/sh' \
       'set -eu' \
