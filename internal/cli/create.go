@@ -108,11 +108,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 	keyPaths := cfg.SSHKeys
 	if *hostAuthorizedKeys {
-		path, err := hostAuthorizedKeysPath()
+		paths, err := hostAuthorizedKeysPaths()
 		if err != nil {
 			return err
 		}
-		hostKeys, err := guestinit.LoadAuthorizedKeys(path)
+		hostKeys, sources, err := guestinit.LoadAuthorizedKeys(paths)
 		if err != nil {
 			return err
 		}
@@ -120,7 +120,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		// the ones they will look for at the top of the guest's
 		// authorized_keys. Duplicates between the two sources appear once.
 		keys = mergeKeys(keys, hostKeys)
-		keyPaths = append(append([]string{}, keyPaths...), path)
+		keyPaths = append(append([]string{}, keyPaths...), sources...)
 	}
 	extraUserData, err := readExtraUserData(*cloudInit)
 	if err != nil {
@@ -237,19 +237,31 @@ func readExtraUserData(path string) ([]byte, error) {
 	return contents, nil
 }
 
-// hostAuthorizedKeysPath is the file --host-authorized-keys reads: the keys
-// that already log in to this host account. It is a fixed location rather than
-// a flag value, because a file somewhere else is what --ssh-key is for.
-func hostAuthorizedKeysPath() (string, error) {
+// hostAuthorizedKeysFiles are the files --host-authorized-keys reads, relative
+// to the host account's home directory: the keys that already log in to this
+// host. Both are read because a host may keep its keys in either — sshd is
+// routinely configured with an AuthorizedKeysFile pointing at the second — and
+// a file that is not there is skipped. They are fixed locations rather than
+// flag values, because a key file somewhere else is what --ssh-key is for.
+var hostAuthorizedKeysFiles = [][]string{
+	{".ssh", "authorized_keys"},
+	{".ssh", "authorized-keys", "authorized_keys"},
+}
+
+func hostAuthorizedKeysPaths() ([]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", &config.ValidationError{
+		return nil, &config.ValidationError{
 			Field: "host authorized_keys", Value: "~/.ssh/authorized_keys",
 			Err:    fmt.Errorf("cannot resolve the home directory: %w", err),
 			Remedy: "Pass the keys with --ssh-key instead.",
 		}
 	}
-	return filepath.Join(home, ".ssh", "authorized_keys"), nil
+	paths := make([]string, 0, len(hostAuthorizedKeysFiles))
+	for _, file := range hostAuthorizedKeysFiles {
+		paths = append(paths, filepath.Join(append([]string{home}, file...)...))
+	}
+	return paths, nil
 }
 
 // mergeKeys concatenates key sets, keeping the first occurrence of each key.

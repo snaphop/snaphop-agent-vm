@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,24 +163,30 @@ func TestCreate_AuthorizesTheKeyAndNeverWritesPrivateMaterial(t *testing.T) {
 	}
 }
 
-// hostAuthorizedKeysFile points HOME at a fake host account holding the given
-// authorized_keys, which is what --host-authorized-keys reads.
-func hostAuthorizedKeysFile(t *testing.T, contents string) {
+// hostAuthorizedKeysFile points HOME at a fake host account holding one of the
+// authorized_keys files --host-authorized-keys reads. relative names the file
+// under that home directory.
+func hostAuthorizedKeysFile(t *testing.T, relative, contents string) string {
 	t.Helper()
-	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
-		t.Fatalf("creating the fake ~/.ssh: %v", err)
+	home := os.Getenv("HOME")
+	if !strings.HasPrefix(home, os.TempDir()) {
+		home = t.TempDir()
+		t.Setenv("HOME", home)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".ssh", "authorized_keys"), []byte(contents), 0o600); err != nil {
-		t.Fatalf("writing the fake authorized_keys: %v", err)
+	path := filepath.Join(home, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating %s: %v", filepath.Dir(path), err)
 	}
-	t.Setenv("HOME", home)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("writing the fake %s: %v", relative, err)
+	}
+	return path
 }
 
 func TestCreate_AuthorizesTheHostKeysAlongsideTheKeysGivenByFlag(t *testing.T) {
 	stateDir, keyPath := createEnv(t)
 	hostKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
-	hostAuthorizedKeysFile(t, "# the operator's laptop\n"+hostKey+"\n")
+	hostAuthorizedKeysFile(t, ".ssh/authorized_keys", "# the operator's laptop\n"+hostKey+"\n")
 
 	code, _, stderr := cliRun(t, createHost(t), stateDir,
 		createArgs(keyPath, "--host-authorized-keys")...)
@@ -206,7 +213,7 @@ func TestCreate_AuthorizesTheHostKeysAlongsideTheKeysGivenByFlag(t *testing.T) {
 
 func TestCreate_AuthorizesTheHostKeysWithoutASSHKeyFlag(t *testing.T) {
 	stateDir, _ := createEnv(t)
-	hostAuthorizedKeysFile(t, publicKey)
+	hostAuthorizedKeysFile(t, ".ssh/authorized_keys", publicKey)
 
 	code, _, stderr := cliRun(t, createHost(t), stateDir,
 		"create", "agent-01", "--host-authorized-keys")
@@ -225,7 +232,33 @@ func TestCreate_AuthorizesTheHostKeysWithoutASSHKeyFlag(t *testing.T) {
 	}
 }
 
-func TestCreate_ReportsAMissingHostAuthorizedKeysFile(t *testing.T) {
+func TestCreate_ReadsBothHostAuthorizedKeysLocations(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	nested := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	// sshd is routinely pointed at the nested file instead of the plain one,
+	// so a host that keeps its keys there must not come up empty.
+	nestedPath := hostAuthorizedKeysFile(t, ".ssh/authorized-keys/authorized_keys", nested+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if !strings.Contains(string(userData), nested) {
+		t.Errorf("the key in ~/.ssh/authorized-keys/authorized_keys was not authorized:\n%s", userData)
+	}
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{keyPath, nestedPath}) {
+		t.Errorf("recorded key paths = %v, want the flag's key file and %s", vm.Guest.SSHKeyPaths, nestedPath)
+	}
+}
+
+func TestCreate_ReportsWhenTheHostHasNoAuthorizedKeys(t *testing.T) {
 	stateDir, keyPath := createEnv(t)
 	t.Setenv("HOME", t.TempDir())
 	fake := createHost(t)

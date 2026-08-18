@@ -249,12 +249,35 @@ func TestLoadAuthorizedKeys_ReadsEveryKeyAndSkipsComments(t *testing.T) {
 	path := writeFile(t, t.TempDir(), "authorized_keys",
 		"# laptop\n"+testKey+"\n\n"+other+"\n"+testKey+"\n")
 
-	keys, err := LoadAuthorizedKeys(path)
+	keys, sources, err := LoadAuthorizedKeys([]string{path})
 	if err != nil {
 		t.Fatalf("LoadAuthorizedKeys: %v", err)
 	}
 	if !equal(keys, []string{testKey, other}) {
 		t.Errorf("keys = %v, want both keys once, in file order", keys)
+	}
+	if !equal(sources, []string{path}) {
+		t.Errorf("sources = %v, want the file that was read", sources)
+	}
+}
+
+func TestLoadAuthorizedKeys_MergesEveryFileAndSkipsTheAbsentOnes(t *testing.T) {
+	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ other@example"
+	dir := t.TempDir()
+	first := writeFile(t, dir, "authorized_keys", testKey+"\n")
+	second := writeFile(t, dir, "second", other+"\n"+testKey+"\n")
+	absent := filepath.Join(dir, "absent", "authorized_keys")
+
+	keys, sources, err := LoadAuthorizedKeys([]string{first, absent, second})
+	if err != nil {
+		t.Fatalf("LoadAuthorizedKeys: %v", err)
+	}
+	if !equal(keys, []string{testKey, other}) {
+		t.Errorf("keys = %v, want both keys once, in the order the files were read", keys)
+	}
+	// A file that is not there is not a source, and not an error either.
+	if !equal(sources, []string{first, second}) {
+		t.Errorf("sources = %v, want only the files that existed", sources)
 	}
 }
 
@@ -264,7 +287,7 @@ func TestLoadAuthorizedKeys_RefusesEntriesCarryingOptions(t *testing.T) {
 	path := writeFile(t, t.TempDir(), "authorized_keys",
 		`command="/usr/bin/true",restrict `+testKey+"\n")
 
-	_, err := LoadAuthorizedKeys(path)
+	_, _, err := LoadAuthorizedKeys([]string{path})
 	if err == nil {
 		t.Fatal("want a refusal for an authorized_keys entry with options")
 	}
@@ -273,13 +296,21 @@ func TestLoadAuthorizedKeys_RefusesEntriesCarryingOptions(t *testing.T) {
 	}
 }
 
-func TestLoadAuthorizedKeys_ReportsAMissingFile(t *testing.T) {
-	_, err := LoadAuthorizedKeys(filepath.Join(t.TempDir(), ".ssh", "authorized_keys"))
-	if err == nil {
-		t.Fatal("want an error naming the missing authorized_keys file")
-	}
-	if !strings.Contains(err.Error(), "--host-authorized-keys") {
-		t.Errorf("the error does not say which flag asked for the file: %v", err)
+func TestLoadAuthorizedKeys_ReportsWhenNoFileHoldsAKey(t *testing.T) {
+	dir := t.TempDir()
+	empty := writeFile(t, dir, "authorized_keys", "# no keys here\n")
+
+	for _, paths := range [][]string{
+		{filepath.Join(dir, "absent", "authorized_keys")},
+		{empty, filepath.Join(dir, "absent", "authorized_keys")},
+	} {
+		_, _, err := LoadAuthorizedKeys(paths)
+		if err == nil {
+			t.Fatalf("LoadAuthorizedKeys(%v) = nil, want an error: no key was found", paths)
+		}
+		if !strings.Contains(err.Error(), "--host-authorized-keys") {
+			t.Errorf("the error does not say which flag asked for the keys: %v", err)
+		}
 	}
 }
 

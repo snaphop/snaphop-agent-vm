@@ -14,7 +14,9 @@ package guestinit
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"mime/multipart"
 	"net/textproto"
 	"os"
@@ -221,71 +223,105 @@ func LoadPublicKeys(paths []string) ([]string, error) {
 		if err := config.ValidateSSHPublicKey(path); err != nil {
 			return nil, err
 		}
-		found, err := readKeyFile(path, seen)
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, &config.ValidationError{Field: "ssh key", Value: path, Err: err}
+		}
+		found, count, err := parseKeyLines(path, contents, seen)
 		if err != nil {
 			return nil, err
+		}
+		if count == 0 {
+			return nil, &config.ValidationError{
+				Field: "ssh key", Value: path,
+				Err: fmt.Errorf("contains no SSH public key"),
+			}
 		}
 		keys = append(keys, found...)
 	}
 	return keys, nil
 }
 
-// LoadAuthorizedKeys reads an OpenSSH `authorized_keys` file — the host
-// account's own, for `create --host-authorized-keys` — and returns the key
-// lines to authorize. It differs from LoadPublicKeys only in what the file is
-// allowed to look like: an authorized_keys file holds several keys and may
+// LoadAuthorizedKeys reads the host account's OpenSSH `authorized_keys` files —
+// what `create --host-authorized-keys` authorizes — and returns the key lines
+// together with the files they came from. It differs from LoadPublicKeys in
+// what a file may look like: an authorized_keys file holds several keys and may
 // carry comments, where a .pub file holds exactly one key on its first line.
+//
+// Several paths are read because a host account may keep its keys in more than
+// one of them, so a file that is not there is skipped rather than being an
+// error. Finding no file at all, or finding files with no key in them, is an
+// error: the flag asked for keys and produced none.
 //
 // Entries carrying OpenSSH options (`command=`, `restrict`, `from=`) are
 // refused rather than silently stripped or silently dropped: an option is a
 // restriction the operator wrote down, and neither honoring it in the guest nor
 // discarding it is something this tool may decide on their behalf.
-func LoadAuthorizedKeys(path string) ([]string, error) {
-	if _, err := os.Stat(path); err != nil {
-		return nil, &config.ValidationError{
-			Field: "host authorized_keys", Value: path, Err: err,
-			Remedy: "--host-authorized-keys reads ~/.ssh/authorized_keys on this host. Drop the flag, or pass the keys with --ssh-key.",
+func LoadAuthorizedKeys(paths []string) (keys, sources []string, err error) {
+	keys, sources = []string{}, []string{}
+	seen := map[string]bool{}
+	total := 0
+
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, &config.ValidationError{
+				Field: "host authorized_keys", Value: path, Err: err,
+				Remedy: hostAuthorizedKeysRemedy(paths),
+			}
+		}
+		found, count, err := parseKeyLines(path, contents, seen)
+		if err != nil {
+			return nil, nil, err
+		}
+		keys = append(keys, found...)
+		sources = append(sources, path)
+		total += count
+	}
+
+	if total == 0 {
+		return nil, nil, &config.ValidationError{
+			Field: "host authorized_keys", Value: strings.Join(paths, ", "),
+			Err:    fmt.Errorf("no authorized key was found on this host"),
+			Remedy: hostAuthorizedKeysRemedy(paths),
 		}
 	}
-	return readKeyFile(path, map[string]bool{})
+	return keys, sources, nil
 }
 
-// readKeyFile returns the public key lines in a file, skipping blank lines and
-// comments and rejecting anything else. seen carries across files so a key
-// given twice — by flag and by config file, say — appears in authorized_keys
-// once; it is updated with the keys returned.
-func readKeyFile(path string, seen map[string]bool) ([]string, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, &config.ValidationError{Field: "ssh key", Value: path, Err: err}
-	}
+func hostAuthorizedKeysRemedy(paths []string) string {
+	return "--host-authorized-keys reads " + strings.Join(paths, " and ") +
+		". Drop the flag, or pass the keys with --ssh-key."
+}
 
-	keys := []string{}
-	found := 0
+// parseKeyLines returns the public key lines in a file, skipping blank lines
+// and comments and rejecting anything else, along with how many keys the file
+// held. seen carries across files so a key given twice — by flag and by config
+// file, say — appears in the guest's authorized_keys once; it is updated with
+// the keys returned.
+func parseKeyLines(path string, contents []byte, seen map[string]bool) (keys []string, count int, err error) {
+	keys = []string{}
 	for number, line := range strings.Split(string(contents), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		if err := ValidatePublicKeyLine(line); err != nil {
-			return nil, &config.ValidationError{
+			return nil, 0, &config.ValidationError{
 				Field: "ssh key", Value: path,
 				Err: fmt.Errorf("line %d is not an SSH public key", number+1),
 			}
 		}
-		found++
+		count++
 		if !seen[line] {
 			seen[line] = true
 			keys = append(keys, line)
 		}
 	}
-	if found == 0 {
-		return nil, &config.ValidationError{
-			Field: "ssh key", Value: path,
-			Err: fmt.Errorf("contains no SSH public key"),
-		}
-	}
-	return keys, nil
+	return keys, count, nil
 }
 
 // keyLinePattern is what an OpenSSH public key line looks like: a type, a
