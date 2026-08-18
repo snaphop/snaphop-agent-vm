@@ -26,6 +26,89 @@ RUN pacman -Syu --noconfirm --needed \
 # initramfs is generated explicitly. This produces /boot/initramfs-linux.img.
 RUN mkinitcpio -P
 
+# The tools an agent expects to find on a working machine.
+#
+# These live in the base image rather than in per-VM cloud-init packages: a
+# base image is built once, content-addressed and cached, so paying for the
+# download here keeps `agent-vm create` in the seconds it advertises instead of
+# installing the same package set on every first boot. Nothing installed here
+# is per-VM state and nothing is secret, so the base image stays shareable
+# (SECURITY.md).
+RUN pacman -Syu --noconfirm --needed \
+      iputils \
+      traceroute \
+      bind \
+      openbsd-netcat \
+      curl \
+      wget \
+      rsync \
+      git \
+      base-devel \
+      python \
+      python-pip \
+      jq \
+      zip \
+      unzip \
+      xz \
+      less \
+      vim \
+      nano \
+      tmux \
+      htop \
+      procps-ng \
+      psmisc \
+      file \
+      tree \
+      man-db \
+ && pacman -Scc --noconfirm
+
+# Arch ships Docker in its own repositories, so no third-party repository or
+# convenience script is involved.
+RUN pacman -Syu --noconfirm --needed \
+      docker \
+      docker-compose \
+      docker-buildx \
+ && pacman -Scc --noconfirm
+
+# Docker starts at boot so an agent finds a working daemon without asking.
+RUN systemctl --root=/ enable docker.service containerd.service
+
+# Give the accounts cloud-init creates access to the Docker socket.
+#
+# It cannot be done here — the account does not exist until first boot — and it
+# cannot be done in the generated cloud-init user-data either, because that
+# would name a group base images built before this change do not have, and
+# those must keep booting (AGENTS.md §8). So the image carries a one-shot unit
+# that adds every non-system account to the group after cloud-init has finished
+# creating it.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'set -eu' \
+      'getent group docker >/dev/null 2>&1 || exit 0' \
+      'while IFS=: read -r name _pw uid _rest; do' \
+      '  case "$uid" in "" | *[!0-9]*) continue ;; esac' \
+      '  [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ] || continue' \
+      '  gpasswd -a "$name" docker >/dev/null' \
+      'done < /etc/passwd' \
+      > /usr/local/sbin/agent-vm-docker-group \
+ && chmod 0755 /usr/local/sbin/agent-vm-docker-group
+
+RUN printf '%s\n' \
+      '[Unit]' \
+      'Description=Add interactive users to the docker group' \
+      'After=cloud-final.service docker.service' \
+      'Wants=cloud-final.service' \
+      '' \
+      '[Service]' \
+      'Type=oneshot' \
+      'RemainAfterExit=yes' \
+      'ExecStart=/usr/local/sbin/agent-vm-docker-group' \
+      '' \
+      '[Install]' \
+      'WantedBy=multi-user.target' \
+      > /usr/lib/systemd/system/agent-vm-docker-group.service \
+ && systemctl --root=/ enable agent-vm-docker-group.service
+
 # There is no running systemd inside a build, so units are enabled offline with
 # --root=/, which only writes the symlinks an enable would create. This must not
 # be allowed to fail quietly: a guest without sshd looks exactly like a guest

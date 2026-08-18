@@ -17,6 +17,23 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now ship the tools an agent expects to find on a working
+  machine, so a new VM is usable immediately instead of starting with a package
+  install. That means networking and diagnostic tools (`ping`, `traceroute`,
+  `dig`, `netcat`), `curl`, `wget`, `rsync`, `git`, a C/C++ toolchain, Python 3
+  with `pip`, the usual shell tooling (`jq`, `unzip`, `less`, `vim`, `tmux`,
+  `htop`, `tree`, `man`), and Docker with `compose` and `buildx`. Docker starts
+  at boot, and the login user is added to the `docker` group by a one-shot unit
+  that runs once cloud-init has created the account, so `docker` needs no
+  `sudo`. Everything comes from each distro's own repositories — Ubuntu's
+  `docker.io`, Fedora's `moby-engine`, Arch's `docker` — so no third-party
+  repository, key, or install script enters a build. The packages live in the
+  cached base image rather than in per-VM cloud-init, so `create` stays fast and
+  works offline; the cost is a larger base image (roughly 1.2 GB for Ubuntu,
+  1.7 GB for Fedora and 2.1 GB for Arch, against 0.2-0.8 GB before) and a
+  longer one-off `image build`. Existing base images stay valid and bootable and simply lack
+  the new tools — run `agent-vm image build <distro> --force` to refresh one.
+
 - `agent-vm doctor` now checks whether the host firewall will drop the guest's
   outbound traffic. libvirt accepting a packet in its own nftables table is not
   the last word on it: every base chain registered on the forward hook runs, so
