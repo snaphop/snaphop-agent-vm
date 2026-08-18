@@ -217,31 +217,77 @@ is delivered to the host rather than forwarded. Only connections past the host
 fail, and because the packets are dropped rather than rejected they fail by
 hanging rather than by erroring: `apt update` sits at 0% until it times out.
 
-`agent-vm doctor` reports this as the **host firewall forwarding** check. The
-fix is a route rule naming the bridge:
+`agent-vm doctor` reports this as the **host firewall forwarding** check.
+
+Forwarding is only half of it. A guest also talks *to* the host — it asks the
+host's dnsmasq for a DHCP lease and for every DNS answer — and ufw defaults to
+`deny (incoming)`. Its `ufw-before-input` chain accepts DHCP *replies*
+(`sport 67 → dport 68`, the host acting as a DHCP client) but nothing arriving
+on port 67 or port 53, so on a host with no rules for the bridge a guest never
+gets an address at all. NAT mode therefore needs three rules, all naming the
+bridge:
 
 ```bash
 # The bridge name is not fixed — look it up, do not assume virbr0.
 virsh -c qemu:///system net-info agent-vm-nat | grep Bridge
-sudo ufw route allow in on virbr1
+
+sudo ufw allow in on virbr1 to any port 67 proto udp   # DHCP lease
+sudo ufw allow in on virbr1 to any port 53             # DNS via dnsmasq
+sudo ufw route allow in on virbr1                      # everything past the host
 ```
 
-Two things about that rule are worth knowing before you rely on it.
+libvirt does **not** add these for you. It manages its own nftables table
+(`libvirt_network`) and knows nothing about ufw, so anything in `ufw status` for
+a `virbr` interface was put there by an operator and is yours to maintain.
+
+With all three in place, `ufw status` lists six entries — each rule has an IPv6
+twin, because ufw applies rules to both families when `IPV6=yes` in
+`/etc/default/ufw`, which is the default:
+
+```text
+67/udp on virbr1           ALLOW       Anywhere
+53 on virbr1               ALLOW       Anywhere
+67/udp (v6) on virbr1      ALLOW       Anywhere (v6)
+53 (v6) on virbr1          ALLOW       Anywhere (v6)
+Anywhere                   ALLOW FWD   Anywhere on virbr1
+Anywhere (v6)              ALLOW FWD   Anywhere (v6) on virbr1
+```
+
+`ufw status numbered` prints the same rules with an index and shows the input
+ones as `ALLOW IN` rather than `ALLOW`; use it when deleting by number.
+
+The IPv6 twins are harmless here — the NAT network is IPv4-only, so nothing
+matches them — but they are worth recognising rather than deleting as clutter,
+and they go stale with the bridge name exactly like their IPv4 counterparts.
+
+Which rule is missing determines the symptom, and the two look nothing alike:
+without the input rules the VM never gets an address and `create` times out
+waiting for SSH; without the route rule it gets an address, boots, and hangs on
+every outbound connection.
+
+Two things about the route rule are worth knowing before you rely on it.
 
 **The bridge name is allocated, not configured.** The network definition
 deliberately leaves the bridge device unnamed so that libvirt picks one and two
 networks cannot collide on it. Which `virbrN` you get depends on what else
 exists on the host when the network is first started, so it is not stable
 across hosts, and **it can change on the same host** if the network is
-undefined and redefined, or if another `virbr` interface appears first. A ufw
-rule pinned to the old name then silently stops matching, and the symptom is
-exactly the hang described above. If outbound traffic stops working after
-recreating the NAT network, re-check the bridge name before anything else:
+undefined and redefined, or if another `virbr` interface appears first. All six
+rules above are pinned to the name, so they stop matching together — and the
+guest regresses all the way back to having no address, not just to the hang. If
+anything about a VM's networking breaks after the NAT network was recreated,
+re-check the bridge name before anything else:
 
 ```bash
 virsh -c qemu:///system net-info agent-vm-nat | grep Bridge
-sudo ufw status | grep virbr        # compare against the rule you added
+sudo ufw status | grep virbr        # compare against the rules you added
 ```
+
+Rules naming a bridge that no longer exists are dead weight rather than a
+hazard, but they are confusing to read later; delete them with
+`sudo ufw delete allow in on <old-bridge> to any port 53` and the matching
+`route` and port 67 forms, or by number from `ufw status numbered` (deleting
+from the bottom up, since the numbers shift).
 
 **The rule above also lets the guest reach your LAN.** `route allow in on
 <bridge>` permits forwarding to every destination, not just the internet, which
@@ -375,7 +421,7 @@ The first `image build` needs registry access and takes a few minutes. Subsequen
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `skopeo inspect docker://<ref>` |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
-| VM starts, no address | DHCP or NIC problem | `virsh net-dhcp-leases agent-vm-nat`, console log |
+| VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
 | VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |
 | The same hang, on a host where the ufw rule used to work | libvirt allocated a different `virbrN` and the rule no longer matches | `virsh net-info agent-vm-nat \| grep Bridge`, compare with `sudo ufw status` |
 | Bridged VM has no address | Bridge down, or no DHCP on that VLAN | `ip -br link`, LAN DHCP server |
