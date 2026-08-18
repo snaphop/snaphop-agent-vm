@@ -16,6 +16,7 @@ holds the output of `virsh --version`.
 | `ip-V.txt` | `ip -V` | iproute2 7.1.0 (Arch Linux) | 2026-08-17 |
 | `ssh-V.txt` | `ssh -V` (stderr) | OpenSSH 10.5p1 (Arch Linux) | 2026-08-17 |
 | `gh--version.txt` | `gh --version` | gh 2.97.0 (mise) | 2026-08-18 |
+| `gh-auth-status.txt` | `gh auth status --hostname github.com` | gh 2.97.0 (mise) | 2026-08-18 |
 | `ip-json-link-show-type-bridge.txt` | `ip -json link show type bridge` | iproute2 7.1.0 (Arch Linux) | 2026-08-17 |
 | `podman--version.txt` | `podman --version` | podman 6.1.0 (Arch Linux) | 2026-08-17 |
 | `virt-make-fs--version.txt` | `virt-make-fs --version` | libguestfs 1.56.0 (Arch Linux) | 2026-08-17 |

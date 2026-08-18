@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,5 +118,62 @@ func TestCheckAuth_NamesTheFixWhenGHIsNotLoggedIn(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gh auth login") {
 		t.Errorf("the error does not say how to fix it: %v", err)
+	}
+}
+
+// The captured output of a login without the key scope: the scope line is the
+// only difference from the fixture, which is a real login of that kind.
+func authStatus(t *testing.T, scopes string) string {
+	t.Helper()
+	captured, err := os.ReadFile(filepath.Join("..", "..", "test", "toolout", "gh-auth-status.txt"))
+	if err != nil {
+		t.Fatalf("reading the gh auth status fixture: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(captured), "\n"), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "Token scopes:") {
+			lines[i] = "  - Token scopes: " + scopes
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func TestCheckAuth_RefusesATokenThatCannotAddKeys(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
+		Stdout: authStatus(t, "'read:org', 'repo'"),
+	})
+
+	err := New(fake).CheckAuth(context.Background())
+	if err == nil {
+		t.Fatal("a token without the key scope was accepted; the failure would come after the VM exists")
+	}
+	if !strings.Contains(err.Error(), "gh auth refresh -h github.com -s admin:public_key") {
+		t.Errorf("the error does not say how to fix it: %v", err)
+	}
+}
+
+func TestCheckAuth_AcceptsATokenWithTheKeyScope(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
+		Stdout: authStatus(t, "'admin:public_key', 'read:org', 'repo'"),
+	})
+
+	if err := New(fake).CheckAuth(context.Background()); err != nil {
+		t.Fatalf("CheckAuth: %v", err)
+	}
+}
+
+// A login gh reports no scopes for -- a GITHUB_TOKEN from the environment --
+// is not refused: the API is the authority, and a missing line is not evidence
+// of a missing scope.
+func TestCheckAuth_AcceptsALoginWithNoScopeLine(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
+		Stdout: "github.com\n  ✓ Logged in to github.com account wensington (GITHUB_TOKEN)\n",
+	})
+
+	if err := New(fake).CheckAuth(context.Background()); err != nil {
+		t.Fatalf("CheckAuth: %v", err)
 	}
 }
