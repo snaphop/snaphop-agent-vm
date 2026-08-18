@@ -652,3 +652,80 @@ func TestCreate_JSONOutputIsTheVMRecord(t *testing.T) {
 		t.Errorf("record = %+v, want the stored vm.json", vm)
 	}
 }
+
+// defaultIdentity writes a public key into a fake host account at the path
+// `ssh` would pick an identity up from, and points HOME at it.
+func defaultIdentity(t *testing.T, name, contents string) string {
+	t.Helper()
+	return hostAuthorizedKeysFile(t, filepath.Join(".ssh", name+".pub"), contents)
+}
+
+func TestCreate_AuthorizesTheDefaultIdentitiesWhenNoKeyIsNamed(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	ed25519Path := defaultIdentity(t, "id_ed25519", publicKey)
+	rsaKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	rsaPath := defaultIdentity(t, "id_rsa", rsaKey+"\n")
+	// A private key next to them must stay on the host.
+	defaultIdentity(t, "id_ecdsa", "")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, "create", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	for _, want := range []string{strings.TrimSpace(publicKey), rsaKey} {
+		if !strings.Contains(string(userData), want) {
+			t.Errorf("%q was not authorized:\n%s", want, userData)
+		}
+	}
+	// The identities are authorized in the documented order, and the empty
+	// id_ecdsa.pub is not among them.
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{ed25519Path, rsaPath}) {
+		t.Errorf("recorded key paths = %v, want %v", vm.Guest.SSHKeyPaths, []string{ed25519Path, rsaPath})
+	}
+}
+
+func TestCreate_PrefersTheNamedKeyOverTheDefaultIdentities(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	defaultIdentity(t, "id_rsa", other+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if strings.Contains(string(userData), other) {
+		t.Errorf("--ssh-key must not be widened by the default identities:\n%s", userData)
+	}
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{keyPath}) {
+		t.Errorf("recorded key paths = %v, want %v", vm.Guest.SSHKeyPaths, []string{keyPath})
+	}
+}
+
+func TestCreate_ReportsWhenNoKeyIsNamedAndNoneExist(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir, "create", "agent-01")
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d: %s", code, ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "--ssh-key") || !strings.Contains(stderr, "id_ed25519.pub") {
+		t.Errorf("stderr does not say what to do or which files were looked for:\n%s", stderr)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("a keyless create must be refused before any tool runs:\n%s", fake)
+	}
+}

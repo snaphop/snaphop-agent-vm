@@ -63,7 +63,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
 	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
-	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable")
+	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable (default: this account's ~/.ssh identities)")
 	var virtInstallArgs repeatedFlag
 	flags.Var(&virtInstallArgs, "virt-install-arg", "extra argument passed through to virt-install; repeatable")
 
@@ -102,11 +102,16 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	// Key material and operator-supplied user-data are read before anything on
 	// the host changes, so a typo in a path is a usage error rather than a
 	// half-created VM.
-	keys, err := guestinit.LoadPublicKeys(cfg.SSHKeys)
+	keyPaths := cfg.SSHKeys
+	keys, err := guestinit.LoadPublicKeys(keyPaths)
 	if err != nil {
 		return err
 	}
-	keyPaths := cfg.SSHKeys
+	if len(keyPaths) == 0 {
+		// Nothing named a key, so fall back to the operator's own OpenSSH
+		// identities, the same way `ssh` offers them without -i.
+		keys, keyPaths = defaultSSHKeys()
+	}
 	if *hostAuthorizedKeys {
 		paths, err := hostAuthorizedKeysPaths()
 		if err != nil {
@@ -121,6 +126,9 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		// authorized_keys. Duplicates between the two sources appear once.
 		keys = mergeKeys(keys, hostKeys)
 		keyPaths = append(append([]string{}, keyPaths...), sources...)
+	}
+	if len(keys) == 0 {
+		return errNoSSHKeys()
 	}
 	extraUserData, err := readExtraUserData(*cloudInit)
 	if err != nil {
@@ -235,6 +243,58 @@ func readExtraUserData(path string) ([]byte, error) {
 		}
 	}
 	return contents, nil
+}
+
+// defaultSSHKeyFiles are the OpenSSH identities `create` authorizes when no key
+// was named by --ssh-key, by the config file, or by AGENT_VM_SSH_KEY: the
+// public halves of the private keys `ssh` itself would offer, in the same
+// order. Every one that exists is authorized rather than only the first,
+// because the operator may reach the guest from any host holding any of them.
+//
+// Names only — the public key sits beside the private one with a .pub suffix.
+var defaultSSHKeyFiles = []string{
+	"id_ed25519",
+	"id_ed25519_sk",
+	"id_ecdsa",
+	"id_ecdsa_sk",
+	"id_dsa",
+	"id_rsa",
+	"id_xmss",
+}
+
+// defaultSSHKeys returns the key lines of the default identity files that
+// exist on this host, and the files they came from. A file that is missing or
+// that does not hold a public key is skipped rather than reported: these paths
+// were guessed, not asked for, so one stray file in ~/.ssh must not block a
+// create. An operator with no usable identity at all gets errNoSSHKeys.
+func defaultSSHKeys() (keys, paths []string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil
+	}
+	keys, paths = []string{}, []string{}
+	for _, name := range defaultSSHKeyFiles {
+		path := filepath.Join(home, ".ssh", name+".pub")
+		found, err := guestinit.LoadPublicKeys([]string{path})
+		if err != nil {
+			continue
+		}
+		keys = mergeKeys(keys, found)
+		paths = append(paths, path)
+	}
+	return keys, paths
+}
+
+// errNoSSHKeys reports that no key could be found at all. A VM with no
+// authorized key accepts no logins, so this is refused before anything on the
+// host changes rather than surfacing as an unreachable guest minutes later.
+func errNoSSHKeys() error {
+	return &config.ValidationError{
+		Field: "ssh keys", Value: "",
+		Err: fmt.Errorf("no SSH public key was given and this account has none of the default identities"),
+		Remedy: "Pass --ssh-key <path to a .pub file>, set [guest] ssh_keys in the config file, or create a key with `ssh-keygen -t ed25519`.\n" +
+			"  The defaults looked for are ~/.ssh/" + strings.Join(defaultSSHKeyFiles, ".pub, ~/.ssh/") + ".pub.",
+	}
 }
 
 // hostAuthorizedKeysFiles are the files --host-authorized-keys reads, relative

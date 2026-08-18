@@ -17,6 +17,16 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create` no longer needs `--ssh-key` on a host where you already
+  have an SSH key. When no key is named by the flag, `AGENT_VM_SSH_KEY`, or the
+  config file, it authorizes the public halves of this account's OpenSSH
+  identities — `~/.ssh/id_ed25519.pub`, `id_ed25519_sk.pub`, `id_ecdsa.pub`,
+  `id_ecdsa_sk.pub`, `id_dsa.pub`, `id_rsa.pub`, and `id_xmss.pub` — the same
+  files `ssh` offers when run without `-i`. Every one that exists is used;
+  files that are absent or that do not hold a public key are skipped. Naming a
+  key turns the fallback off, and a host with no key and none of these
+  identities is still a usage error, now naming the files that were tried.
+
 - `agent-vm create --host-authorized-keys` also authorizes the keys that
   already log in to this host account inside the new VM, so whoever can log in
   to the host can log in to the VMs it creates. It reads both

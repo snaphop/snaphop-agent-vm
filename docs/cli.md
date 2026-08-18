@@ -451,7 +451,7 @@ and must not already exist.
 | `--disk <size>` | `50G` | Virtual root disk size (thin overlay). |
 | `--network <nat\|bridge>` | `nat` | Network mode. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
-| `--ssh-key <path>` | config value | SSH **public** key(s) to authorize; repeatable. |
+| `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
 | `--host-authorized-keys` | off | Also authorize every key in this host account's `~/.ssh/authorized_keys` and `~/.ssh/authorized-keys/authorized_keys`. Combines with `--ssh-key`. |
 | `--cloud-init <path>` | none | Extra cloud-init user-data merged into the generated user-data. |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
@@ -472,6 +472,35 @@ The one deliberate exception is the guest-boot wait: a `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
 `agent-vm destroy <name>` once you have looked.
+
+#### Default SSH keys
+
+When no key is named — no `--ssh-key`, no `AGENT_VM_SSH_KEY`, and no
+`[guest] ssh_keys` in the config file — `create` authorizes the public halves of
+this account's OpenSSH identities, the same files `ssh` itself offers when it is
+run without `-i`:
+
+| Path |
+|---|
+| `~/.ssh/id_ed25519.pub` |
+| `~/.ssh/id_ed25519_sk.pub` |
+| `~/.ssh/id_ecdsa.pub` |
+| `~/.ssh/id_ecdsa_sk.pub` |
+| `~/.ssh/id_dsa.pub` |
+| `~/.ssh/id_rsa.pub` |
+| `~/.ssh/id_xmss.pub` |
+
+Every one of them that exists is authorized, in that order, because the operator
+may reach the guest from any host holding any of those keys. A file that is
+absent, empty, or not a public key is skipped without complaint: these paths are
+a fallback the tool guessed at, not paths the operator asked for. Each file that
+was used is recorded in `vm.json`, key material never is.
+
+Naming a key with `--ssh-key`, `AGENT_VM_SSH_KEY`, or the config file turns the
+fallback off entirely — the guest gets exactly the keys that were named (plus
+the host's, with `--host-authorized-keys`). If no key is named and none of the
+defaults exist, `create` exits `2` before anything is created, naming the files
+it looked for.
 
 #### `--host-authorized-keys`
 
