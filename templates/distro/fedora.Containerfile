@@ -74,3 +74,23 @@ RUN printf 'datasource_list: [ NoCloud, None ]\n' > /etc/cloud/cloud.cfg.d/90-ag
 # so all three families configure networking the same way and a boot failure
 # means the same thing everywhere.
 RUN printf 'system_info:\n  network:\n    renderers: [ networkd ]\n' > /etc/cloud/cloud.cfg.d/91-agent-vm-network.cfg
+
+# Repair /etc/resolv.conf at every boot.
+#
+# podman bind-mounts /etc/resolv.conf over the image's own copy for the
+# duration of each RUN, so systemd-resolved's packaging cannot replace that
+# path with the symlink it normally installs, and the file committed to the
+# image stays the empty regular file the OCI base ships. Nothing fixes it
+# later: systemd's own rule in /usr/lib/tmpfiles.d/systemd-resolve.conf is an
+# `L`, which by design refuses to touch a path that already exists. The result
+# is a guest that looks completely healthy — DHCP lease, default route,
+# resolved running and holding the right DNS server — while glibc reads an
+# empty resolv.conf and every name lookup fails.
+#
+# This file masks the vendor rule by having the same name (tmpfiles.d in /etc
+# wins over /usr/lib), and `L+` is the forcing form that replaces whatever is
+# already at the path. The vendor file carries only this one rule, so nothing
+# else is lost by overriding it. Writing the symlink cannot be done here with
+# `ln` instead: the bind mount makes /etc/resolv.conf busy during the build.
+RUN printf 'L+! /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\n' \
+      > /etc/tmpfiles.d/systemd-resolve.conf
