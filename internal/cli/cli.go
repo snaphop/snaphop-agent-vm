@@ -67,7 +67,11 @@ type command struct {
 	name    string
 	summary string
 	usage   string
-	run     func(ctx context.Context, app *App, args []string) error
+	// hidden keeps a command out of the usage listing. It is for interfaces
+	// meant for other programs — the shell completion helper — not for
+	// commands an operator is expected to type.
+	hidden bool
+	run    func(ctx context.Context, app *App, args []string) error
 }
 
 func commands() map[string]*command {
@@ -83,6 +87,8 @@ func commands() map[string]*command {
 		sshCommand(),
 		consoleCommand(),
 		destroyCommand(),
+		completionCommand(),
+		completeCommand(),
 	}
 
 	byName := make(map[string]*command, len(list))
@@ -314,7 +320,10 @@ Commands:
 
 	byName := commands()
 	names := make([]string, 0, len(byName))
-	for name := range byName {
+	for name, cmd := range byName {
+		if cmd.hidden {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
