@@ -17,6 +17,19 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create --host-authorized-keys` also authorizes the keys in this
+  host account's `~/.ssh/authorized_keys` inside the new VM, so whoever can
+  already log in to the host can log in to the VMs it creates. It combines with
+  `--ssh-key`: the guest gets the keys named by the flag and the host's keys,
+  with a key present in both authorized once. Either source alone is enough.
+
+  Only plain key lines are used — comments and blank lines are skipped, and an
+  entry carrying OpenSSH options (`command=`, `restrict`, `from=`) is refused
+  rather than silently stripped of its restriction or silently dropped. A
+  missing `~/.ssh/authorized_keys` is reported as a usage error before anything
+  is created. Both key sources are recorded in `vm.json` as paths; key material
+  is never written there.
+
 - `agent-vm create --github-ssh-key` adds the SSH key a VM generates for itself
   on first boot to your GitHub account, so an agent inside the VM can push
   without a key being pasted in by hand. The key is titled

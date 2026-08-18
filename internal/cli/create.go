@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
+	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
 	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable")
 	var virtInstallArgs repeatedFlag
@@ -103,6 +105,22 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	keys, err := guestinit.LoadPublicKeys(cfg.SSHKeys)
 	if err != nil {
 		return err
+	}
+	keyPaths := cfg.SSHKeys
+	if *hostAuthorizedKeys {
+		path, err := hostAuthorizedKeysPath()
+		if err != nil {
+			return err
+		}
+		hostKeys, err := guestinit.LoadAuthorizedKeys(path)
+		if err != nil {
+			return err
+		}
+		// --ssh-key comes first: the keys the operator named for this VM are
+		// the ones they will look for at the top of the guest's
+		// authorized_keys. Duplicates between the two sources appear once.
+		keys = mergeKeys(keys, hostKeys)
+		keyPaths = append(append([]string{}, keyPaths...), path)
 	}
 	extraUserData, err := readExtraUserData(*cloudInit)
 	if err != nil {
@@ -180,6 +198,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		manager:         manager,
 		manifest:        manifest,
 		keys:            keys,
+		keyPaths:        keyPaths,
 		extraUserData:   extraUserData,
 		extraSource:     *cloudInit,
 		virtInstallArgs: virtInstallArgs,
@@ -218,6 +237,38 @@ func readExtraUserData(path string) ([]byte, error) {
 	return contents, nil
 }
 
+// hostAuthorizedKeysPath is the file --host-authorized-keys reads: the keys
+// that already log in to this host account. It is a fixed location rather than
+// a flag value, because a file somewhere else is what --ssh-key is for.
+func hostAuthorizedKeysPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", &config.ValidationError{
+			Field: "host authorized_keys", Value: "~/.ssh/authorized_keys",
+			Err:    fmt.Errorf("cannot resolve the home directory: %w", err),
+			Remedy: "Pass the keys with --ssh-key instead.",
+		}
+	}
+	return filepath.Join(home, ".ssh", "authorized_keys"), nil
+}
+
+// mergeKeys concatenates key sets, keeping the first occurrence of each key.
+// The same key reaching a guest twice would be two identical lines in its
+// authorized_keys, which is confusing rather than harmful.
+func mergeKeys(sets ...[]string) []string {
+	merged := []string{}
+	seen := map[string]bool{}
+	for _, set := range sets {
+		for _, key := range set {
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, key)
+			}
+		}
+	}
+	return merged
+}
+
 // requireTools checks the tools a command depends on, and their minimum
 // versions, before it changes anything. Failing here yields exit 3 with the
 // tool named, rather than a confusing failure halfway through.
@@ -232,12 +283,15 @@ func (a *App) requireTools(ctx context.Context, tools ...hostexec.Tool) error {
 
 // createRequest is one validated create, ready to run.
 type createRequest struct {
-	cfg             *config.Config
-	name            string
-	store           *state.Store
-	manager         *domain.Manager
-	manifest        *state.Manifest
-	keys            []string
+	cfg      *config.Config
+	name     string
+	store    *state.Store
+	manager  *domain.Manager
+	manifest *state.Manifest
+	keys     []string
+	// keyPaths are the files keys came from, recorded in vm.json so a VM's
+	// authorized keys can be traced back to their source.
+	keyPaths        []string
 	extraUserData   []byte
 	extraSource     string
 	virtInstallArgs []string
@@ -302,7 +356,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	} else {
 		vm.Network.Name = cfg.NATNetwork
 	}
-	vm.Guest = state.VMGuest{User: cfg.GuestUser, SSHKeyPaths: cfg.SSHKeys}
+	vm.Guest = state.VMGuest{User: cfg.GuestUser, SSHKeyPaths: req.keyPaths}
 	vm.CreatedBy.AgentVMVersion = Version
 
 	if err := store.MkdirAll(vm.Paths.Dir); err != nil {

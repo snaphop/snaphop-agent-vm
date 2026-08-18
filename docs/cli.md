@@ -452,6 +452,7 @@ and must not already exist.
 | `--network <nat\|bridge>` | `nat` | Network mode. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
 | `--ssh-key <path>` | config value | SSH **public** key(s) to authorize; repeatable. |
+| `--host-authorized-keys` | off | Also authorize every key in this host account's `~/.ssh/authorized_keys`. Combines with `--ssh-key`. |
 | `--cloud-init <path>` | none | Extra cloud-init user-data merged into the generated user-data. |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
@@ -471,6 +472,26 @@ The one deliberate exception is the guest-boot wait: a `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
 `agent-vm destroy <name>` once you have looked.
+
+#### `--host-authorized-keys`
+
+Authorizes the keys that already log in to *this* host account — the ones in
+`~/.ssh/authorized_keys` — in the guest as well, so whoever can reach the host
+can reach the VMs it creates without their keys being listed a second time.
+
+It combines with `--ssh-key`: the guest's `authorized_keys` holds the keys named
+by the flag first, then the host's, with a key that appears in both authorized
+once. Either source alone is enough — a VM created with only
+`--host-authorized-keys` is reachable by the host's keys. Both are recorded as
+paths in `vm.json`; key material itself never goes there.
+
+Only plain key lines are accepted. Comments and blank lines are skipped, and an
+entry carrying OpenSSH options (`command=`, `restrict`, `from=`) is refused
+rather than stripped or dropped: the restriction is one the operator wrote down,
+and applying it to a guest or discarding it are both decisions this tool leaves
+to them. Pass such a key explicitly with `--ssh-key` if you want it in the VM. A
+missing `~/.ssh/authorized_keys` is a usage error (exit `2`), reported before
+anything is created.
 
 `--no-start` is rejected rather than approximated. `virt-install` always boots a
 guest that has cloud-init data: it starts the domain with the generated NoCloud

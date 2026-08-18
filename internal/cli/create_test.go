@@ -162,6 +162,86 @@ func TestCreate_AuthorizesTheKeyAndNeverWritesPrivateMaterial(t *testing.T) {
 	}
 }
 
+// hostAuthorizedKeysFile points HOME at a fake host account holding the given
+// authorized_keys, which is what --host-authorized-keys reads.
+func hostAuthorizedKeysFile(t *testing.T, contents string) {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatalf("creating the fake ~/.ssh: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "authorized_keys"), []byte(contents), 0o600); err != nil {
+		t.Fatalf("writing the fake authorized_keys: %v", err)
+	}
+	t.Setenv("HOME", home)
+}
+
+func TestCreate_AuthorizesTheHostKeysAlongsideTheKeysGivenByFlag(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	hostKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	hostAuthorizedKeysFile(t, "# the operator's laptop\n"+hostKey+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	for _, want := range []string{strings.TrimSpace(publicKey), hostKey} {
+		if !strings.Contains(string(userData), want) {
+			t.Errorf("%q was not authorized:\n%s", want, userData)
+		}
+	}
+	// Both sources are recorded, so the guest's authorized keys stay traceable.
+	if len(vm.Guest.SSHKeyPaths) != 2 ||
+		!strings.HasSuffix(vm.Guest.SSHKeyPaths[1], filepath.Join(".ssh", "authorized_keys")) {
+		t.Errorf("recorded key paths = %v, want the flag's key file and the host's authorized_keys", vm.Guest.SSHKeyPaths)
+	}
+}
+
+func TestCreate_AuthorizesTheHostKeysWithoutASSHKeyFlag(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	hostAuthorizedKeysFile(t, publicKey)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		"create", "agent-01", "--host-authorized-keys")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	// The same key from both sources is authorized once, not twice.
+	if got := strings.Count(string(userData), strings.TrimSpace(publicKey)); got != 1 {
+		t.Errorf("the host key appears %d times in the seed, want 1:\n%s", got, userData)
+	}
+}
+
+func TestCreate_ReportsAMissingHostAuthorizedKeysFile(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "authorized_keys") {
+		t.Errorf("stderr does not name the missing file:\n%s", stderr)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("a missing key file must be reported before any tool runs:\n%s", fake)
+	}
+}
+
 func TestCreate_RejectsAnInvalidVMName(t *testing.T) {
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)

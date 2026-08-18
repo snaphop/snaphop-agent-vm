@@ -244,6 +244,45 @@ func TestLoadPublicKeys_ReportsAMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadAuthorizedKeys_ReadsEveryKeyAndSkipsComments(t *testing.T) {
+	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ other@example"
+	path := writeFile(t, t.TempDir(), "authorized_keys",
+		"# laptop\n"+testKey+"\n\n"+other+"\n"+testKey+"\n")
+
+	keys, err := LoadAuthorizedKeys(path)
+	if err != nil {
+		t.Fatalf("LoadAuthorizedKeys: %v", err)
+	}
+	if !equal(keys, []string{testKey, other}) {
+		t.Errorf("keys = %v, want both keys once, in file order", keys)
+	}
+}
+
+func TestLoadAuthorizedKeys_RefusesEntriesCarryingOptions(t *testing.T) {
+	// Honoring the restriction in the guest and dropping it are both decisions
+	// this tool does not get to make for the operator, so it refuses instead.
+	path := writeFile(t, t.TempDir(), "authorized_keys",
+		`command="/usr/bin/true",restrict `+testKey+"\n")
+
+	_, err := LoadAuthorizedKeys(path)
+	if err == nil {
+		t.Fatal("want a refusal for an authorized_keys entry with options")
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("the error does not name the offending line: %v", err)
+	}
+}
+
+func TestLoadAuthorizedKeys_ReportsAMissingFile(t *testing.T) {
+	_, err := LoadAuthorizedKeys(filepath.Join(t.TempDir(), ".ssh", "authorized_keys"))
+	if err == nil {
+		t.Fatal("want an error naming the missing authorized_keys file")
+	}
+	if !strings.Contains(err.Error(), "--host-authorized-keys") {
+		t.Errorf("the error does not say which flag asked for the file: %v", err)
+	}
+}
+
 func writeFile(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
