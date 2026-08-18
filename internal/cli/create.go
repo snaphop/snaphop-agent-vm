@@ -260,7 +260,17 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		Path:         store.BaseDiskPath(req.manifest.Distro, req.manifest.Tag),
 	}
 	vm.Resources = state.VMResources{VCPUs: cfg.VCPUs, Memory: cfg.Memory, Disk: cfg.Disk}
-	vm.Network = state.VMNetwork{Mode: cfg.Network, Name: cfg.NATNetwork, Bridge: cfg.Bridge}
+	// Only the attachment the mode actually uses is recorded. A bridged VM is
+	// never on the NAT network and a NAT VM is never on the configured bridge,
+	// and recording the unused one — both are configured whether or not they
+	// apply — would make the record claim an attachment the guest does not
+	// have, which is the opposite of the auditability the field exists for.
+	vm.Network = state.VMNetwork{Mode: cfg.Network}
+	if cfg.BridgeMode() {
+		vm.Network.Bridge = cfg.Bridge
+	} else {
+		vm.Network.Name = cfg.NATNetwork
+	}
 	vm.Guest = state.VMGuest{User: cfg.GuestUser, SSHKeyPaths: cfg.SSHKeys}
 	vm.CreatedBy.AgentVMVersion = Version
 

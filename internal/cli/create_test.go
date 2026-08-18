@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
@@ -366,9 +367,42 @@ func TestCreate_BridgeModeValidatesTheBridgeAndCreatesNothing(t *testing.T) {
 	if !strings.Contains(argvs, "--network bridge=br40,model=virtio") {
 		t.Errorf("the guest was not attached to the bridge:\n%s", argvs)
 	}
-	if vm := loadVM(t, stateDir, "agent-01"); vm.Network.Bridge != "br40" {
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Network.Bridge != "br40" {
 		// The mode is recorded so a guest's exposure is auditable afterwards.
 		t.Errorf("vm.json network = %+v, want the bridge recorded", vm.Network)
+	}
+	// A bridged guest is on the operator's LAN and on no libvirt network at
+	// all. Naming one here would make the record describe an isolation the
+	// guest does not have, which is the reading the field exists to prevent.
+	if vm.Network.Name != "" {
+		t.Errorf("vm.json records the libvirt network %q for a bridged VM: %+v", vm.Network.Name, vm.Network)
+	}
+}
+
+// TestCreate_NATModeRecordsTheNetworkAndNoBridge is the mirror of the bridged
+// case: a bridge can be configured — through the config file or AGENT_VM_BRIDGE
+// — while NAT stays the mode, and recording it would claim a LAN attachment the
+// guest does not have.
+func TestCreate_NATModeRecordsTheNetworkAndNoBridge(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	t.Setenv("AGENT_VM_BRIDGE", "br40")
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Network.Mode != config.NetworkNAT {
+		t.Fatalf("network.mode = %q, want nat", vm.Network.Mode)
+	}
+	if vm.Network.Bridge != "" {
+		t.Errorf("vm.json records bridge %q for a NAT VM: %+v", vm.Network.Bridge, vm.Network)
+	}
+	if vm.Network.Name == "" {
+		t.Errorf("vm.json records no libvirt network for a NAT VM: %+v", vm.Network)
 	}
 }
 
