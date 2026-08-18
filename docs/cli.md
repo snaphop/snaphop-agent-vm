@@ -244,6 +244,15 @@ Such an image still boots: the generated user-data declares the group, and
 cloud-init creates groups before users, so the account is never left uncreated
 by a missing group.
 
+Every base image also ships a tmux configuration at `~/.tmux.conf` for root and
+for the login user cloud-init creates: mouse mode and a large scrollback, vi
+copy-mode keys, `|` and `-` for splits, new windows and panes opening in the
+current pane's directory, and no status bar. It is installed into `/etc/skel`
+and `/root`, so an operator can replace it per VM with their own `--cloud-init`
+file without rebuilding the image. The clipboard bindings pipe to `xclip` or
+`pbcopy`, neither of which is present in a headless guest; the selection still
+reaches tmux's own paste buffer, so copy and paste work inside tmux.
+
 Base images built before this tooling was added remain valid and bootable; they
 simply lack these packages. Run `agent-vm image build <distro> --force` to
 refresh one.

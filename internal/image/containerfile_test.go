@@ -1,6 +1,7 @@
 package image
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,6 +135,60 @@ func TestContainerfiles_InstallCommonGuestTooling(t *testing.T) {
 		// built before Docker was added.
 		if !strings.Contains(recipe, "enable agent-vm-docker-group.service") {
 			t.Errorf("%s does not enable agent-vm-docker-group.service; the login user will need sudo for every docker command", d.Containerfile)
+		}
+	}
+}
+
+// TestContainerfiles_InstallTheGuestTmuxConfig guards the tmux configuration
+// every guest is supposed to come up with.
+//
+// tmux is only useful to an agent if it behaves the same way in every VM, so
+// the configuration ships in the base image rather than being pasted in by
+// hand per VM. It has to reach two places: /etc/skel, which useradd copies
+// into the login user cloud-init creates, and /root, whose home directory
+// already exists by then and so never consults skel.
+func TestContainerfiles_InstallTheGuestTmuxConfig(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		// The file has to be installed by the same family that installs tmux;
+		// a configuration without the program is nothing.
+		if !strings.Contains(recipe, "tmux") {
+			t.Errorf("%s does not install tmux", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY tmux.conf /etc/skel/.tmux.conf") {
+			t.Errorf("%s does not copy tmux.conf into /etc/skel; the login user cloud-init creates will have no tmux configuration", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "/root/.tmux.conf") {
+			t.Errorf("%s does not install tmux.conf for root; skel is only consulted when a home directory is created and /root already exists", d.Containerfile)
+		}
+	}
+}
+
+// TestTmuxConfig_IsShippedInTheBuildContext ties the COPY above to the file the
+// builder actually writes next to the Containerfile. A COPY of a file that is
+// not in the build context fails the build minutes in, after the package
+// installation has already been paid for.
+func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
+	if !slices.Contains(buildContextFiles, "tmux.conf") {
+		t.Fatalf("tmux.conf is not in buildContextFiles %v, so podman's build context will not contain it", buildContextFiles)
+	}
+	for _, name := range buildContextFiles {
+		contents, err := templates.FS.ReadFile("distro/" + name)
+		if err != nil {
+			t.Fatalf("build context file %q is not embedded: %v", name, err)
+		}
+		if len(contents) == 0 {
+			t.Errorf("embedded build context file %q is empty", name)
 		}
 	}
 }

@@ -82,6 +82,16 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# The tmux configuration every guest gets.
+#
+# It goes into /etc/skel so that useradd — which is what cloud-init uses to
+# create the login user — copies it into each account's home directory, and
+# into /root as well because that home already exists here and skel is only
+# consulted when a home directory is created. Both land at ~/.tmux.conf, which
+# is the path the reload binding inside the file sources.
+COPY tmux.conf /etc/skel/.tmux.conf
+RUN install -m 0644 /etc/skel/.tmux.conf /root/.tmux.conf
+
 # Docker comes from the distro's own repository rather than Docker's
 # convenience script: the build then needs no extra registry or GPG key, and
 # the version is one the distro supports for the life of the release.

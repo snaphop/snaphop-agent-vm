@@ -83,6 +83,16 @@ RUN dnf -y install \
       man-db \
  && dnf clean all
 
+# The tmux configuration every guest gets.
+#
+# It goes into /etc/skel so that useradd — which is what cloud-init uses to
+# create the login user — copies it into each account's home directory, and
+# into /root as well because that home already exists here and skel is only
+# consulted when a home directory is created. Both land at ~/.tmux.conf, which
+# is the path the reload binding inside the file sources.
+COPY tmux.conf /etc/skel/.tmux.conf
+RUN install -m 0644 /etc/skel/.tmux.conf /root/.tmux.conf
+
 # moby-engine is Fedora's build of the Docker daemon; docker-ce is not in the
 # distro repositories, and adding Docker's own would mean a second registry and
 # GPG key in every build.
