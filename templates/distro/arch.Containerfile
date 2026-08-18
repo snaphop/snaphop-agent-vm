@@ -62,6 +62,16 @@ RUN pacman -Syu --noconfirm --needed \
       man-db \
  && pacman -Scc --noconfirm
 
+# The tmux configuration every guest gets.
+#
+# It goes into /etc/skel so that useradd — which is what cloud-init uses to
+# create the login user — copies it into each account's home directory, and
+# into /root as well because that home already exists here and skel is only
+# consulted when a home directory is created. Both land at ~/.tmux.conf, which
+# is the path the reload binding inside the file sources.
+COPY tmux.conf /etc/skel/.tmux.conf
+RUN install -m 0644 /etc/skel/.tmux.conf /root/.tmux.conf
+
 # Arch ships Docker in its own repositories, so no third-party repository or
 # convenience script is involved.
 RUN pacman -Syu --noconfirm --needed \

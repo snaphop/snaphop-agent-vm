@@ -45,6 +45,16 @@ migration or rebuild step a user has to take.
   stay valid and bootable and simply lack the new tools — run `agent-vm image
   build <distro> --force` to refresh one.
 
+- Base images now ship a tmux configuration, so tmux behaves the same way in
+  every guest without anyone pasting a config in. It is installed as
+  `~/.tmux.conf` for root and for the login user cloud-init creates, and turns
+  on mouse support and a 100,000-line scrollback, vi-style copy-mode keys, `|`
+  and `-` for splits, new windows and panes opening in the current pane's
+  directory, and no status bar. Supplying your own `~/.tmux.conf` — by hand or
+  through `--cloud-init` — replaces it without rebuilding the image. Existing
+  base images stay valid and simply lack the file; run `agent-vm image build
+  <distro> --force` to refresh one.
+
 - `agent-vm doctor` now checks whether the host firewall will drop the guest's
   outbound traffic. libvirt accepting a packet in its own nftables table is not
   the last word on it: every base chain registered on the forward hook runs, so

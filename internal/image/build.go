@@ -57,6 +57,13 @@ var sysprepOperations = []string{
 	"udev-persistent-net",
 }
 
+// buildContextFiles are the embedded files every family's Containerfile COPYs
+// into the guest, written into the build context next to the recipe. They are
+// guest configuration, not credentials: a base image is shared by every VM
+// built on it, so nothing per-VM or secret may be added to this list
+// (SECURITY.md).
+var buildContextFiles = []string{"tmux.conf"}
+
 // Builder produces base images.
 type Builder struct {
 	Runner         hostexec.Runner
@@ -176,7 +183,7 @@ func (b *Builder) buildInto(ctx context.Context, work *workspace, opts BuildOpti
 		return nil, err
 	}
 
-	containerfile, err := b.writeContainerfile(work, d)
+	containerfile, err := b.writeBuildContext(work, d)
 	if err != nil {
 		return nil, err
 	}
@@ -211,9 +218,13 @@ func (b *Builder) buildInto(ctx context.Context, work *workspace, opts BuildOpti
 	return b.writeManifest(ctx, work, opts, sourceRef, digest, platform, kernelVersion)
 }
 
-// writeContainerfile places the embedded per-distro recipe in the workspace,
-// which doubles as podman's build context.
-func (b *Builder) writeContainerfile(work *workspace, d distro.Distro) (string, error) {
+// writeBuildContext places the embedded per-distro recipe and the files it
+// copies into the workspace, which doubles as podman's build context, and
+// returns the path of the recipe.
+//
+// Every family's recipe COPYs the same guest dotfiles, so they are written from
+// one embedded copy rather than repeated as heredocs in three Containerfiles.
+func (b *Builder) writeBuildContext(work *workspace, d distro.Distro) (string, error) {
 	contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
 	if err != nil {
 		return "", fmt.Errorf("no build recipe for %s: %w", d.Name, err)
@@ -221,6 +232,16 @@ func (b *Builder) writeContainerfile(work *workspace, d distro.Distro) (string, 
 	path := filepath.Join(work.dir, "Containerfile")
 	if err := b.Store.WriteFile(path, contents, 0o644); err != nil {
 		return "", err
+	}
+
+	for _, name := range buildContextFiles {
+		contents, err := templates.FS.ReadFile("distro/" + name)
+		if err != nil {
+			return "", fmt.Errorf("no embedded %s for the build context: %w", name, err)
+		}
+		if err := b.Store.WriteFile(filepath.Join(work.dir, name), contents, 0o644); err != nil {
+			return "", err
+		}
 	}
 	return path, nil
 }
