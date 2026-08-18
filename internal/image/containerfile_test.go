@@ -410,3 +410,68 @@ func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerfiles_PinTheDatasourceSoItActuallyWins guards a guest that
+// reached for a metadata service on the network despite the image pinning
+// NoCloud.
+//
+// cloud-init reads /etc/cloud/cloud.cfg.d in sorted order and the last file to
+// set a key wins. The pin used to be written to 90-agent-vm-datasource.cfg,
+// which sorts before Ubuntu's own 90_dpkg.cfg ('-' is 0x2D, '_' is 0x5F), and
+// that file lists Ec2 along with every other network datasource. The pin was
+// therefore dead on Ubuntu: the first boot looked fine because the seed is
+// attached and NoCloud matches at once, and every later boot hung for four
+// minutes probing 169.254.169.254 before sshd started.
+//
+// The prefix has to sort after 90_dpkg.cfg, and the recipe has to verify that
+// at build time, because whether it sorts last depends on files this project
+// does not control.
+func TestContainerfiles_PinTheDatasourceSoItActuallyWins(t *testing.T) {
+	const pinFile = "/etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg"
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "> "+pinFile) {
+			t.Errorf("%s does not write the datasource pin to %s", d.Containerfile, pinFile)
+		}
+
+		// The specific name that caused the bug. Matched as a redirect
+		// target, so that the recipe can still name it while explaining
+		// what went wrong.
+		if strings.Contains(recipe, "> /etc/cloud/cloud.cfg.d/90-agent-vm-datasource.cfg") {
+			t.Errorf("%s writes the datasource pin to 90-agent-vm-datasource.cfg, which sorts before Ubuntu's 90_dpkg.cfg and is silently overridden by it; guests would probe a metadata service on every boot after the first", d.Containerfile)
+		}
+
+		// A prefix alone is not a guarantee: it only holds as long as no
+		// distro adds a later-sorting file. The build has to check.
+		if !strings.Contains(recipe, "grep -l '^datasource_list:' /etc/cloud/cloud.cfg.d/*.cfg") {
+			t.Errorf("%s does not verify at build time that its datasource pin is the last one cloud-init reads; a distro adding a later-sorting datasource_list would silently take the guarantee away again", d.Containerfile)
+		}
+	}
+}
+
+// TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt is the ordering
+// rule itself, stated once. It is what the prefix in the recipes has to
+// satisfy, and it fails on exactly the comparison that was originally got
+// wrong.
+func TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt(t *testing.T) {
+	const ours = "99-agent-vm-datasource.cfg"
+
+	// Files shipped by the supported families that set datasource_list.
+	for _, theirs := range []string{"90_dpkg.cfg", "05_logging.cfg"} {
+		if ours <= theirs {
+			t.Errorf("%s does not sort after %s, so cloud-init would read theirs last and ignore our pin", ours, theirs)
+		}
+	}
+
+	// The name that shipped the bug, kept here so the comparison that failed
+	// is the one under test.
+	if old := "90-agent-vm-datasource.cfg"; old > "90_dpkg.cfg" {
+		t.Errorf("expected %s to sort before 90_dpkg.cfg, which is why the pin was overridden; if this no longer holds the bug's explanation is wrong", old)
+	}
+}

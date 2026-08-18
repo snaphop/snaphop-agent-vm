@@ -250,7 +250,29 @@ RUN systemctl --root=/ enable qemu-guest-agent.service \
 RUN printf '/dev/vda1 / ext4 defaults 0 1\n' > /etc/fstab
 
 # NoCloud only: a guest must never probe a metadata service on the network.
-RUN printf 'datasource_list: [ NoCloud, None ]\n' > /etc/cloud/cloud.cfg.d/90-agent-vm-datasource.cfg
+#
+# The 99 prefix is load-bearing. cloud-init reads /etc/cloud/cloud.cfg.d in
+# sorted order and the last file to set a key wins. This file was once named
+# 90-agent-vm-datasource.cfg, which sorts before Ubuntu's own 90_dpkg.cfg
+# ('-' is 0x2D, '_' is 0x5F) -- that file lists Ec2 and every other network
+# datasource, so the pin was silently overridden there. This family does not
+# ship such a file today, but it is named consistently across all three so the
+# guarantee does not depend on which distro is being built.
+RUN printf 'datasource_list: [ NoCloud, None ]\n' > /etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg
+
+# Prove the pin actually wins rather than trusting the prefix.
+#
+# Sorting last is a property of every *other* file in the directory, so it is
+# not something this recipe can guarantee on its own: a distro that adds a
+# later-sorting datasource_list at any point would take the guarantee away
+# again, silently. Checking it here means that turns into a failed build.
+RUN set -eu; \
+    last="$(grep -l '^datasource_list:' /etc/cloud/cloud.cfg.d/*.cfg | sort | tail -n1)"; \
+    if [ "${last}" != "/etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg" ]; then \
+      echo "${last} sets datasource_list after this image's own pin does;" >&2; \
+      echo "cloud-init would use it and the guest could probe a metadata service" >&2; \
+      exit 1; \
+    fi
 
 # Pin the network renderer instead of letting cloud-init choose one per distro,
 # so all three families configure networking the same way and a boot failure
