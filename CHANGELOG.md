@@ -323,6 +323,30 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- A VM only reached the network's metadata service, and took four minutes to
+  become reachable over SSH, on every boot after its first. Ubuntu's own
+  cloud-init configuration lists `Ec2` and every other network datasource, and
+  it was being read *after* this project's `NoCloud`-only pin — cloud-init reads
+  `/etc/cloud/cloud.cfg.d` in sorted order and the file was named
+  `90-agent-vm-datasource.cfg`, which sorts before Ubuntu's `90_dpkg.cfg`
+  because `-` sorts before `_`. The pin had no effect there.
+
+  The first boot always looked correct, because the cloud-init seed is attached
+  then and `NoCloud` matches immediately. Later boots have no seed, so
+  cloud-init fell through to the network datasources and spent four minutes
+  probing `169.254.169.254` before `sshd` started, which is longer than
+  `agent-vm start` waits.
+
+  The pin now sorts last, and a build checks that it really is the last word on
+  the subject rather than trusting the file name — a distribution adding a
+  later-sorting datasource list would otherwise take the guarantee away again,
+  as silently as it was lost the first time.
+
+  This affected Ubuntu, the default family. Existing base images still carry the
+  old file name; rebuild them with `agent-vm image build --force` to pick up the
+  fix.
+
+
 - Ubuntu guests can install packages again. Every Ubuntu base image produced a
   guest whose apt sources named a suite called `UNAVAILABLE`, so `apt update`
   returned `404 Not Found` for every repository and nothing could be installed.

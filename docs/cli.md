@@ -205,7 +205,10 @@ Every base image makes the same promises to the VMs built on it, and those
 promises are the guest contract: `sshd`, `systemd-networkd`, and the cloud-init
 units start by themselves at first boot; cloud-init reads the NoCloud seed and
 no other datasource, so a guest never contacts a metadata service on the
-network; and the image carries no identity — `virt-sysprep` empties the machine
+network — the pin is written to `99-agent-vm-datasource.cfg` so that it sorts
+after any `datasource_list` the distribution ships, and a build fails if some
+other file in `/etc/cloud/cloud.cfg.d` would be read after it; and the image
+carries no identity — `virt-sysprep` empties the machine
 ID and removes SSH host keys, so no two VMs share either. Changing any of these
 changes what every script that SSHes into these VMs can assume.
 

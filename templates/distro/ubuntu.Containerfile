@@ -290,7 +290,32 @@ RUN printf '/dev/vda1 / ext4 defaults 0 1\n' > /etc/fstab
 # cloud-init gets its configuration from the NoCloud seed virt-install
 # attaches. No other datasource may be probed: a VM must never reach out to a
 # metadata service on the network.
-RUN printf 'datasource_list: [ NoCloud, None ]\n' > /etc/cloud/cloud.cfg.d/90-agent-vm-datasource.cfg
+#
+# The 99 prefix is load-bearing. cloud-init reads /etc/cloud/cloud.cfg.d in
+# sorted order and the last file to set a key wins, and Ubuntu ships its own
+# datasource_list -- listing Ec2 and every other network datasource -- in
+# 90_dpkg.cfg. This file was once named 90-agent-vm-datasource.cfg, which sorts
+# *before* that ('-' is 0x2D, '_' is 0x5F), so the pin was silently overridden
+# and the guarantee above was not true on Ubuntu. What it looked like from the
+# outside: the first boot was fine, because the seed is attached and NoCloud
+# matches immediately, and every later boot hung for four minutes probing
+# 169.254.169.254 before sshd came up.
+RUN printf 'datasource_list: [ NoCloud, None ]\n' > /etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg
+
+# Prove the pin actually wins rather than trusting the prefix.
+#
+# Sorting last is a property of every *other* file in the directory, so it is
+# not something this recipe can guarantee on its own: a distro that adds a
+# later-sorting datasource_list at any point would take the guarantee away
+# again, silently and in exactly the way described above. Checking it here
+# means that turns into a failed build instead.
+RUN set -eu; \
+    last="$(grep -l '^datasource_list:' /etc/cloud/cloud.cfg.d/*.cfg | sort | tail -n1)"; \
+    if [ "${last}" != "/etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg" ]; then \
+      echo "${last} sets datasource_list after this image's own pin does;" >&2; \
+      echo "cloud-init would use it and the guest could probe a metadata service" >&2; \
+      exit 1; \
+    fi
 
 # Pin the network renderer instead of letting cloud-init choose one per distro,
 # so all three families configure networking the same way and a boot failure
