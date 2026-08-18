@@ -72,6 +72,104 @@ RUN pacman -Syu --noconfirm --needed \
 COPY tmux.conf /etc/skel/.tmux.conf
 RUN install -m 0644 /etc/skel/.tmux.conf /root/.tmux.conf
 
+# Node.js, which the agent CLIs below run on. Arch is a rolling target, so its
+# own package is always current enough and no third-party repository is
+# involved. The version assertion below is what catches it if that changes.
+RUN pacman -Syu --noconfirm --needed \
+      nodejs \
+      npm \
+ && pacman -Scc --noconfirm
+
+# The agents need Node 22.19 or newer -- pi and claude both refuse to start on
+# anything older. A guest whose agents will not start is indistinguishable from
+# a broken image until someone SSHes in hours later, so a too-old Node fails
+# the build here instead of shipping.
+RUN set -eu; \
+    major="$(node -p 'process.versions.node.split(".")[0]')"; \
+    minor="$(node -p 'process.versions.node.split(".")[1]')"; \
+    if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 19 ]; }; then \
+      echo "node $(node -v) is too old: the agent CLIs require >= 22.19" >&2; \
+      exit 1; \
+    fi
+
+# The coding agents every guest comes up with.
+#
+# This is the one place in the image that installs software from outside the
+# distro's own repositories: none of these five are packaged by any distro.
+# Four publish to npm and are installed with it. agy is a Go binary with no npm
+# package, so it comes from its vendor's installer, pointed at /usr/local/bin
+# so that every account on the VM finds it rather than only root. That binary
+# self-updates in the background and cannot write to /usr/local/bin as a
+# non-root user, so guests keep the version the image was built with.
+#
+# The versions are deliberately unpinned, like every other package here: these
+# tools ship several releases a week and a pinned one would be stale before the
+# image was rebuilt. Reproducibility comes from the digest the manifest records
+# for the source image, not from the agent versions (ADR-0006).
+# npm is held to the 11 line because npm 12 does not run these packages'
+# postinstall scripts, and claude and opencode both download their native
+# binary in one. npm 12 installs them without complaint and the commands then
+# fail at the first run with "native binary not installed" -- a broken guest
+# that looks like a successful build. Arch hits this today (it packages npm 12
+# against whatever Node it currently ships); Ubuntu and Fedora will when their
+# npm catches up, so all three are pinned rather than only the one that breaks
+# now. The smoke test below is what will say when this pin can be lifted.
+RUN npm install -g npm@11 \
+ && npm cache clean --force
+
+RUN npm install -g \
+      @anthropic-ai/claude-code \
+      @openai/codex \
+      opencode-ai \
+      @earendil-works/pi-coding-agent \
+ && npm cache clean --force
+
+RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
+
+# Run every agent once, and fail the build if any of them cannot start.
+#
+# Installing an agent and having a working agent are different things: a
+# package whose postinstall did not run installs cleanly and only fails when
+# someone finally types the command, inside a VM, long after the image was
+# built and cached. This is the step that turns that into a failed build, and
+# it is what makes the npm pin above self-policing.
+RUN set -eu; \
+    for agent in claude codex opencode pi agy; do \
+      if ! "$agent" --version >/dev/null 2>&1; then \
+        echo "the ${agent} CLI installed but cannot run:" >&2; \
+        "$agent" --version >&2 || true; \
+        exit 1; \
+      fi; \
+    done
+
+# The agents' configuration, each set to its most permissive mode so that an
+# agent works unattended instead of blocking on an approval prompt nobody is
+# there to answer.
+#
+# That is only defensible because the VM is itself the sandbox: it is
+# disposable, network-isolated by default, and nothing the host cares about is
+# reachable from inside it (SECURITY.md). A second sandbox within it would only
+# stop the agent doing the work the VM exists for. These files hold
+# configuration and never credentials -- those are per-VM and arrive through
+# --cloud-init, because a base image is shared by every VM built on it.
+#
+# Each lands in /etc/skel, which useradd copies into the login user cloud-init
+# creates, and in /root, whose home already exists here and so never consults
+# skel. pi is absent because it does not gate tool calls at all.
+COPY claude-settings.json /etc/skel/.claude/settings.json
+COPY codex-config.toml /etc/skel/.codex/config.toml
+COPY opencode.json /etc/skel/.config/opencode/opencode.json
+RUN set -eu; \
+    for file in .claude/settings.json .codex/config.toml .config/opencode/opencode.json; do \
+      install -D -m 0644 "/etc/skel/${file}" "/root/${file}"; \
+    done
+
+# agy is the exception: it has no configuration file for tool permissions, so
+# the flag is the only way to run it unattended and it gets an alias. This
+# reaches interactive shells only -- see the file for what that leaves out.
+COPY agent-aliases.sh /etc/profile.d/agent-vm-agents.sh
+RUN chmod 0644 /etc/profile.d/agent-vm-agents.sh
+
 # Arch ships Docker in its own repositories, so no third-party repository or
 # convenience script is involved.
 RUN pacman -Syu --noconfirm --needed \

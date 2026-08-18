@@ -17,6 +17,36 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now ship five coding agents — `claude`, `codex`, `opencode`, `pi`,
+  and `agy` — so a new VM is usable by an agent the moment it becomes reachable,
+  instead of starting with an install. Four come from npm and bring a Node.js 24
+  runtime with them; `agy` is installed from its vendor's script into
+  `/usr/local/bin`, so every account on the VM finds it. Versions are not pinned:
+  a guest gets whatever was current when its base image was built, and
+  `agent-vm image build --force` is how you get newer ones.
+
+  Each agent is configured in its **most permissive mode**, so it works
+  unattended rather than blocking on an approval prompt nobody is there to
+  answer. This is safe only because the VM is itself the sandbox — disposable and
+  network-isolated by default, with nothing the host cares about reachable from
+  inside it. `agy` is the exception to the mechanism: it has no configuration
+  file for permissions, so it gets a shell alias instead, which reaches
+  interactive shells only. A non-interactive caller such as
+  `ssh <vm> agy -p '…'` has to pass `--dangerously-skip-permissions` itself.
+
+  The agents ship **configured but unauthenticated**. A base image is shared by
+  every VM built on it, so no credentials are baked in; API keys or logins have
+  to reach each VM separately, through `--cloud-init` or by authenticating inside
+  the guest.
+
+  A build now runs each agent once before finishing and fails if any of them
+  cannot start, so an agent that installs but does not work is a failed build
+  rather than a surprise inside a VM days later.
+
+  Existing cached base images are unaffected and still boot. They will not have
+  the agents until rebuilt with `agent-vm image build --force`.
+
+
 - `agent-vm completion <bash|zsh|fish>` prints a tab-completion script for the
   shell you name, so `agent-vm ` and Tab offers command names, a command's own
   flags, the recorded VM names for the commands that take one, the cached base
@@ -234,6 +264,17 @@ migration or rebuild step a user has to take.
   can still have its leftover state removed.
 
 ### Changed
+
+- Base images are no longer built purely from their distribution's own
+  repositories. The coding agents are not packaged by any distro, so a build now
+  reaches npm and one vendor install script, and on Ubuntu it also adds the
+  NodeSource repository and GPG key — Ubuntu 24.04 ships Node.js 18 and the
+  agents need 22.19 or newer. Fedora and Arch use their own Node.js. A build
+  fails outright if the Node.js it ends up with is older than 22.19, rather than
+  producing an image whose agents silently cannot start, and holds `npm` to the
+  11 line because npm 12 skips the postinstall scripts two of the agents need. Building a base image
+  already required network access to a registry; it now also requires reaching
+  these sources.
 
 - The state directory now also contains `networks/`, holding the network XML
   passed to `virsh net-define` as a record, and `locks/`. Both are documented in

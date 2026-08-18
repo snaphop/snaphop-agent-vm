@@ -62,7 +62,13 @@ var sysprepOperations = []string{
 // guest configuration, not credentials: a base image is shared by every VM
 // built on it, so nothing per-VM or secret may be added to this list
 // (SECURITY.md).
-var buildContextFiles = []string{"tmux.conf"}
+var buildContextFiles = []string{
+	"tmux.conf",
+	"claude-settings.json",
+	"codex-config.toml",
+	"opencode.json",
+	"agent-aliases.sh",
+}
 
 // Builder produces base images.
 type Builder struct {

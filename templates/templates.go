@@ -13,5 +13,7 @@ import "embed"
 
 // FS holds the embedded template tree.
 //
-//go:embed network/*.xml.tmpl distro/*.Containerfile distro/tmux.conf cloud-init/*.tmpl
+//go:embed network/*.xml.tmpl distro/*.Containerfile distro/tmux.conf
+//go:embed distro/claude-settings.json distro/codex-config.toml distro/opencode.json
+//go:embed distro/agent-aliases.sh cloud-init/*.tmpl
 var FS embed.FS
