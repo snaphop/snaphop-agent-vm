@@ -613,3 +613,28 @@ RUN printf 'system_info:\n  network:\n    renderers: [ networkd ]\n' > /etc/clou
 # `ln` instead: the bind mount makes /etc/resolv.conf busy during the build.
 RUN printf 'L+! /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf\n' \
       > /etc/tmpfiles.d/systemd-resolve.conf
+
+# Let a non-root user run ping.
+#
+# iputils' ping needs one of two things: the cap_net_raw file capability, or a
+# net.ipv4.ping_group_range that includes the caller's groups so it can use an
+# ICMP socket instead of a raw one. Distro packaging grants the first, through
+# a security.capability xattr on /usr/bin/ping — and that xattr does not
+# survive this image pipeline. The root filesystem reaches the disk as a
+# `podman export` tar unpacked by virt-make-fs, which drops it, so the guest
+# ends up with a ping that has no capability at all.
+#
+# The kernel's default range is `1 0`, an empty one, and Ubuntu and Fedora both
+# leave it there because their packaging expects the capability to be present.
+# The two failures then compound: the agent user gets
+# "socket: Operation not permitted ... missing cap_net_raw+p capability", which
+# reads exactly like a broken network on a guest whose networking is fine.
+#
+# Setting the range here fixes it without depending on xattrs surviving the
+# build. Arch already ships this value in systemd's own 50-default.conf; the
+# drop-in is written for every family anyway so that unprivileged ping does not
+# depend on which vendor file a base image happens to carry. Widening it costs
+# nothing here: an agent in this guest has root already (SECURITY.md), so ICMP
+# sockets are not a boundary this image is defending.
+RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
+      > /etc/sysctl.d/99-agent-vm-ping.conf

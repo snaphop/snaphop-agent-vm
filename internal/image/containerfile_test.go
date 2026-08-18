@@ -809,3 +809,40 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerfiles_AllowUnprivilegedPing guards the fix for a guest whose
+// networking worked and whose `ping` did not.
+//
+// The root filesystem reaches the disk as a `podman export` tar unpacked by
+// virt-make-fs, and the security.capability xattr that distro packaging puts
+// on /usr/bin/ping does not survive that. Ubuntu and Fedora leave
+// net.ipv4.ping_group_range at the kernel's empty `1 0` default because they
+// expect that capability to be there, so iputils falls back to a raw socket
+// and the agent user gets "missing cap_net_raw+p capability" — which reads as
+// a broken network on a guest that has a lease, a route and working TCP.
+func TestContainerfiles_AllowUnprivilegedPing(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		// The whole range: cloud-init creates the agent user with a gid this
+		// image cannot predict, so a narrower one would work by luck.
+		if !strings.Contains(recipe, "net.ipv4.ping_group_range = 0 2147483647") {
+			t.Errorf("%s does not widen net.ipv4.ping_group_range; a non-root user in guests built from it cannot ping, because the cap_net_raw xattr on ping does not survive the export-and-virt-make-fs pipeline", d.Containerfile)
+		}
+
+		// Anything sysctl.d reads would do, but only a file under /etc wins
+		// over a vendor default that sets the same key.
+		if !strings.Contains(recipe, "/etc/sysctl.d/") {
+			t.Errorf("%s sets ping_group_range somewhere other than /etc/sysctl.d, where a vendor default could override it", d.Containerfile)
+		}
+	}
+}
