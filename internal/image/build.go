@@ -68,6 +68,8 @@ var buildContextFiles = []string{
 	"codex-config.toml",
 	"opencode.json",
 	"agent-aliases.sh",
+	"chromium.sh",
+	"sdkman.sh",
 }
 
 // Builder produces base images.

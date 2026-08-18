@@ -17,6 +17,33 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now also carry `gh` and `tea` for GitHub and Gitea, Playwright
+  with a headless `chromium`, and SDKMAN for installing JDKs in the guest.
+
+  `gh` comes from each distribution's repository. `tea` does not — only Arch
+  packages it, and on Ubuntu the name `tea` belongs to an unrelated text editor,
+  so it is fetched from Gitea's release server on all three families instead.
+
+  There is one browser in the image, the build Playwright pins, and it is also
+  exposed as plain `chromium`. Playwright will not drive a browser it did not
+  install, and Ubuntu's chromium package is a snap stub a VM cannot run, so a
+  second one would be several hundred megabytes that nothing uses. The browsers
+  are shared from `/opt/ms-playwright` rather than downloaded per user, and
+  `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` so that
+  non-interactive commands like `ssh <vm> node script.js` find them too.
+
+  SDKMAN is installed per account rather than shared, because installing a JDK
+  writes into its directory. No JDK is preinstalled: run `sdk install java` in
+  the guest. `sdk` is a shell function, so it exists in an interactive login
+  shell only.
+
+  A build now runs each of these once — including launching headless Chromium —
+  and fails if any of them cannot work. Base images are correspondingly larger.
+
+  Existing cached base images are unaffected and still boot. They will not have
+  these tools until rebuilt with `agent-vm image build --force`.
+
+
 - Base images now ship five coding agents — `claude`, `codex`, `opencode`, `pi`,
   and `agy` — so a new VM is usable by an agent the moment it becomes reachable,
   instead of starting with an install. Four come from npm and bring a Node.js 24
