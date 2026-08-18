@@ -193,6 +193,100 @@ If the network fails to start, the usual causes are a subnet conflict with an
 existing libvirt network or another `virbr` interface, and a missing
 `dnsmasq`/`nftables` dependency. Both appear in `journalctl -u libvirtd`.
 
+### Host Firewalls And The `virbrN` Bridge
+
+If the host runs a firewall of its own — `ufw` is the common case — NAT mode
+needs one rule, and getting it wrong produces a uniquely misleading failure.
+
+libvirt adds its own nftables rules accepting the guest's traffic, but that is
+not the last word on a packet. Every nftables base chain registered on the
+forward hook runs, and a drop in any of them is final. `ufw` registers such a
+chain and ships with `DEFAULT_FORWARD_POLICY="DROP"` in `/etc/default/ufw`, so
+it discards traffic libvirt has already accepted. You can confirm this is what
+happened by looking at libvirt's own NAT counters — if the packets were dropped
+at the forward hook they never reached masquerade, and the counters stay at
+zero:
+
+```bash
+sudo nft list chain ip libvirt_network guest_nat
+```
+
+**The VM will look completely healthy.** It boots, `agent-vm ssh` works, and DNS
+resolves — because the resolver is dnsmasq on the host bridge, and that traffic
+is delivered to the host rather than forwarded. Only connections past the host
+fail, and because the packets are dropped rather than rejected they fail by
+hanging rather than by erroring: `apt update` sits at 0% until it times out.
+
+`agent-vm doctor` reports this as the **host firewall forwarding** check. The
+fix is a route rule naming the bridge:
+
+```bash
+# The bridge name is not fixed — look it up, do not assume virbr0.
+virsh -c qemu:///system net-info agent-vm-nat | grep Bridge
+sudo ufw route allow in on virbr1
+```
+
+Two things about that rule are worth knowing before you rely on it.
+
+**The bridge name is allocated, not configured.** The network definition
+deliberately leaves the bridge device unnamed so that libvirt picks one and two
+networks cannot collide on it. Which `virbrN` you get depends on what else
+exists on the host when the network is first started, so it is not stable
+across hosts, and **it can change on the same host** if the network is
+undefined and redefined, or if another `virbr` interface appears first. A ufw
+rule pinned to the old name then silently stops matching, and the symptom is
+exactly the hang described above. If outbound traffic stops working after
+recreating the NAT network, re-check the bridge name before anything else:
+
+```bash
+virsh -c qemu:///system net-info agent-vm-nat | grep Bridge
+sudo ufw status | grep virbr        # compare against the rule you added
+```
+
+**The rule above also lets the guest reach your LAN.** `route allow in on
+<bridge>` permits forwarding to every destination, not just the internet, which
+widens the NAT boundary that [`SECURITY.md`](../SECURITY.md) relies on — and the
+guest is untrusted by design. To keep the guest on the internet only, deny the
+private ranges first; ufw evaluates rules in order, so these must be added
+before the blanket allow:
+
+```bash
+sudo ufw route deny in on virbr1 to 192.168.0.0/16
+sudo ufw route deny in on virbr1 to 10.0.0.0/8
+sudo ufw route deny in on virbr1 to 172.16.0.0/12
+sudo ufw route allow in on virbr1
+```
+
+Return traffic needs no rule of its own: ufw accepts established and related
+connections before these are consulted.
+
+If you already added the blanket allow, appending the denies will not help —
+they would land after it and never be reached. Insert them ahead of it instead,
+and confirm the resulting order:
+
+```bash
+sudo ufw route insert 1 deny in on virbr1 to 192.168.0.0/16
+sudo ufw route insert 1 deny in on virbr1 to 10.0.0.0/8
+sudo ufw route insert 1 deny in on virbr1 to 172.16.0.0/12
+sudo ufw status numbered | grep -i virbr
+```
+
+Note that the NAT subnet is itself inside `192.168.0.0/16`, so these denies also
+stop VMs on the network from reaching each other. That is usually what you want
+for disposable agent VMs — and it is stricter than the NAT network's own
+default, which allows guest-to-guest traffic on the same bridge. Drop the
+`192.168.0.0/16` line, or narrow it to your LAN's prefix, if VMs need to talk.
+
+`agent-vm` never adds, removes, or edits host firewall rules. Any rule here is
+yours to add and yours to maintain — including after a bridge is renamed.
+
+Other firewalls fail the same way for the same reason. `firewalld` puts the
+bridge in a zone (`firewall-cmd --get-zone-of-interface=virbr1`) and libvirt
+usually assigns its own networks to the `libvirt` zone automatically; a host
+with a custom nftables ruleset needs its forward chain to accept the bridge.
+`doctor` only knows how to read `ufw`'s configuration, so on those hosts the
+check passing means "no `ufw` problem", not "no firewall problem".
+
 ## 6. Bridged Networking (Opt-In)
 
 Bridged mode puts the VM directly on your LAN with its own DHCP address. This
@@ -282,6 +376,8 @@ The first `image build` needs registry access and takes a few minutes. Subsequen
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `skopeo inspect docker://<ref>` |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
 | VM starts, no address | DHCP or NIC problem | `virsh net-dhcp-leases agent-vm-nat`, console log |
+| VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |
+| The same hang, on a host where the ufw rule used to work | libvirt allocated a different `virbrN` and the rule no longer matches | `virsh net-info agent-vm-nat \| grep Bridge`, compare with `sudo ufw status` |
 | Bridged VM has no address | Bridge down, or no DHCP on that VLAN | `ip -br link`, LAN DHCP server |
 | Disk full mid-task | Thin overlays grew | `du -sh` on the state directory |
 | `exit 7` after a failure | Cleanup was incomplete | The error names exactly what is left; `virsh list --all` |
