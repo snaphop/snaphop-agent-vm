@@ -66,6 +66,46 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Arch guests boot again. The image ships no `/etc/machine-id`, which systemd
+  reads as a first boot, and Arch enables `systemd-firstboot.service` — which,
+  with a serial console attached, prompted for a timezone and waited forever.
+  Boot stopped there, so cloud-init never ran and the guest never got a network;
+  from the outside `agent-vm create --distro arch` simply timed out waiting for
+  an address. The unit is now masked, and the build fails if the mask is
+  missing. Every VM still gets its own machine ID, which systemd initializes
+  from the SMBIOS UUID independently of that unit. Rebuild a cached arch image
+  with `agent-vm image build --force arch`.
+
+- Fedora guests are named after the VM again, instead of all being named
+  `fedora`. cloud-init's Fedora distro class prefers the FQDN over the hostname,
+  and since a disposable VM has no domain, it fell back to the system FQDN —
+  systemd's compiled-in fallback, the literal string `fedora` — and applied that
+  to every guest. The image now turns that preference off. Ubuntu and Arch were
+  never affected.
+
+- Fedora guests boot again. `container-selinux`, which arrived with the
+  virtualization stack podman and libvirt pull in, installs
+  `selinux-policy-targeted` and its `/etc/selinux/config` set to enforcing. The
+  root filesystem is built from a flattened container export and carries no
+  SELinux labels at all, so systemd tried to relabel an unlabeled filesystem on
+  first boot, failed, and froze PID 1 about three seconds in — before
+  networking. From the outside this looked like `agent-vm create --distro
+  fedora` timing out waiting for an address, with nothing to say init had died.
+  The image now sets SELinux to disabled and the build fails if it is not, so
+  this cannot ship again unnoticed. Rebuild a cached fedora image with
+  `agent-vm image build --force fedora`.
+
+- A bridged VM's `vm.json` no longer claims it is on the NAT network. The record
+  named the libvirt network `agent-vm-nat` alongside the bridge for every
+  bridged VM, even though the guest was attached only to the host bridge — the
+  field is there so a guest's network exposure is auditable after the fact, and
+  it was describing an isolation the guest did not have. The two attachments are
+  now mutually exclusive in the record: bridged VMs carry `network.bridge` and
+  no `network.name`, NAT VMs carry `network.name` and no `network.bridge` (a
+  configured `AGENT_VM_BRIDGE` was previously recorded on NAT VMs too). No
+  rebuild is needed; existing records are corrected the next time a VM is
+  created.
+
 - The base image's one-shot account unit never ran. It was wanted by
   `multi-user.target` and ordered after `cloud-final.service`, which cloud-init
   itself orders *after* that target — an ordering cycle, which systemd breaks by

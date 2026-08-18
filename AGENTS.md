@@ -43,7 +43,11 @@ lifecycle — create, boot, SSH, stop/start/restart, destroy, rollback after a
 failed create, and the refusal to destroy a domain this tool did not create —
 and the whole suite has been run to completion against a real KVM host
 (libvirt 12.6.0, QEMU 11.1.0, `virt-install` 5.1.0), booting all three
-supported distros in NAT mode. Bridged mode is still unexercised. Treat
+supported distros. The lifecycle suite now takes a
+`-lifecycle-network`/`-lifecycle-bridge` pair, and the full lifecycle has been
+run for all three distros in **both** network modes — six combinations, NAT and
+bridged against a real host bridge — so neither mode is unexercised any more.
+Treat
 `docs/cli.md` and `docs/architecture.md` as the specification to satisfy, and
 update them in the same change if the implementation must diverge.
 
