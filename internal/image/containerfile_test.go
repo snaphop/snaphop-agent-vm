@@ -475,3 +475,121 @@ func TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt(t *testing.T) {
 		t.Errorf("expected %s to sort before 90_dpkg.cfg, which is why the pin was overridden; if this no longer holds the bug's explanation is wrong", old)
 	}
 }
+
+// TestContainerfiles_InstallTheDevTooling guards the second half of the guest
+// contract: gh, tea, Playwright with a headless Chromium, and SDKMAN.
+//
+// Two of these have a trap in them that a looser assertion would walk into.
+// Ubuntu's `tea` package is an unrelated text editor, so a recipe that
+// installs "tea" from apt gives the guest the wrong program under the right
+// name; tea therefore comes from Gitea's release server everywhere. And
+// Ubuntu's chromium package is a snap stub, useless in a VM, so the only
+// Chromium in the image is the one Playwright pins.
+func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
+	ghPackage := map[string]string{
+		distro.Ubuntu.Containerfile: "gh",
+		distro.Fedora.Containerfile: "gh",
+		distro.Arch.Containerfile:   "github-cli",
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if pkg := ghPackage[d.Containerfile]; !strings.Contains(recipe, pkg) {
+			t.Errorf("%s does not install the GitHub CLI (%s)", d.Containerfile, pkg)
+		}
+
+		// tea has to come from Gitea, not from a package manager.
+		if !strings.Contains(recipe, "dl.gitea.com/tea") {
+			t.Errorf("%s does not install tea from Gitea's release server; only Arch packages it, and on Ubuntu the name belongs to an unrelated text editor", d.Containerfile)
+		}
+
+		if !strings.Contains(recipe, "npm install -g playwright") {
+			t.Errorf("%s does not install Playwright", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
+			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY chromium.sh /usr/local/bin/chromium") {
+			t.Errorf("%s does not expose Chromium as `chromium`; the browser would only be reachable through Playwright", d.Containerfile)
+		}
+
+		// A distro chromium alongside Playwright's would be hundreds of
+		// megabytes Playwright never uses -- and on Ubuntu it is a snap stub.
+		for _, pkg := range []string{"chromium-browser", "chromium-headless"} {
+			if strings.Contains(recipe, pkg) {
+				t.Errorf("%s installs the distro package %q as well as Playwright's Chromium; there should be exactly one browser in the image", d.Containerfile, pkg)
+			}
+		}
+
+		if !strings.Contains(recipe, "get.sdkman.io") {
+			t.Errorf("%s does not install SDKMAN", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "SDKMAN_DIR=/etc/skel/.sdkman") {
+			t.Errorf("%s does not install SDKMAN into /etc/skel; accounts cloud-init creates would have none, and a shared copy would have every user writing to one directory", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh") {
+			t.Errorf("%s does not install the SDKMAN shell init; `sdk` is a shell function and does not exist until it is sourced", d.Containerfile)
+		}
+	}
+}
+
+// TestContainerfiles_ShareTheBrowsersThroughTheEnvironment guards the setting
+// that decides whether a non-interactive command can drive a browser at all.
+//
+// Playwright looks for its browsers under ~/.cache unless
+// PLAYWRIGHT_BROWSERS_PATH says otherwise. The image installs them once into
+// /opt/ms-playwright, so every account has to see that variable -- including
+// the `ssh <vm> node script.js` an agent actually runs, which reads
+// /etc/environment through PAM but never sources a profile script.
+func TestContainerfiles_ShareTheBrowsersThroughTheEnvironment(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright") {
+			t.Errorf("%s does not point Playwright at the shared browser directory", d.Containerfile)
+		}
+		if !strings.Contains(recipe, ">> /etc/environment") {
+			t.Errorf("%s does not put PLAYWRIGHT_BROWSERS_PATH in /etc/environment; a profile script would leave non-interactive commands looking in an empty ~/.cache", d.Containerfile)
+		}
+	}
+}
+
+// TestContainerfiles_SmokeTestTheDevTooling is the guard on the failure this
+// tooling is most prone to. A browser missing one shared library installs
+// perfectly and dies the instant it is launched, so only launching it during
+// the build says anything about whether a guest can drive a page.
+func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank") {
+			t.Errorf("%s does not launch Chromium during the build; a missing shared library would only surface inside a VM", d.Containerfile)
+		}
+		for _, check := range []string{"gh --version", "tea --version", "playwright --version"} {
+			if !strings.Contains(recipe, check) {
+				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
+			}
+		}
+		if !strings.Contains(recipe, "SDKMAN is missing from /etc/skel") {
+			t.Errorf("%s does not check that SDKMAN landed in /etc/skel, which is where accounts cloud-init creates get it from", d.Containerfile)
+		}
+		// sdk is a shell function, so the file existing says nothing about
+		// whether it is actually defined in a login shell.
+		if !strings.Contains(recipe, `bash -lc 'type sdk'`) {
+			t.Errorf("%s does not check that `sdk` is defined in a login shell; the profile script could be missing and the file check would still pass", d.Containerfile)
+		}
+	}
+}

@@ -228,6 +228,9 @@ instead of on every first boot, and a VM works the same way offline.
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux`, `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
+| Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
+| Browser automation | `playwright` with a headless `chromium` |
+| JVM toolchain | `sdkman` (`sdk`), for installing JDKs inside the guest |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
@@ -244,7 +247,41 @@ them; `agy` has no npm package and is installed from its vendor's script into
 pinned — they are whatever was current when the image was built, and rebuilding
 the image is how a guest gets newer ones.
 
-This is the only software in a base image that does not come from the distro's
+#### Forge CLIs, browsers, and SDKMAN
+
+`gh` comes from each distribution's own repository. `tea` does not: only Arch
+packages it, and on Ubuntu the name `tea` belongs to an unrelated text editor,
+so installing it from apt would put the wrong program at the right command.
+It is fetched from Gitea's release server on all three families instead, which
+also keeps the version identical everywhere.
+
+There is exactly one browser in the image: the Chromium build Playwright pins.
+Playwright will not drive a browser it did not install, so a distribution
+chromium next to it would be several hundred megabytes that nothing uses — and
+on Ubuntu the chromium package is a snap stub, which a VM cannot run at all.
+That browser is also exposed as plain `chromium`, so it is usable without going
+through Playwright.
+
+The browsers live in `/opt/ms-playwright`, shared by every account rather than
+downloaded per user into `~/.cache` — which a network-isolated guest could not
+do at all. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
+profile script, so it applies to non-interactive commands such as
+`ssh <vm> node script.js`, which is how an agent actually drives a browser.
+
+SDKMAN is installed per account, into `/etc/skel` so each account cloud-init
+creates gets its own copy; installing a JDK writes into that directory, so one
+shared copy would have every user on the VM writing to the same place. No JDK is
+preinstalled — run `sdk install java` in the guest. Note that `sdk` is a shell
+function, so it exists only in an interactive login shell; a script should
+source `"$SDKMAN_DIR/bin/sdkman-init.sh"` itself.
+
+A build runs `gh`, `tea`, and `playwright`, launches headless Chromium against
+`about:blank`, and checks SDKMAN is in place, failing if any of it does not
+work. Chromium is the reason that step exists: a browser missing one shared
+library installs perfectly and exits the moment it is launched.
+
+Beyond the coding agents, `tea`, Playwright's browsers, and SDKMAN are the
+software in a base image that does not come from the distro's
 own repository, and on Ubuntu it is also the only third-party repository and GPG
 key a build adds: Ubuntu 24.04 ships Node.js 18 and the agents require 22.19 or
 newer, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough

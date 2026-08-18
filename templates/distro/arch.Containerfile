@@ -170,6 +170,108 @@ RUN set -eu; \
 COPY agent-aliases.sh /etc/profile.d/agent-vm-agents.sh
 RUN chmod 0644 /etc/profile.d/agent-vm-agents.sh
 
+# The GitHub CLI, and the libraries headless Chromium links against.
+#
+# gh is packaged as github-cli here. Playwright's --with-deps only knows how to
+# install dependencies on Debian and Ubuntu, so the browser's shared libraries
+# are named explicitly. The smoke test at the end of this file is what catches
+# an incomplete list: a missing one of these is a browser that exits at once
+# with a linker error, which installing cleanly never reveals.
+RUN pacman -Syu --noconfirm --needed \
+      github-cli \
+      nss \
+      nspr \
+      atk \
+      at-spi2-atk \
+      cups \
+      libdrm \
+      libxcomposite \
+      libxdamage \
+      libxfixes \
+      libxrandr \
+      libxkbcommon \
+      mesa \
+      alsa-lib \
+      pango \
+      cairo \
+ && pacman -Scc --noconfirm
+
+# tea, the Gitea CLI.
+#
+# Only Arch packages it, and on Ubuntu the name is already taken by an
+# unrelated text editor -- installing "tea" there would silently give a guest
+# the wrong program. So it comes from Gitea's own release server on all three,
+# which also keeps the version the same everywhere.
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64 | amd64) arch=amd64 ;; \
+      aarch64 | arm64) arch=arm64 ;; \
+      *) echo "no tea release for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    version="$(curl -fsSL https://dl.gitea.com/tea/ | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | tail -n1)"; \
+    if [ -z "${version}" ]; then \
+      echo "could not work out the latest tea version from Gitea's release index" >&2; \
+      exit 1; \
+    fi; \
+    curl -fsSL -o /usr/local/bin/tea \
+      "https://dl.gitea.com/tea/${version}/tea-${version}-linux-${arch}"; \
+    chmod 0755 /usr/local/bin/tea
+
+# Playwright, and the one Chromium in this image.
+#
+# The browsers go to /opt/ms-playwright rather than the per-user default under
+# ~/.cache, so that every account on the VM shares one copy instead of each
+# downloading its own on first use -- which a network-isolated guest could not
+# do at all.
+#
+# PLAYWRIGHT_BROWSERS_PATH goes in /etc/environment rather than a profile
+# script because PAM applies it to every session, including the
+# non-interactive `ssh <vm> node script.js` that an agent actually uses. A
+# profile.d file would leave exactly that case pointing at an empty ~/.cache.
+RUN npm install -g playwright \
+ && npm cache clean --force
+
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright install chromium
+RUN printf 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright\n' >> /etc/environment
+
+# Expose that browser as `chromium`, so it is usable without going through
+# Playwright. See the script for why there is only one Chromium here.
+COPY chromium.sh /usr/local/bin/chromium
+RUN chmod 0755 /usr/local/bin/chromium
+
+# SDKMAN, installed into /etc/skel so each account cloud-init creates gets its
+# own copy -- installing a JDK writes into it, so a single shared directory
+# would have every user on the VM writing to the same place. rcupdate=false
+# stops the installer appending its own block to a shell profile; the file
+# copied in below does that job for every account at once.
+RUN set -eu; \
+    SDKMAN_DIR=/etc/skel/.sdkman bash -c 'curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash'; \
+    cp -a /etc/skel/.sdkman /root/.sdkman
+
+COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh
+RUN chmod 0644 /etc/profile.d/agent-vm-sdkman.sh
+
+# Run each of these once, and fail the build if any of them does not work.
+#
+# Chromium is the reason this step exists. A browser with one shared library
+# missing installs perfectly and then exits the moment it is launched, so
+# "playwright install succeeded" says nothing about whether a guest can
+# actually drive a page. Launching it here is the only thing that does.
+RUN set -eu; \
+    gh --version >/dev/null || { echo "gh installed but cannot run" >&2; exit 1; }; \
+    tea --version >/dev/null || { echo "tea installed but cannot run" >&2; exit 1; }; \
+    playwright --version >/dev/null || { echo "playwright installed but cannot run" >&2; exit 1; }; \
+    if ! chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>/tmp/chromium-smoke.log; then \
+      echo "chromium installed but cannot start headless:" >&2; \
+      tail -n 20 /tmp/chromium-smoke.log >&2; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/chromium-smoke.log; \
+    [ -s /etc/skel/.sdkman/bin/sdkman-init.sh ] \
+      || { echo "SDKMAN is missing from /etc/skel, so accounts cloud-init creates will not have it" >&2; exit 1; }; \
+    bash -lc 'type sdk' >/dev/null 2>&1 \
+      || { echo "sdk is not defined in a login shell; the profile script or the SDKMAN install is wrong" >&2; exit 1; }
+
 # Arch ships Docker in its own repositories, so no third-party repository or
 # convenience script is involved.
 RUN pacman -Syu --noconfirm --needed \
