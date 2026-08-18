@@ -225,7 +225,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Networking and diagnostics | `ping`, `traceroute`, `dig`/`nslookup`, `netcat`, `ip`, `ss` |
 | Fetching and transferring | `curl`, `wget`, `rsync`, `ssh`, `ca-certificates` |
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
-| Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux`, `htop`, `tree`, `file`, `man` |
+| Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
@@ -366,6 +366,36 @@ private key is ever placed in a base image or a cloud-init seed (see
 `--cloud-init` keeps it — an existing key is left alone. The public half is not
 added to `authorized_keys`; logging in still requires a key passed to
 `create`.
+
+#### The tmux session menu
+
+An interactive login lands on a small menu rather than a bare prompt, because
+work in a VM is nearly always work in tmux: a dropped connection loses the run
+unless what it was doing lives in a session that outlived the shell.
+
+```
+tmux — 2 session(s) on build-01
+  n) new session
+  a) attach to a session
+  l) list sessions
+  q) exit to the shell
+Choice:
+```
+
+`n` asks for a name — letters, numbers, underscore and dash, or empty for a
+generated `agent-<short id>` — and attaches to that name if it already exists.
+`a` lists the sessions and takes either a number from that list or a name, with
+TAB completing it and listing the candidates when the prefix is ambiguous. `q`
+leaves a plain shell, and so does `Ctrl-D`; detaching from a session comes back
+to the menu. The menu itself is `agent-vm-menu`, so it can be run again from
+the shell.
+
+It is deliberately invisible to everything that is not a person at a terminal:
+it runs only for an interactive shell with a terminal on both ends, never
+inside tmux, and never for `agent-vm ssh <vm> -- <command>`, which is what an
+agent driving the VM uses. Set `AGENT_VM_NO_MENU=1` in the environment, or
+remove `/etc/profile.d/zz-agent-vm-tmux-menu.sh` through `--cloud-init`, to get
+a plain shell at every login.
 
 Every base image also ships a tmux configuration at `~/.tmux.conf` for root and
 for the login user cloud-init creates: mouse mode and a large scrollback, vi

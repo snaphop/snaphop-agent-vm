@@ -71,6 +71,8 @@ var buildContextFiles = []string{
 	"chromium.sh",
 	"sdkman.sh",
 	"user-setup.sh",
+	"tmux-menu.sh",
+	"tmux-menu-profile.sh",
 }
 
 // Builder produces base images.

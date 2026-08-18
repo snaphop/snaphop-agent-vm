@@ -17,6 +17,17 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- An interactive SSH login now lands on a tmux session menu: start a session,
+  attach to one (by number, or by name with TAB completion), list them, or quit
+  to a plain shell. Detaching returns to the menu, and the menu is
+  `agent-vm-menu` if you want it again later.
+
+  It runs only for a person at a terminal — an interactive shell with a
+  terminal on both ends, not already inside tmux — so `agent-vm ssh <vm> --
+  <command>`, `rsync`, and anything else scripted is untouched. Set
+  `AGENT_VM_NO_MENU=1`, or remove `/etc/profile.d/zz-agent-vm-tmux-menu.sh`
+  through `--cloud-init`, for a plain shell at every login.
+
 - Base images now carry the virtualization stack, so a guest can run VMs of its
   own — including another `agent-vm`: `qemu-kvm`, libvirt (enabled at boot),
   `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, and `podman`. Nested
