@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/github"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/guestinit"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
@@ -58,8 +60,10 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	cloudInit := flags.String("cloud-init", "", "extra cloud-init user-data merged into the generated user-data")
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
+	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
+	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
-	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable")
+	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable (default: this account's ~/.ssh identities)")
 	var virtInstallArgs repeatedFlag
 	flags.Var(&virtInstallArgs, "virt-install-arg", "extra argument passed through to virt-install; repeatable")
 
@@ -72,6 +76,14 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 	if *noStart {
 		return errNoStart(name)
+	}
+	// The key only exists inside the guest, so it can only be read once the
+	// guest is up. Asking for both would be asking for a key that cannot be
+	// fetched.
+	if *githubSSHKey && *waitForSSH <= 0 {
+		return exitf(ExitUsage,
+			"--github-ssh-key needs --wait-for-ssh: the key is generated inside the guest on first boot\n"+
+				"  and is read over SSH once it is reachable.")
 	}
 
 	cfg, err := app.ConfigWith(config.Overrides{
@@ -90,9 +102,33 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	// Key material and operator-supplied user-data are read before anything on
 	// the host changes, so a typo in a path is a usage error rather than a
 	// half-created VM.
-	keys, err := guestinit.LoadPublicKeys(cfg.SSHKeys)
+	keyPaths := cfg.SSHKeys
+	keys, err := guestinit.LoadPublicKeys(keyPaths)
 	if err != nil {
 		return err
+	}
+	if len(keyPaths) == 0 {
+		// Nothing named a key, so fall back to the operator's own OpenSSH
+		// identities, the same way `ssh` offers them without -i.
+		keys, keyPaths = defaultSSHKeys()
+	}
+	if *hostAuthorizedKeys {
+		paths, err := hostAuthorizedKeysPaths()
+		if err != nil {
+			return err
+		}
+		hostKeys, sources, err := guestinit.LoadAuthorizedKeys(paths)
+		if err != nil {
+			return err
+		}
+		// --ssh-key comes first: the keys the operator named for this VM are
+		// the ones they will look for at the top of the guest's
+		// authorized_keys. Duplicates between the two sources appear once.
+		keys = mergeKeys(keys, hostKeys)
+		keyPaths = append(append([]string{}, keyPaths...), sources...)
+	}
+	if len(keys) == 0 {
+		return errNoSSHKeys()
 	}
 	extraUserData, err := readExtraUserData(*cloudInit)
 	if err != nil {
@@ -100,11 +136,22 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	if app.dryRun {
-		return app.printCreatePlan(cfg, name, virtInstallArgs)
+		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey)
 	}
 
-	if err := app.requireTools(ctx, hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg); err != nil {
+	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg}
+	if *githubSSHKey {
+		tools = append(tools, hostexec.GH)
+	}
+	if err := app.requireTools(ctx, tools...); err != nil {
 		return err
+	}
+	if *githubSSHKey {
+		// Checked before anything is created, so an expired login costs
+		// nothing more than the message.
+		if err := github.New(app.runner).CheckAuth(ctx); err != nil {
+			return err
+		}
 	}
 
 	store, err := app.Store()
@@ -159,10 +206,12 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		manager:         manager,
 		manifest:        manifest,
 		keys:            keys,
+		keyPaths:        keyPaths,
 		extraUserData:   extraUserData,
 		extraSource:     *cloudInit,
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
+		githubSSHKey:    *githubSSHKey,
 	})
 }
 
@@ -196,6 +245,102 @@ func readExtraUserData(path string) ([]byte, error) {
 	return contents, nil
 }
 
+// defaultSSHKeyFiles are the OpenSSH identities `create` authorizes when no key
+// was named by --ssh-key, by the config file, or by AGENT_VM_SSH_KEY: the
+// public halves of the private keys `ssh` itself would offer, in the same
+// order. Every one that exists is authorized rather than only the first,
+// because the operator may reach the guest from any host holding any of them.
+//
+// Names only — the public key sits beside the private one with a .pub suffix.
+var defaultSSHKeyFiles = []string{
+	"id_ed25519",
+	"id_ed25519_sk",
+	"id_ecdsa",
+	"id_ecdsa_sk",
+	"id_dsa",
+	"id_rsa",
+	"id_xmss",
+}
+
+// defaultSSHKeys returns the key lines of the default identity files that
+// exist on this host, and the files they came from. A file that is missing or
+// that does not hold a public key is skipped rather than reported: these paths
+// were guessed, not asked for, so one stray file in ~/.ssh must not block a
+// create. An operator with no usable identity at all gets errNoSSHKeys.
+func defaultSSHKeys() (keys, paths []string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil
+	}
+	keys, paths = []string{}, []string{}
+	for _, name := range defaultSSHKeyFiles {
+		path := filepath.Join(home, ".ssh", name+".pub")
+		found, err := guestinit.LoadPublicKeys([]string{path})
+		if err != nil {
+			continue
+		}
+		keys = mergeKeys(keys, found)
+		paths = append(paths, path)
+	}
+	return keys, paths
+}
+
+// errNoSSHKeys reports that no key could be found at all. A VM with no
+// authorized key accepts no logins, so this is refused before anything on the
+// host changes rather than surfacing as an unreachable guest minutes later.
+func errNoSSHKeys() error {
+	return &config.ValidationError{
+		Field: "ssh keys", Value: "",
+		Err: fmt.Errorf("no SSH public key was given and this account has none of the default identities"),
+		Remedy: "Pass --ssh-key <path to a .pub file>, set [guest] ssh_keys in the config file, or create a key with `ssh-keygen -t ed25519`.\n" +
+			"  The defaults looked for are ~/.ssh/" + strings.Join(defaultSSHKeyFiles, ".pub, ~/.ssh/") + ".pub.",
+	}
+}
+
+// hostAuthorizedKeysFiles are the files --host-authorized-keys reads, relative
+// to the host account's home directory: the keys that already log in to this
+// host. Both are read because a host may keep its keys in either — sshd is
+// routinely configured with an AuthorizedKeysFile pointing at the second — and
+// a file that is not there is skipped. They are fixed locations rather than
+// flag values, because a key file somewhere else is what --ssh-key is for.
+var hostAuthorizedKeysFiles = [][]string{
+	{".ssh", "authorized_keys"},
+	{".ssh", "authorized-keys", "authorized_keys"},
+}
+
+func hostAuthorizedKeysPaths() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, &config.ValidationError{
+			Field: "host authorized_keys", Value: "~/.ssh/authorized_keys",
+			Err:    fmt.Errorf("cannot resolve the home directory: %w", err),
+			Remedy: "Pass the keys with --ssh-key instead.",
+		}
+	}
+	paths := make([]string, 0, len(hostAuthorizedKeysFiles))
+	for _, file := range hostAuthorizedKeysFiles {
+		paths = append(paths, filepath.Join(append([]string{home}, file...)...))
+	}
+	return paths, nil
+}
+
+// mergeKeys concatenates key sets, keeping the first occurrence of each key.
+// The same key reaching a guest twice would be two identical lines in its
+// authorized_keys, which is confusing rather than harmful.
+func mergeKeys(sets ...[]string) []string {
+	merged := []string{}
+	seen := map[string]bool{}
+	for _, set := range sets {
+		for _, key := range set {
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, key)
+			}
+		}
+	}
+	return merged
+}
+
 // requireTools checks the tools a command depends on, and their minimum
 // versions, before it changes anything. Failing here yields exit 3 with the
 // tool named, rather than a confusing failure halfway through.
@@ -210,16 +355,20 @@ func (a *App) requireTools(ctx context.Context, tools ...hostexec.Tool) error {
 
 // createRequest is one validated create, ready to run.
 type createRequest struct {
-	cfg             *config.Config
-	name            string
-	store           *state.Store
-	manager         *domain.Manager
-	manifest        *state.Manifest
-	keys            []string
+	cfg      *config.Config
+	name     string
+	store    *state.Store
+	manager  *domain.Manager
+	manifest *state.Manifest
+	keys     []string
+	// keyPaths are the files keys came from, recorded in vm.json so a VM's
+	// authorized keys can be traced back to their source.
+	keyPaths        []string
 	extraUserData   []byte
 	extraSource     string
 	virtInstallArgs []string
 	waitForSSH      time.Duration
+	githubSSHKey    bool
 }
 
 // createVM performs the steps that change host state. Every one of them is
@@ -240,6 +389,14 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 	address, err := a.waitForGuest(ctx, req, vm)
 	if err != nil {
 		return err
+	}
+
+	// The key is added after the VM is usable and recorded, and a failure here
+	// is reported without undoing the VM: the VM is not the thing that failed.
+	if req.githubSSHKey {
+		if err := a.addGitHubKey(ctx, req, vm, address); err != nil {
+			return err
+		}
 	}
 
 	return a.reportCreated(req, vm, address)
@@ -271,7 +428,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	} else {
 		vm.Network.Name = cfg.NATNetwork
 	}
-	vm.Guest = state.VMGuest{User: cfg.GuestUser, SSHKeyPaths: cfg.SSHKeys}
+	vm.Guest = state.VMGuest{User: cfg.GuestUser, SSHKeyPaths: req.keyPaths}
 	vm.CreatedBy.AgentVMVersion = Version
 
 	if err := store.MkdirAll(vm.Paths.Dir); err != nil {
@@ -424,6 +581,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if address != "" {
 		rows = append(rows, []string{"  address", address})
 	}
+	if key := vm.Guest.GitHubKey; key != nil {
+		rows = append(rows, []string{"  github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
+	}
 	rows = append(rows, []string{"  state dir", vm.Paths.Dir})
 	a.out.Table(rows)
 
@@ -484,7 +644,7 @@ func (r *createRollback) undo(ctx context.Context, cause error) error {
 // printCreatePlan prints what a create would run and write. Like the image
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
-func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string) error {
+func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool) error {
 	layout := state.NewLayout(cfg.StateDir)
 	vmDir := layout.VMDir(name)
 	ref := cfg.Distro
@@ -524,6 +684,12 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	a.out.Printf("virsh --connect %s domifaddr %s --source agent\n", cfg.LibvirtURI, name)
 	a.out.Printf("virsh --connect %s domiflist %s\n", cfg.LibvirtURI, name)
 	a.out.Printf("virsh --connect %s dumpxml %s\n", cfg.LibvirtURI, name)
+	if githubSSHKey {
+		a.out.Printf("gh auth status --hostname github.com\n")
+		a.out.Printf("ssh %s@<guest address> cat %s\n", cfg.GuestUser, guestPublicKeyPath)
+		a.out.Printf("gh api --method POST user/keys -f title=%q -f key=<the guest's public key> --jq .id\n",
+			githubKeyTitle(name))
+	}
 
 	for _, note := range []string{
 		fmt.Sprintf("create the state directory %s", vmDir),

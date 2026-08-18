@@ -67,6 +67,10 @@ Arch Linux:
 sudo pacman -S qemu-full libvirt virt-install podman libguestfs
 ```
 
+Optional, and only for `--github-ssh-key` on `create` and `destroy`: the GitHub
+CLI, `gh` (`apt install gh`, `dnf install gh`, `pacman -S github-cli`), logged in
+with `gh auth login`. Every other command works without it.
+
 Minimum versions, all checked by `agent-vm doctor`:
 
 | Tool | Minimum | Provides |
@@ -76,6 +80,7 @@ Minimum versions, all checked by `agent-vm doctor`:
 | `virt-install` | 4.0 | defining domains, cloud-init seeds |
 | libguestfs | 1.50 | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `podman` (or `skopeo`) | 4.0 (1.11) | OCI pull, build, flatten |
+| `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub |
 
 `skopeo` works in place of `podman` for pulling, but `podman` is preferred because
 the per-distro image recipes are `Containerfile`s. No separate cloud-init tooling

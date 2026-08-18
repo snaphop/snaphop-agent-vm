@@ -68,6 +68,22 @@ type VMNetwork struct {
 type VMGuest struct {
 	User        string   `json:"user"`
 	SSHKeyPaths []string `json:"sshKeyPaths"`
+	// GitHubKey is set when `create --github-ssh-key` uploaded the key the
+	// guest generated for itself. It is what lets `destroy` remove that key
+	// from the account afterwards, so a discarded VM does not leave an
+	// authorized key behind. Absent on every VM created without the flag.
+	GitHubKey *GitHubSSHKey `json:"githubKey,omitempty"`
+}
+
+// GitHubSSHKey identifies one key this tool added to the operator's GitHub
+// account. The id is GitHub's, and is the handle the key is removed by; the
+// public key itself is recorded so the entry can be recognized on the account
+// without trusting the title alone.
+type GitHubSSHKey struct {
+	ID        int64     `json:"id"`
+	Title     string    `json:"title"`
+	PublicKey string    `json:"publicKey"`
+	AddedAt   time.Time `json:"addedAt"`
 }
 
 // VMPaths are absolute paths inside the state directory.

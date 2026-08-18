@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,6 +160,118 @@ func TestCreate_AuthorizesTheKeyAndNeverWritesPrivateMaterial(t *testing.T) {
 	}
 	if strings.Contains(string(record), "AAAAC3Nza") {
 		t.Errorf("vm.json contains key material:\n%s", record)
+	}
+}
+
+// hostAuthorizedKeysFile points HOME at a fake host account holding one of the
+// authorized_keys files --host-authorized-keys reads. relative names the file
+// under that home directory.
+func hostAuthorizedKeysFile(t *testing.T, relative, contents string) string {
+	t.Helper()
+	home := os.Getenv("HOME")
+	if !strings.HasPrefix(home, os.TempDir()) {
+		home = t.TempDir()
+		t.Setenv("HOME", home)
+	}
+	path := filepath.Join(home, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("creating %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("writing the fake %s: %v", relative, err)
+	}
+	return path
+}
+
+func TestCreate_AuthorizesTheHostKeysAlongsideTheKeysGivenByFlag(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	hostKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	hostAuthorizedKeysFile(t, ".ssh/authorized_keys", "# the operator's laptop\n"+hostKey+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	for _, want := range []string{strings.TrimSpace(publicKey), hostKey} {
+		if !strings.Contains(string(userData), want) {
+			t.Errorf("%q was not authorized:\n%s", want, userData)
+		}
+	}
+	// Both sources are recorded, so the guest's authorized keys stay traceable.
+	if len(vm.Guest.SSHKeyPaths) != 2 ||
+		!strings.HasSuffix(vm.Guest.SSHKeyPaths[1], filepath.Join(".ssh", "authorized_keys")) {
+		t.Errorf("recorded key paths = %v, want the flag's key file and the host's authorized_keys", vm.Guest.SSHKeyPaths)
+	}
+}
+
+func TestCreate_AuthorizesTheHostKeysWithoutASSHKeyFlag(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	hostAuthorizedKeysFile(t, ".ssh/authorized_keys", publicKey)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		"create", "agent-01", "--host-authorized-keys")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	// The same key from both sources is authorized once, not twice.
+	if got := strings.Count(string(userData), strings.TrimSpace(publicKey)); got != 1 {
+		t.Errorf("the host key appears %d times in the seed, want 1:\n%s", got, userData)
+	}
+}
+
+func TestCreate_ReadsBothHostAuthorizedKeysLocations(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	nested := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	// sshd is routinely pointed at the nested file instead of the plain one,
+	// so a host that keeps its keys there must not come up empty.
+	nestedPath := hostAuthorizedKeysFile(t, ".ssh/authorized-keys/authorized_keys", nested+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if !strings.Contains(string(userData), nested) {
+		t.Errorf("the key in ~/.ssh/authorized-keys/authorized_keys was not authorized:\n%s", userData)
+	}
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{keyPath, nestedPath}) {
+		t.Errorf("recorded key paths = %v, want the flag's key file and %s", vm.Guest.SSHKeyPaths, nestedPath)
+	}
+}
+
+func TestCreate_ReportsWhenTheHostHasNoAuthorizedKeys(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--host-authorized-keys")...)
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "authorized_keys") {
+		t.Errorf("stderr does not name the missing file:\n%s", stderr)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("a missing key file must be reported before any tool runs:\n%s", fake)
 	}
 }
 
@@ -537,5 +650,82 @@ func TestCreate_JSONOutputIsTheVMRecord(t *testing.T) {
 	}
 	if vm.Name != "agent-01" || vm.SchemaVersion == 0 {
 		t.Errorf("record = %+v, want the stored vm.json", vm)
+	}
+}
+
+// defaultIdentity writes a public key into a fake host account at the path
+// `ssh` would pick an identity up from, and points HOME at it.
+func defaultIdentity(t *testing.T, name, contents string) string {
+	t.Helper()
+	return hostAuthorizedKeysFile(t, filepath.Join(".ssh", name+".pub"), contents)
+}
+
+func TestCreate_AuthorizesTheDefaultIdentitiesWhenNoKeyIsNamed(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	ed25519Path := defaultIdentity(t, "id_ed25519", publicKey)
+	rsaKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	rsaPath := defaultIdentity(t, "id_rsa", rsaKey+"\n")
+	// A private key next to them must stay on the host.
+	defaultIdentity(t, "id_ecdsa", "")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, "create", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	for _, want := range []string{strings.TrimSpace(publicKey), rsaKey} {
+		if !strings.Contains(string(userData), want) {
+			t.Errorf("%q was not authorized:\n%s", want, userData)
+		}
+	}
+	// The identities are authorized in the documented order, and the empty
+	// id_ecdsa.pub is not among them.
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{ed25519Path, rsaPath}) {
+		t.Errorf("recorded key paths = %v, want %v", vm.Guest.SSHKeyPaths, []string{ed25519Path, rsaPath})
+	}
+}
+
+func TestCreate_PrefersTheNamedKeyOverTheDefaultIdentities(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ operator@laptop"
+	defaultIdentity(t, "id_rsa", other+"\n")
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if strings.Contains(string(userData), other) {
+		t.Errorf("--ssh-key must not be widened by the default identities:\n%s", userData)
+	}
+	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{keyPath}) {
+		t.Errorf("recorded key paths = %v, want %v", vm.Guest.SSHKeyPaths, []string{keyPath})
+	}
+}
+
+func TestCreate_ReportsWhenNoKeyIsNamedAndNoneExist(t *testing.T) {
+	stateDir, _ := createEnv(t)
+	t.Setenv("HOME", t.TempDir())
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir, "create", "agent-01")
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d: %s", code, ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "--ssh-key") || !strings.Contains(stderr, "id_ed25519.pub") {
+		t.Errorf("stderr does not say what to do or which files were looked for:\n%s", stderr)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("a keyless create must be refused before any tool runs:\n%s", fake)
 	}
 }

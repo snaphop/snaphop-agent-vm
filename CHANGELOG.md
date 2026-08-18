@@ -17,6 +17,47 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create` no longer needs `--ssh-key` on a host where you already
+  have an SSH key. When no key is named by the flag, `AGENT_VM_SSH_KEY`, or the
+  config file, it authorizes the public halves of this account's OpenSSH
+  identities — `~/.ssh/id_ed25519.pub`, `id_ed25519_sk.pub`, `id_ecdsa.pub`,
+  `id_ecdsa_sk.pub`, `id_dsa.pub`, `id_rsa.pub`, and `id_xmss.pub` — the same
+  files `ssh` offers when run without `-i`. Every one that exists is used;
+  files that are absent or that do not hold a public key are skipped. Naming a
+  key turns the fallback off, and a host with no key and none of these
+  identities is still a usage error, now naming the files that were tried.
+
+- `agent-vm create --host-authorized-keys` also authorizes the keys that
+  already log in to this host account inside the new VM, so whoever can log in
+  to the host can log in to the VMs it creates. It reads both
+  `~/.ssh/authorized_keys` and `~/.ssh/authorized-keys/authorized_keys` — sshd
+  is routinely pointed at the second — and skips whichever is absent. It
+  combines with `--ssh-key`: the guest gets the keys named by the flag and the
+  host's keys, with a key present in more than one of them authorized once.
+  Either source alone is enough.
+
+  Only plain key lines are used — comments and blank lines are skipped, and an
+  entry carrying OpenSSH options (`command=`, `restrict`, `from=`) is refused
+  rather than silently stripped of its restriction or silently dropped. Finding
+  no host key at all is reported as a usage error before anything is created.
+  Every key file that was read is recorded in `vm.json` as a path; key material
+  is never written there.
+
+- `agent-vm create --github-ssh-key` adds the SSH key a VM generates for itself
+  on first boot to your GitHub account, so an agent inside the VM can push
+  without a key being pasted in by hand. The key is titled
+  `agent-vm <name> on <host>`, and `agent-vm destroy --github-ssh-key` removes
+  that same key again when the VM goes away.
+
+  `gh` does the talking, on the host, with your existing login: no GitHub
+  credential ever enters the untrusted guest, and the guest's private key never
+  leaves it. `gh` is optional — `doctor` reports it as `skip` when it is absent,
+  and every other command works without it.
+
+  Removing the key is opt-in on both ends. A `destroy` without the flag says the
+  key is still on your account and prints the `gh` command that removes it,
+  rather than deleting anything you did not ask it to.
+
 - An interactive SSH login now lands on a tmux session menu: start a session,
   attach to one (by number, or by name with TAB completion), list them, or quit
   to a plain shell. Detaching returns to the menu, and the menu is

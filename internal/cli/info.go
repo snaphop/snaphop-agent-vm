@@ -101,6 +101,9 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 		[]string{"ssh keys", strings.Join(vm.Guest.SSHKeyPaths, ", ")},
 		[]string{"libvirt", vm.LibvirtURI},
 	)
+	if key := vm.Guest.GitHubKey; key != nil {
+		rows = append(rows, []string{"github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
+	}
 	if detail.Disk != nil {
 		rows = append(rows,
 			[]string{"disk (virtual)", detail.Disk.VirtualSize.Human()},

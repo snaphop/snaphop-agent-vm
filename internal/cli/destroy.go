@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
@@ -14,7 +15,7 @@ func destroyCommand() *command {
 	return &command{
 		name:    "destroy",
 		summary: "power off a VM, undefine it, and delete its state",
-		usage:   "agent-vm destroy <name> [--keep-disk] [--force]",
+		usage:   "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]",
 		run:     runDestroy,
 	}
 }
@@ -25,7 +26,8 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	keepDisk := flags.Bool("keep-disk", false, "keep the overlay and state directory; only remove the libvirt domain")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
-	name, err := parseNamed(flags, args, "agent-vm destroy <name> [--keep-disk] [--force]")
+	githubSSHKey := flags.Bool("github-ssh-key", false, "also remove this VM's SSH key from your GitHub account, using gh")
+	name, err := parseNamed(flags, args, "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]")
 	if err != nil {
 		return err
 	}
@@ -54,13 +56,30 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 		}
 	}()
 
-	confirmed, err := app.confirm(destroyPrompt(vm, *keepDisk, *force))
+	confirmed, err := app.confirm(destroyPrompt(vm, *keepDisk, *force, *githubSSHKey))
 	if err != nil {
 		return err
 	}
 	if !confirmed {
 		app.out.Progress("Cancelled.\n")
 		return nil
+	}
+
+	// The GitHub key is removed first, while the VM is still intact: a gh
+	// failure then leaves a VM whose record still names the key, which is what
+	// a retry needs. Doing it last would risk deleting the only record of a key
+	// that is still on the account.
+	if *githubSSHKey {
+		if _, err := app.versions.Require(ctx, hostexec.GH); err != nil {
+			return err
+		}
+		if err := app.removeGitHubKey(ctx, vm); err != nil {
+			return err
+		}
+	} else if vm.Guest.GitHubKey != nil {
+		app.out.Progress("Note: %s's SSH key %q is still on your GitHub account.\n"+
+			"  Remove it with `agent-vm destroy --github-ssh-key`, or by hand: gh api --method DELETE user/keys/%d\n",
+			vm.Name, vm.Guest.GitHubKey.Title, vm.Guest.GitHubKey.ID)
 	}
 
 	return app.destroyVM(ctx, destroyRequest{
@@ -75,13 +94,16 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 
 // destroyPrompt says exactly what is about to be removed. A confirmation that
 // does not name the consequence is not a confirmation.
-func destroyPrompt(vm *state.VM, keepDisk, force bool) string {
+func destroyPrompt(vm *state.VM, keepDisk, force, githubSSHKey bool) string {
 	what := fmt.Sprintf("Destroy VM %s: undefine the domain and delete %s?", vm.Name, vm.Paths.Dir)
 	if keepDisk {
 		what = fmt.Sprintf("Undefine the domain for VM %s, keeping %s?", vm.Name, vm.Paths.Dir)
 	}
 	if force {
 		what += " It will be powered off immediately, losing anything the guest has not written."
+	}
+	if githubSSHKey && vm.Guest.GitHubKey != nil {
+		what += fmt.Sprintf(" Its SSH key %q will also be removed from your GitHub account.", vm.Guest.GitHubKey.Title)
 	}
 	return what
 }

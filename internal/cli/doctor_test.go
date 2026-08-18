@@ -20,6 +20,7 @@ func healthyHost() *hostexec.Fake {
 		Respond("podman --version", hostexec.FakeResponse{Stdout: "podman version 4.9.3\n"}).
 		Respond("ip -V", hostexec.FakeResponse{Stdout: "ip utility, iproute2-6.5.0\n"}).
 		Respond("ssh -V", hostexec.FakeResponse{Stderr: "OpenSSH_9.6p1, OpenSSL 3.0.13\n"}).
+		Respond("gh --version", hostexec.FakeResponse{Stdout: "gh version 2.62.0 (2024-11-14)\n"}).
 		Respond("virsh --connect qemu:///system version", hostexec.FakeResponse{Stdout: "Compiled against library: libvirt 9.0.0\n"}).
 		Respond("virsh --connect qemu:///system net-list --name --all", hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
 		Respond("virsh --connect qemu:///system net-list --name", hostexec.FakeResponse{Stdout: "agent-vm-nat\n"})
@@ -236,5 +237,20 @@ func TestDoctor_RejectsArguments(t *testing.T) {
 
 	if got := exitCodeFor(err); got != ExitUsage {
 		t.Errorf("exit code = %d, want %d", got, ExitUsage)
+	}
+}
+
+// gh is optional: it is needed only by --github-ssh-key, so a host without it
+// is still a ready host.
+func TestDoctor_AMissingGHIsReportedWithoutFailingTheHost(t *testing.T) {
+	fake := healthyHost()
+	fake.Missing["gh"] = true
+
+	report, code := runDoctorWith(t, fake)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0: a missing gh must not fail doctor", code)
+	}
+	if got := find(t, report, "gh").Status; got != statusSkip {
+		t.Errorf("gh status = %q, want %q", got, statusSkip)
 	}
 }

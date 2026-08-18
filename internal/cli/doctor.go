@@ -76,6 +76,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkKVM())
 	report.Checks = append(report.Checks, checkGroups(cfg)...)
 	report.Checks = append(report.Checks, checkTools(ctx, app)...)
+	report.Checks = append(report.Checks, checkOptionalTools(ctx, app)...)
 
 	libvirt := checkLibvirt(ctx, app, cfg)
 	report.Checks = append(report.Checks, libvirt)
@@ -248,6 +249,39 @@ func checkTools(ctx context.Context, app *App) []check {
 				detail += fmt.Sprintf(" (minimum %s)", tool.Minimum)
 			}
 			checks = append(checks, check{Name: tool.Name, Status: statusPass, Detail: detail})
+		}
+	}
+	return checks
+}
+
+// checkOptionalTools reports the tools only some flags need. A host without
+// them is still a working host, so nothing here can fail the report — it exists
+// so an operator can see in advance whether those flags will work.
+func checkOptionalTools(ctx context.Context, app *App) []check {
+	tools := hostexec.OptionalTools()
+	checks := make([]check, 0, len(tools))
+
+	for _, tool := range tools {
+		version, err := app.versions.Require(ctx, tool)
+
+		var missing *hostexec.NotFoundError
+		switch {
+		case errors.As(err, &missing):
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusSkip,
+				Detail: fmt.Sprintf("not installed; only `--github-ssh-key` needs it (package %s)", tool.Package),
+			})
+		case err != nil:
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusWarn,
+				Detail: err.Error(),
+				Remedy: "`--github-ssh-key` will not work until this is fixed; every other command is unaffected.",
+			})
+		default:
+			checks = append(checks, check{
+				Name: tool.Name, Status: statusPass,
+				Detail: fmt.Sprintf("%s (optional; used by --github-ssh-key)", version),
+			})
 		}
 	}
 	return checks
