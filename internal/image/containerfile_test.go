@@ -188,6 +188,71 @@ func TestContainerfiles_InstallTheGuestTmuxConfig(t *testing.T) {
 	}
 }
 
+// TestContainerfiles_InstallTheTmuxSessionMenu guards the menu an interactive
+// login lands on, and the guards that keep it out of everything else.
+//
+// The menu is only useful if it is unavoidable for a person and invisible to a
+// script: a prompt reached by `ssh <vm> some-command`, or by an agent driving
+// the VM, is a hang with no one there to answer it.
+func TestContainerfiles_InstallTheTmuxSessionMenu(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "COPY tmux-menu.sh /usr/local/bin/agent-vm-menu") {
+			t.Errorf("%s does not install the tmux session menu where every account can run it", d.Containerfile)
+		}
+		// zz- so the menu starts after PATH and SDKMAN are set: the shells
+		// tmux starts inherit the environment this login shell ends up with.
+		if !strings.Contains(recipe, "COPY tmux-menu-profile.sh /etc/profile.d/zz-agent-vm-tmux-menu.sh") {
+			t.Errorf("%s does not start the menu from a profile script that sorts after the rest of /etc/profile.d", d.Containerfile)
+		}
+	}
+}
+
+// TestTmuxMenu_OnlyRunsWhereAPersonIsWatching guards the profile script's
+// guards. Each one prevents a hang rather than a cosmetic problem.
+func TestTmuxMenu_OnlyRunsWhereAPersonIsWatching(t *testing.T) {
+	profile := readTemplate(t, "distro/tmux-menu-profile.sh")
+
+	for _, guard := range []struct{ needle, why string }{
+		{"case $- in", "does not check that the shell is interactive, so `ssh <vm> some-command` would stop at the menu"},
+		{"[ -t 0 ] && [ -t 1 ] || return", "does not require a terminal on both ends, so a piped session would stop at the menu"},
+		{`[ -z "${TMUX:-}" ] || return`, "does not check TMUX, so a shell inside tmux would offer to nest another session"},
+		{`[ -z "${AGENT_VM_NO_MENU:-}" ] || return`, "has no opt-out; AGENT_VM_NO_MENU is the documented one"},
+	} {
+		if !strings.Contains(profile, guard.needle) {
+			t.Errorf("the tmux menu profile script %s", guard.why)
+		}
+	}
+}
+
+// TestTmuxMenu_AlwaysLeavesAWayOut is the property that makes it safe to put a
+// prompt in front of every login: a menu a person cannot leave has taken the
+// VM away from them.
+func TestTmuxMenu_AlwaysLeavesAWayOut(t *testing.T) {
+	menu := readTemplate(t, "distro/tmux-menu.sh")
+
+	if !strings.Contains(menu, "q | Q) break") {
+		t.Error("the tmux menu has no quit option, so a login could not reach a plain shell")
+	}
+	// A failed read is end of input. Ignoring it spins the loop forever and
+	// the session becomes unusable rather than dropping to a shell.
+	if !strings.Contains(menu, `read -r -n1 -p "Choice: " choice || break`) {
+		t.Error("the tmux menu does not break out of its loop at end of input, so ^D would spin it forever")
+	}
+	if !strings.Contains(menu, `read -r -p "Session name (empty for a generated one): " name || return`) {
+		t.Error("the tmux menu's new-session prompt does not stop at end of input")
+	}
+	// uuidgen is packaged separately on Ubuntu and is not in these images.
+	if strings.Contains(menu, "$(uuidgen") {
+		t.Error("the tmux menu calls uuidgen, which Ubuntu does not install; read /proc/sys/kernel/random/uuid instead")
+	}
+}
+
 // TestTmuxConfig_IsShippedInTheBuildContext ties the COPY above to the file the
 // builder actually writes next to the Containerfile. A COPY of a file that is
 // not in the build context fails the build minutes in, after the package

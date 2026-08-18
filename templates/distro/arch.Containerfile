@@ -72,6 +72,20 @@ RUN pacman -Syu --noconfirm --needed \
 COPY tmux.conf /etc/skel/.tmux.conf
 RUN install -m 0644 /etc/skel/.tmux.conf /root/.tmux.conf
 
+# The tmux session menu an interactive login lands on.
+#
+# The menu is a program in /usr/local/bin so that every account finds it and
+# can run it again after leaving it, and the profile script that starts it is
+# separate so an operator can drop the one file — or set AGENT_VM_NO_MENU — to
+# get a plain shell without losing the command. See both files for the
+# reasoning; the guards in the profile script are what keep this out of
+# `ssh <vm> some-command`.
+COPY tmux-menu.sh /usr/local/bin/agent-vm-menu
+RUN chmod 0755 /usr/local/bin/agent-vm-menu
+
+COPY tmux-menu-profile.sh /etc/profile.d/zz-agent-vm-tmux-menu.sh
+RUN chmod 0644 /etc/profile.d/zz-agent-vm-tmux-menu.sh
+
 # Node.js, which the agent CLIs below run on. Arch is a rolling target, so its
 # own package is always current enough and no third-party repository is
 # involved. The version assertion below is what catches it if that changes.
