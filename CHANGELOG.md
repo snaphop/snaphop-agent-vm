@@ -28,9 +28,16 @@ migration or rebuild step a user has to take.
   hangs instead of failing, because the packets are dropped rather than
   rejected. The check reads `ufw`'s configuration only, never running `ufw` or
   changing a rule, and passes when `ufw` is absent, disabled, forwarding by
-  default, or has a rule accepting forwarded traffic, naming the interfaces
+  default, or has rules accepting forwarded traffic, naming the interfaces
   those rules cover. It warns rather than fails, because the live ruleset needs
   root to read and a false failure would exit non-zero on a working host.
+  Forwarding is only half of what NAT mode needs, so the check covers the other
+  half too: a guest asks the host's dnsmasq for its DHCP lease and its DNS, and
+  that traffic is inbound rather than forwarded, governed by `ufw`'s separate
+  `deny (incoming)` default. A host carrying only the route rule looks
+  configured and still produces guests that never get an address, so an
+  interface allowed to forward but not allowed to answer DHCP (67/udp) or DNS
+  (53) is reported, with the rules to add for that specific interface.
 - `agent-vm doctor` now reports whether the account the hypervisor runs as can
   reach the state directory. Under `qemu:///system` QEMU runs as libvirt's own
   user (`libvirt-qemu`, `qemu`, or whatever `/etc/libvirt/qemu.conf` sets), which

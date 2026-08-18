@@ -113,10 +113,21 @@ DNS, because the resolver is dnsmasq on the host bridge and that traffic is
 delivered locally rather than forwarded — while every outbound connection hangs
 rather than failing, because the packets are dropped rather than rejected.
 
+Forwarding is only half of what NAT mode needs, and the check covers both
+halves. The guest also talks *to* the host — it asks the host's dnsmasq for a
+DHCP lease and for every DNS answer — and that traffic is inbound rather than
+forwarded, so `ufw`'s separate `deny (incoming)` default governs it. A host
+carrying only the route rule looks configured and still produces guests that
+never get an address, so the check reports it when an interface is allowed to
+forward but is not allowed to answer DHCP (67/udp) or DNS (53); the remedy names
+that interface directly, because the forward rule already established it.
+
 The check reads `ufw`'s configuration only; it never runs `ufw` and never
 changes a rule. It reports `pass` when `ufw` is absent, disabled, forwarding by
-default, or has a rule accepting forwarded traffic (naming the interfaces those
-rules cover, so you can confirm the right bridge is among them). It reports
+default, or has rules accepting forwarded traffic *and* the guest's DHCP and DNS
+(naming the interfaces those rules cover, so you can confirm the right bridge is
+among them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
+them never match on an IPv4-only NAT network. It reports
 `warn` — never `fail` — when `ufw` is enabled and dropping, because the live
 ruleset cannot be read without root and a false failure would exit non-zero on a
 working host. The remedy names the NAT network to look the bridge up with, since
