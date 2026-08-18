@@ -26,6 +26,25 @@ hypervisor, the outer host must expose nested virtualization; without KVM the
 tool refuses to run rather than falling back to software emulation, which is too
 slow to be useful.
 
+### Nested Virtualization
+
+Every VM is given the host CPU, so a guest can run VMs of its own — including
+another `agent-vm` — provided the host's KVM module allows nesting:
+
+```bash
+# Should print Y (Intel) or 1 (AMD)
+cat /sys/module/kvm_intel/parameters/nested 2>/dev/null || \
+  cat /sys/module/kvm_amd/parameters/nested
+
+# To enable it, for Intel; use kvm_amd on AMD
+echo 'options kvm_intel nested=1' | sudo tee /etc/modprobe.d/kvm-nested.conf
+sudo modprobe -r kvm_intel && sudo modprobe kvm_intel   # or reboot
+```
+
+Recent kernels enable this by default. Where it is off, VMs started inside a
+guest still run — QEMU falls back to emulation — but they are slow enough to be
+unusable for real work.
+
 ## 2. Packages
 
 Debian/Ubuntu:

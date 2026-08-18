@@ -16,5 +16,6 @@ import "embed"
 //go:embed network/*.xml.tmpl distro/*.Containerfile distro/tmux.conf
 //go:embed distro/claude-settings.json distro/codex-config.toml distro/opencode.json
 //go:embed distro/agent-aliases.sh distro/chromium.sh distro/sdkman.sh
+//go:embed distro/user-setup.sh
 //go:embed cloud-init/*.tmpl
 var FS embed.FS

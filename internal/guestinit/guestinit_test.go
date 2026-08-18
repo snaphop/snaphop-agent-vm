@@ -61,21 +61,23 @@ func TestGenerate_AuthorizesEveryKeyAndNoPassword(t *testing.T) {
 	}
 }
 
-func TestGenerate_PutsTheLoginUserInTheDockerGroup(t *testing.T) {
+func TestGenerate_PutsTheLoginUserInTheGuestToolingGroups(t *testing.T) {
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	// The membership has to be part of creating the account: a group added
+	// The memberships have to be part of creating the account: a group added
 	// afterwards does not apply to a session that has already started, and the
 	// first SSH session can land before any boot-time unit has run.
-	if !strings.Contains(string(got), "    groups:\n      - docker\n") {
-		t.Errorf("the login user is not created in the docker group:\n%s", got)
+	if !strings.Contains(string(got), "    groups:\n      - docker\n      - libvirt\n      - kvm\n") {
+		t.Errorf("the login user is not created in the docker, libvirt, and kvm groups:\n%s", got)
 	}
-	// Declaring the group is what lets a base image that has no Docker — one
-	// built before the guest tooling landed — still create the account.
-	if !strings.Contains(string(got), "\ngroups:\n  - docker\n") {
-		t.Errorf("the docker group is not declared, so a VM on an older base image would lose its login user:\n%s", got)
+	// Declaring the groups is what lets a base image that has none of that
+	// software — one built before the guest tooling landed — still create the
+	// account. cloud-init creates groups before users, so a group named for an
+	// account but missing from the image would leave the VM unreachable.
+	if !strings.Contains(string(got), "\ngroups:\n  - docker\n  - libvirt\n  - kvm\n") {
+		t.Errorf("the guest tooling groups are not declared, so a VM on an older base image would lose its login user:\n%s", got)
 	}
 }
 

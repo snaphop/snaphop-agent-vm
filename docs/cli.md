@@ -230,7 +230,9 @@ instead of on every first boot, and a VM works the same way offline.
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Browser automation | `playwright` with a headless `chromium` |
-| JVM toolchain | `sdkman` (`sdk`), for installing JDKs inside the guest |
+| JVM toolchain | `sdkman` (`sdk`) with the latest Temurin JDK and Maven (`java`, `mvn`) |
+| Go toolchain | `go`, `golangci-lint` |
+| Virtualization | `qemu-kvm`, `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
@@ -270,14 +272,21 @@ profile script, so it applies to non-interactive commands such as
 
 SDKMAN is installed per account, into `/etc/skel` so each account cloud-init
 creates gets its own copy; installing a JDK writes into that directory, so one
-shared copy would have every user on the VM writing to the same place. No JDK is
-preinstalled — run `sdk install java` in the guest. Note that `sdk` is a shell
-function, so it exists only in an interactive login shell; a script should
-source `"$SDKMAN_DIR/bin/sdkman-init.sh"` itself.
+shared copy would have every user on the VM writing to the same place. The
+newest Temurin JDK SDKMAN offers and Maven are installed into that copy during
+the build, so every account has `java` and `mvn` without downloading anything —
+which a network-isolated guest could not do anyway. Neither version is pinned:
+they are whatever was current when the image was built.
+
+Note that SDKMAN puts them on the path through a profile script, so `java`,
+`mvn`, and `sdk` itself exist in a login shell and not in a non-interactive
+`ssh <vm> mvn -version`. Use `ssh <vm> bash -lc 'mvn -version'`, or have the
+script source `"$SDKMAN_DIR/bin/sdkman-init.sh"` itself. That is how SDKMAN
+works everywhere, not something this image imposes.
 
 A build runs `gh`, `tea`, and `playwright`, launches headless Chromium against
-`about:blank`, and checks SDKMAN is in place, failing if any of it does not
-work. Chromium is the reason that step exists: a browser missing one shared
+`about:blank`, runs `java` and `mvn` in a login shell, runs each virtualization
+tool once, and fails if any of it does not work. Chromium is the reason that step exists: a browser missing one shared
 library installs perfectly and exits the moment it is launched.
 
 Beyond the coding agents, `tea`, Playwright's browsers, and SDKMAN are the
@@ -319,19 +328,44 @@ keys or logins have to reach each VM separately — through `--cloud-init`, or b
 authenticating inside the guest.
 
 The Docker daemon is enabled, so it is running when the VM becomes reachable.
-The login user is placed in the `docker` group by the generated cloud-init
-user-data, at the moment the account is created, so `docker` works without
-`sudo` in the very first SSH session. The base image also carries a one-shot
-unit that adds any other interactive account to the group after cloud-init has
-finished, which covers accounts an operator's own `--cloud-init` file creates.
-This grants the login user nothing it did not already have: that account has
-passwordless `sudo` by design (the guest is untrusted and root inside it is
-expected — see [SECURITY.md](../SECURITY.md)).
+The login user is placed in the `docker`, `libvirt`, and `kvm` groups by the
+generated cloud-init user-data, at the moment the account is created, so
+`docker` and `virsh` work without `sudo` in the very first SSH session. The base
+image also carries a one-shot unit that adds any other interactive account to
+those groups after cloud-init has finished, which covers accounts an operator's
+own `--cloud-init` file creates. This grants the login user nothing it did not
+already have: that account has passwordless `sudo` by design (the guest is
+untrusted and root inside it is expected — see [SECURITY.md](../SECURITY.md)).
 
-A base image built before Docker was installed into it has no `docker` group.
-Such an image still boots: the generated user-data declares the group, and
+A base image built before that software was installed into it has none of those
+groups. Such an image still boots: the generated user-data declares them, and
 cloud-init creates groups before users, so the account is never left uncreated
 by a missing group.
+
+#### Nested virtualization
+
+A guest can run VMs of its own, including another `agent-vm`. Every VM is given
+the host CPU (`--cpu host-passthrough`), so the guest sees the host's VMX or SVM
+feature and `/dev/kvm` works inside it; the base image sets `nested=1` for both
+KVM modules so a VM inside that VM can nest once more. This needs nested
+virtualization enabled on the **host** — see
+[host-setup.md](./host-setup.md) — and it is off on some hosts, in which case
+the nested VMs fall back to emulation and are slow rather than broken.
+
+libvirt is enabled in the guest, so a nested `agent-vm create` finds a running
+daemon. The `dnsmasq` in the image is the binary libvirt starts per network; no
+system-wide resolver is enabled, which would contend with those instances.
+
+#### Per-account SSH keys
+
+The one-shot unit above also generates an `ed25519` key pair at
+`~/.ssh/id_ed25519` for every interactive account, on first boot, if that path
+does not already exist. It is generated inside the guest and never leaves it: no
+private key is ever placed in a base image or a cloud-init seed (see
+[SECURITY.md](../SECURITY.md)). An operator who supplies their own key through
+`--cloud-init` keeps it — an existing key is left alone. The public half is not
+added to `authorized_keys`; logging in still requires a key passed to
+`create`.
 
 Every base image also ships a tmux configuration at `~/.tmux.conf` for root and
 for the login user cloud-init creates: mouse mode and a large scrollback, vi

@@ -17,6 +17,53 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now carry the virtualization stack, so a guest can run VMs of its
+  own — including another `agent-vm`: `qemu-kvm`, libvirt (enabled at boot),
+  `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, and `podman`. Nested
+  virtualization is enabled inside the guest as well, and every VM already ran
+  with the host CPU, so `/dev/kvm` works inside one. This needs nested
+  virtualization enabled on the host; `docs/host-setup.md` says how to check.
+  On Ubuntu the image takes `dnsmasq-base` rather than `dnsmasq`: libvirt runs
+  its own instance per network, and the full package's system-wide resolver
+  would contend with it.
+
+- Base images now carry a Go toolchain and `golangci-lint`, which is installed
+  from its own installer on all three families — Ubuntu does not package it, and
+  elsewhere the version differs per family.
+
+- SDKMAN in a base image now comes with the newest Temurin JDK it offers and
+  with Maven already installed, so `java` and `mvn` work in a guest without
+  downloading anything. As before they are on the path of a login shell only;
+  use `ssh <vm> bash -lc '…'` from a script.
+
+- Every interactive account in a guest now gets an `ed25519` SSH key pair at
+  `~/.ssh/id_ed25519`, generated on first boot if that path does not already
+  exist. It is generated inside the guest and never leaves it — no private key
+  goes into a base image or a cloud-init seed — and an existing key, such as one
+  an operator supplied through `--cloud-init`, is left alone.
+
+- The generated cloud-init user-data now creates the login user in the
+  `libvirt` and `kvm` groups as well as `docker`, so `virsh` works without
+  `sudo` in the very first SSH session. This is a change to the generated
+  user-data, which is a public contract: the golden files record it. A base
+  image built before this change has no such groups, and still boots — the
+  user-data declares them, and cloud-init creates groups before users.
+
+  The base image's one-shot account unit, which is the backstop for accounts
+  the seed does not create, was renamed from `agent-vm-docker-group.service` to
+  `agent-vm-user-setup.service` and now does both jobs above.
+
+### Fixed
+
+- The base image's one-shot account unit never ran. It was wanted by
+  `multi-user.target` and ordered after `cloud-final.service`, which cloud-init
+  itself orders *after* that target — an ordering cycle, which systemd breaks by
+  deleting a job. The unit sat enabled and inactive for the life of every VM,
+  with nothing in the journal to say so, so accounts the seed did not create
+  never reached the `docker` group. It is now pulled in by `cloud-final.service`
+  directly. Rebuild base images (`agent-vm image build <distro> --force`) to
+  pick this up.
+
 - Base images now also carry `gh` and `tea` for GitHub and Gitea, Playwright
   with a headless `chromium`, and SDKMAN for installing JDKs in the guest.
 

@@ -266,8 +266,35 @@ RUN chmod 0755 /usr/local/bin/chromium
 # stops the installer appending its own block to a shell profile; the file
 # copied in below does that job for every account at once.
 RUN set -eu; \
-    SDKMAN_DIR=/etc/skel/.sdkman bash -c 'curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash'; \
-    cp -a /etc/skel/.sdkman /root/.sdkman
+    SDKMAN_DIR=/etc/skel/.sdkman bash -c 'curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash'
+
+# The JVM toolchain itself: the newest Temurin JDK SDKMAN offers, and Maven.
+#
+# The JDK version is resolved from `sdk list java` during the build rather than
+# pinned, like every other package here -- a pinned one would be a release
+# behind before the image was rebuilt, and reproducibility comes from the
+# digest the manifest records for the source image (ADR-0006). The first
+# Temurin identifier in that list is the newest: SDKMAN prints each vendor's
+# versions in descending order. A list that no longer contains one fails the
+# build rather than silently shipping a guest with no JDK.
+#
+# This writes into /etc/skel/.sdkman, the copy every account created later
+# inherits, so the JDK and Maven are in place before anyone logs in instead of
+# being downloaded per account inside a guest that may have no network at all.
+RUN set -e; \
+    bash -c 'set -e; \
+      export SDKMAN_DIR=/etc/skel/.sdkman; \
+      . "$SDKMAN_DIR/bin/sdkman-init.sh"; \
+      java_id="$(sdk list java | grep -oE "[0-9][0-9.]+-tem" | head -n1)"; \
+      if [ -z "$java_id" ]; then \
+        echo "no Temurin JDK in SDKMAN list; the identifier format must have changed" >&2; \
+        exit 1; \
+      fi; \
+      echo "installing Temurin $java_id"; \
+      sdk install java "$java_id"; \
+      sdk install maven'
+
+RUN cp -a /etc/skel/.sdkman /root/.sdkman
 
 COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh
 RUN chmod 0644 /etc/profile.d/agent-vm-sdkman.sh
@@ -291,7 +318,11 @@ RUN set -eu; \
     [ -s /etc/skel/.sdkman/bin/sdkman-init.sh ] \
       || { echo "SDKMAN is missing from /etc/skel, so accounts cloud-init creates will not have it" >&2; exit 1; }; \
     bash -lc 'type sdk' >/dev/null 2>&1 \
-      || { echo "sdk is not defined in a login shell; the profile script or the SDKMAN install is wrong" >&2; exit 1; }
+      || { echo "sdk is not defined in a login shell; the profile script or the SDKMAN install is wrong" >&2; exit 1; }; \
+    bash -lc 'java -version' >/dev/null 2>&1 \
+      || { echo "no JDK on the path of a login shell; the SDKMAN java install did not take" >&2; exit 1; }; \
+    bash -lc 'mvn -version' >/dev/null 2>&1 \
+      || { echo "no Maven on the path of a login shell; the SDKMAN maven install did not take" >&2; exit 1; }
 
 # Docker comes from the distro's own repository rather than Docker's
 # convenience script: the build then needs no extra registry or GPG key, and
@@ -307,41 +338,130 @@ RUN apt-get update \
 # Docker starts at boot so an agent finds a working daemon without asking.
 RUN systemctl --root=/ enable docker.service containerd.service
 
-# Give the accounts cloud-init creates access to the Docker socket.
+# Per-account setup that can only happen once the accounts exist.
 #
 # It cannot be done here — the accounts do not exist until first boot. The
-# login user agent-vm asks for is placed in the group by the generated
+# login user agent-vm asks for is placed in its groups by the generated
 # cloud-init user-data, which is what makes the membership effective in the
 # very first SSH session. This one-shot unit is the backstop for every other
 # interactive account: ones an operator's own --cloud-init file creates, and
-# ones created on a VM whose seed predates that change.
-RUN printf '%s\n' \
-      '#!/bin/sh' \
-      'set -eu' \
-      'getent group docker >/dev/null 2>&1 || exit 0' \
-      'while IFS=: read -r name _pw uid _rest; do' \
-      '  case "$uid" in "" | *[!0-9]*) continue ;; esac' \
-      '  [ "$uid" -ge 1000 ] && [ "$uid" -lt 65534 ] || continue' \
-      '  gpasswd -a "$name" docker >/dev/null' \
-      'done < /etc/passwd' \
-      > /usr/local/sbin/agent-vm-docker-group \
- && chmod 0755 /usr/local/sbin/agent-vm-docker-group
+# ones created on a VM whose seed predates that change. It also generates each
+# account's SSH key pair, which the seed cannot do at all -- a private key
+# never goes into an image or a seed (SECURITY.md). See the script itself.
+COPY user-setup.sh /usr/local/sbin/agent-vm-user-setup
+RUN chmod 0755 /usr/local/sbin/agent-vm-user-setup
 
+# It is installed into cloud-final.service rather than multi-user.target, and
+# that is load-bearing: cloud-init orders cloud-final.service *after*
+# multi-user.target, so a unit wanted by that target and ordered after
+# cloud-final forms an ordering cycle. systemd resolves such a cycle by
+# deleting a job -- ours -- and the unit then sits enabled and inactive for the
+# life of the VM, with nothing in the journal to say so. Being wanted by
+# cloud-final.service instead means it is pulled in by the service it waits
+# for, which is what the ordering was expressing anyway.
 RUN printf '%s\n' \
       '[Unit]' \
-      'Description=Add interactive users to the docker group' \
+      'Description=First-boot setup for interactive accounts' \
       'After=cloud-final.service docker.service' \
       'Wants=cloud-final.service' \
       '' \
       '[Service]' \
       'Type=oneshot' \
       'RemainAfterExit=yes' \
-      'ExecStart=/usr/local/sbin/agent-vm-docker-group' \
+      'ExecStart=/usr/local/sbin/agent-vm-user-setup' \
       '' \
       '[Install]' \
-      'WantedBy=multi-user.target' \
-      > /usr/lib/systemd/system/agent-vm-docker-group.service \
- && systemctl --root=/ enable agent-vm-docker-group.service
+      'WantedBy=cloud-final.service' \
+      > /usr/lib/systemd/system/agent-vm-user-setup.service \
+ && systemctl --root=/ enable agent-vm-user-setup.service
+
+# The virtualization stack, so a VM can create VMs of its own.
+#
+# This is the same set of host tools agent-vm itself drives (AGENTS.md §3), so
+# a guest can run agent-vm, or virt-install and virsh directly. dnsmasq-base
+# rather than dnsmasq: libvirt starts its own dnsmasq per network, and the full
+# package would additionally enable a system-wide resolver on port 53 that
+# fights with both libvirt's instances and systemd-resolved.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      qemu-kvm \
+      qemu-utils \
+      libvirt-daemon-system \
+      libvirt-clients \
+      virtinst \
+      dnsmasq-base \
+      guestfs-tools \
+      podman \
+      golang-go \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+# golangci-lint, from its own installer on all three families.
+#
+# Ubuntu does not package it at all, and where it is packaged the version
+# differs per family, so the upstream installer is what keeps every image on
+# the same one -- the same reasoning as tea above. It needs a Go toolchain to
+# analyze anything, which is why one is installed with the packages above.
+RUN set -eu; \
+    curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+      | sh -s -- -b /usr/local/bin
+
+# Nested virtualization, the guest half of it.
+#
+# The host half is already in place: agent-vm asks virt-install for
+# `--cpu host-passthrough`, so the guest CPU carries the host's VMX/SVM feature
+# and /dev/kvm works inside the VM. This file is what lets a VM inside this VM
+# nest once more. Both modules are named because an image is built once and may
+# boot on either vendor's host; modprobe ignores options for a module that is
+# not loaded.
+RUN printf '%s\n' \
+      'options kvm_intel nested=1' \
+      'options kvm_amd nested=1' \
+      > /etc/modprobe.d/agent-vm-nested.conf
+
+# libvirt starts at boot, so a nested `agent-vm create` finds a running daemon
+# instead of a connection error.
+#
+# Which units exist depends on the family and the libvirt version: the modular
+# daemons (virtqemud and friends) are replacing the monolithic libvirtd, and the
+# two must not both be enabled -- they contend for the same socket. So the
+# monolithic daemon is preferred where the image has it, the modular set is used
+# where it does not, and an image with neither fails the build rather than
+# booting a guest whose nested VMs cannot start.
+RUN set -eu; \
+    if [ -f /usr/lib/systemd/system/libvirtd.service ]; then \
+      candidates="libvirtd.service virtlogd.socket virtlockd.socket"; \
+    elif [ -f /usr/lib/systemd/system/virtqemud.service ]; then \
+      candidates="virtqemud.service virtnetworkd.service virtstoraged.service virtlogd.socket virtlockd.socket"; \
+    else \
+      echo "this image has neither libvirtd nor virtqemud; nested VMs could not start" >&2; \
+      exit 1; \
+    fi; \
+    units=""; \
+    for unit in ${candidates}; do \
+      if [ -f "/usr/lib/systemd/system/${unit}" ]; then units="${units} ${unit}"; fi; \
+    done; \
+    systemctl --root=/ enable ${units}
+
+# Run each of these once, and fail the build if any of them cannot start.
+#
+# The same reasoning as the smoke tests above: a package that installs but does
+# not run is indistinguishable from a working one until someone types the
+# command inside a VM, hours after the image was built and cached. The
+# qemu-system check is by architecture because the binary is named for it, and
+# an image missing it would install perfectly and then be unable to start a
+# single VM.
+RUN set -eu; \
+    virsh --version >/dev/null || { echo "virsh installed but cannot run" >&2; exit 1; }; \
+    virt-install --version >/dev/null || { echo "virt-install installed but cannot run" >&2; exit 1; }; \
+    qemu-img --version >/dev/null || { echo "qemu-img installed but cannot run" >&2; exit 1; }; \
+    command -v "qemu-system-$(uname -m)" >/dev/null \
+      || { echo "no qemu-system-$(uname -m) in this image; the guest could not start a VM of its own" >&2; exit 1; }; \
+    virt-make-fs --version >/dev/null || { echo "guestfs-tools installed but virt-make-fs cannot run" >&2; exit 1; }; \
+    podman --version >/dev/null || { echo "podman installed but cannot run" >&2; exit 1; }; \
+    dnsmasq --version >/dev/null || { echo "dnsmasq installed but cannot run" >&2; exit 1; }; \
+    go version >/dev/null || { echo "the Go toolchain installed but cannot run" >&2; exit 1; }; \
+    golangci-lint --version >/dev/null || { echo "golangci-lint installed but cannot run" >&2; exit 1; }
 
 # There is no running systemd inside a build, so units are enabled offline with
 # --root=/, which only writes the symlinks an enable would create. This must not
