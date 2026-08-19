@@ -279,6 +279,27 @@ RUN set -eu; \
       "https://dl.gitea.com/tea/${version}/tea-${version}-linux-${arch}"; \
     chmod 0755 /usr/local/bin/tea
 
+# wrangler, Cloudflare's CLI.
+#
+# No family packages it and Cloudflare publishes it only to npm, so it is
+# installed with npm on all three -- the Node runtime the agents above need is
+# already in the image, so it costs nothing beyond the package itself. The
+# version is unpinned like every other one here (ADR-0006).
+#
+# No credential is baked in: `wrangler login` is an OAuth flow and an API
+# credential is per-VM, arriving through --cloud-init if at all, because a base
+# image is shared by every VM built on it (SECURITY.md). A fresh guest has the
+# command and no Cloudflare account attached to it.
+RUN npm install -g wrangler \
+ && npm cache clean --force
+
+# Wrangler reports anonymous usage metrics unless told not to, and a disposable
+# VM an agent drives is not a machine whose operator chose to opt in. This goes
+# in /etc/environment for the same reason PLAYWRIGHT_BROWSERS_PATH does: it has
+# to reach the non-interactive `ssh <vm> wrangler deploy` an agent actually
+# runs, which reads that file through PAM but no profile script.
+RUN printf 'WRANGLER_SEND_METRICS=false\n' >> /etc/environment
+
 # Playwright, and the one Chromium in this image.
 #
 # The browsers go to /opt/ms-playwright rather than the per-user default under
@@ -352,6 +373,7 @@ RUN chmod 0644 /etc/profile.d/agent-vm-sdkman.sh
 RUN set -eu; \
     gh --version >/dev/null || { echo "gh installed but cannot run" >&2; exit 1; }; \
     tea --version >/dev/null || { echo "tea installed but cannot run" >&2; exit 1; }; \
+    wrangler --version >/dev/null || { echo "wrangler installed but cannot run" >&2; exit 1; }; \
     playwright --version >/dev/null || { echo "playwright installed but cannot run" >&2; exit 1; }; \
     if ! chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>/tmp/chromium-smoke.log; then \
       echo "chromium installed but cannot start headless:" >&2; \
@@ -367,6 +389,97 @@ RUN set -eu; \
       || { echo "no JDK on the path of a login shell; the SDKMAN java install did not take" >&2; exit 1; }; \
     bash -lc 'mvn -version' >/dev/null 2>&1 \
       || { echo "no Maven on the path of a login shell; the SDKMAN maven install did not take" >&2; exit 1; }
+
+# The Go and Rust toolchains, both from upstream rather than from the family's
+# own packages.
+#
+# Every family packages some Go, and the versions are years apart: an image
+# built on Ubuntu's golang-go and one built on Arch's go are not the same
+# toolchain, and a guest whose Go is older than the `go` directive of the
+# repository it was handed cannot build that repository at all. Upstream Go
+# and rustup keep all three images on the same release -- the same reasoning as
+# tea above. Neither is pinned, for the same reason SDKMAN's JDK is not:
+# reproducibility comes from the digest the manifest records (ADR-0006), and a
+# pin here would be a release behind before the image was rebuilt.
+#
+# Both install into /usr/local with their entry points symlinked into
+# /usr/local/bin, which is on the default PATH, so a non-interactive
+# `ssh <vm> go build` finds them without sourcing a profile script.
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64) goarch=amd64 ;; \
+      aarch64) goarch=arm64 ;; \
+      *) echo "no Go release is published for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    version="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"; \
+    case "${version}" in \
+      go[0-9]*) ;; \
+      *) echo "https://go.dev/VERSION named no release (got '${version}'); its format must have changed" >&2; exit 1 ;; \
+    esac; \
+    echo "installing ${version} for linux-${goarch}"; \
+    curl -fsSL "https://go.dev/dl/${version}.linux-${goarch}.tar.gz" -o /tmp/go.tar.gz; \
+    tar -C /usr/local -xzf /tmp/go.tar.gz; \
+    rm -f /tmp/go.tar.gz; \
+    ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
+
+# Rust through rustup, installed once into /usr/local and shared by every
+# account.
+#
+# rustup installs per account under ~/.rustup by default, which would leave
+# each account on the VM downloading its own toolchain at first use, possibly
+# inside a guest with no network at all. A shared installation costs two
+# things and is worth them: RUSTUP_HOME has to be visible to every account
+# (below), and `rustup update` needs sudo because the directory is root-owned.
+# Crates a user installs are unaffected -- CARGO_HOME is deliberately left
+# unset, so `cargo install` writes into that account's own ~/.cargo.
+RUN set -eu; \
+    export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; \
+    curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile default --default-toolchain stable; \
+    for proxy in "${CARGO_HOME}"/bin/*; do \
+      ln -sf "${proxy}" "/usr/local/bin/$(basename "${proxy}")"; \
+    done; \
+    chmod -R a+rX /usr/local/rustup /usr/local/cargo
+
+# RUSTUP_HOME goes in /etc/environment rather than a profile script for the
+# same reason PLAYWRIGHT_BROWSERS_PATH does: sshd reads that file through PAM,
+# so the `ssh <vm> cargo build` an agent actually runs sees it, while a profile
+# script would leave cargo looking for a toolchain in an empty ~/.rustup.
+RUN printf 'RUSTUP_HOME=/usr/local/rustup\n' >> /etc/environment
+
+# $HOME/go/bin and $HOME/.cargo/bin on the PATH of a login shell, for what a
+# user installs later. The toolchains themselves need no PATH entry.
+COPY toolchains.sh /etc/profile.d/agent-vm-toolchains.sh
+RUN chmod 0644 /etc/profile.d/agent-vm-toolchains.sh
+
+# golangci-lint, from its own installer on all three families.
+#
+# Ubuntu does not package it at all, and where it is packaged the version
+# differs per family, so the upstream installer is what keeps every image on
+# the same one -- the same reasoning as tea above. It needs a Go toolchain to
+# analyze anything, which is why it follows the one installed above.
+RUN set -eu; \
+    curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+      | sh -s -- -b /usr/local/bin
+
+# Run each of these once, and fail the build if any of them cannot start.
+#
+# The same reasoning as the smoke tests above: a toolchain that unpacked but
+# cannot run is indistinguishable from a working one until someone types the
+# command inside a VM, hours after the image was built and cached. cargo is
+# reached the way a guest reaches it, through /etc/environment, because the
+# shared RUSTUP_HOME is the part of this that can be wrong while every file is
+# in place.
+RUN set -eu; \
+    go version >/dev/null || { echo "the Go toolchain installed but cannot run" >&2; exit 1; }; \
+    printf 'package main\n' | gofmt >/dev/null || { echo "gofmt installed but cannot run" >&2; exit 1; }; \
+    golangci-lint --version >/dev/null || { echo "golangci-lint installed but cannot run" >&2; exit 1; }; \
+    set -a; . /etc/environment; set +a; \
+    rustc --version >/dev/null || { echo "the Rust toolchain installed but rustc cannot run" >&2; exit 1; }; \
+    cargo --version >/dev/null || { echo "cargo installed but cannot run" >&2; exit 1; }; \
+    rustup --version >/dev/null || { echo "rustup installed but cannot run" >&2; exit 1; }; \
+    cargo fmt --version >/dev/null || { echo "rustfmt is missing from the Rust toolchain" >&2; exit 1; }; \
+    cargo clippy --version >/dev/null || { echo "clippy is missing from the Rust toolchain" >&2; exit 1; }
 
 # Docker comes from the distro's own repository rather than Docker's
 # convenience script: the build then needs no extra registry or GPG key, and
@@ -470,19 +583,8 @@ RUN apt-get update \
       dnsmasq-base \
       guestfs-tools \
       podman \
-      golang-go \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
-
-# golangci-lint, from its own installer on all three families.
-#
-# Ubuntu does not package it at all, and where it is packaged the version
-# differs per family, so the upstream installer is what keeps every image on
-# the same one -- the same reasoning as tea above. It needs a Go toolchain to
-# analyze anything, which is why one is installed with the packages above.
-RUN set -eu; \
-    curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-      | sh -s -- -b /usr/local/bin
 
 # Nested virtualization, the guest half of it.
 #
@@ -537,9 +639,7 @@ RUN set -eu; \
       || { echo "no qemu-system-$(uname -m) in this image; the guest could not start a VM of its own" >&2; exit 1; }; \
     virt-make-fs --version >/dev/null || { echo "guestfs-tools installed but virt-make-fs cannot run" >&2; exit 1; }; \
     podman --version >/dev/null || { echo "podman installed but cannot run" >&2; exit 1; }; \
-    dnsmasq --version >/dev/null || { echo "dnsmasq installed but cannot run" >&2; exit 1; }; \
-    go version >/dev/null || { echo "the Go toolchain installed but cannot run" >&2; exit 1; }; \
-    golangci-lint --version >/dev/null || { echo "golangci-lint installed but cannot run" >&2; exit 1; }
+    dnsmasq --version >/dev/null || { echo "dnsmasq installed but cannot run" >&2; exit 1; }
 
 # There is no running systemd inside a build, so units are enabled offline with
 # --root=/, which only writes the symlinks an enable would create. This must not

@@ -70,6 +70,7 @@ var buildContextFiles = []string{
 	"agent-aliases.sh",
 	"chromium.sh",
 	"sdkman.sh",
+	"toolchains.sh",
 	"user-setup.sh",
 	"codex-remote-control.sh",
 	"tmux-menu.sh",

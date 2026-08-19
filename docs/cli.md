@@ -232,15 +232,17 @@ instead of on every first boot, and a VM works the same way offline.
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
+| Cloud CLIs | `wrangler` (Cloudflare) |
 | Browser automation | `playwright` with a headless `chromium` |
 | JVM toolchain | `sdkman` (`sdk`) with the latest Temurin JDK and Maven (`java`, `mvn`) |
-| Go toolchain | `go`, `golangci-lint` |
+| Go toolchain | `go` and `gofmt` from go.dev, plus `golangci-lint` |
+| Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
 | Virtualization | `qemu-kvm`, `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
-three. Everything except the coding agents comes from the distro's own
-repository.
+three. Everything except the coding agents, `tea`, `wrangler`, Playwright's
+browsers, SDKMAN, Go, and Rust comes from the distro's own repository.
 
 #### Coding agents
 
@@ -271,13 +273,22 @@ failing the boot. Log in inside the VM and run
 start` as that account) to start it then; `journalctl -u
 agent-vm-codex-remote-control` is where a failure is reported.
 
-#### Forge CLIs, browsers, and SDKMAN
+#### Forge CLIs, wrangler, browsers, and SDKMAN
 
 `gh` comes from each distribution's own repository. `tea` does not: only Arch
 packages it, and on Ubuntu the name `tea` belongs to an unrelated text editor,
 so installing it from apt would put the wrong program at the right command.
 It is fetched from Gitea's release server on all three families instead, which
 also keeps the version identical everywhere.
+
+`wrangler`, Cloudflare's CLI, comes from npm on all three families — no distro
+packages it, and it rides on the Node runtime the coding agents already need.
+It carries no credentials: `wrangler login` is an OAuth flow and an API
+credential is per-VM, so a fresh guest has the command and no Cloudflare
+account attached to it. `WRANGLER_SEND_METRICS=false` is set in
+`/etc/environment`, because a disposable VM an agent drives is not a machine
+whose operator chose to opt into anonymous usage reporting; unset it in the
+guest if you want the default behaviour back.
 
 There is exactly one browser in the image: the Chromium build Playwright pins.
 Playwright will not drive a browser it did not install, so a distribution
@@ -306,14 +317,39 @@ Note that SDKMAN puts them on the path through a profile script, so `java`,
 script source `"$SDKMAN_DIR/bin/sdkman-init.sh"` itself. That is how SDKMAN
 works everywhere, not something this image imposes.
 
-A build runs `gh`, `tea`, and `playwright`, launches headless Chromium against
+#### Go and Rust
+
+Neither comes from the distribution. Every family packages some Go and the
+versions are years apart, so a guest whose Go is older than the `go` directive
+of the repository an agent was given cannot build it at all; Go is installed
+from the current go.dev release, and Rust through `rustup`, so all three
+families carry the same toolchain. Neither version is pinned — they are
+whatever was current when the image was built.
+
+Go lives in `/usr/local/go` and Rust in `/usr/local/rustup`, with `go`, `gofmt`,
+and the rustup proxies (`cargo`, `rustc`, `rustup`, `rustfmt`, `clippy`)
+symlinked into `/usr/local/bin`. That directory is on the default path, so
+unlike SDKMAN these work in a non-interactive `ssh <vm> cargo build` and not
+only in a login shell. `RUSTUP_HOME` is set in `/etc/environment` for the same
+reason `PLAYWRIGHT_BROWSERS_PATH` is: the rustup proxies find their toolchain
+through it, and a non-interactive command reads that file but no profile script.
+
+The Rust installation is shared, so `rustup update` and `rustup toolchain
+install` need `sudo`. What a user installs is not shared: `CARGO_HOME` is
+deliberately left unset, so `cargo install` writes into that account's own
+`~/.cargo`, as `go install` writes into `~/go`. Both `~/.cargo/bin` and
+`~/go/bin` are added to the path of a login shell by
+`/etc/profile.d/agent-vm-toolchains.sh`.
+
+A build runs `gh`, `tea`, `wrangler`, and `playwright`, launches headless Chromium against
 `about:blank`, runs `java` and `mvn` in a login shell, runs each virtualization
-tool once, and fails if any of it does not work. Chromium is the reason that step exists: a browser missing one shared
+tool once, runs `go`, `gofmt`, `golangci-lint`, `rustc`, `cargo`, `rustup`,
+`cargo fmt`, and `cargo clippy`, and fails if any of it does not work. Chromium is the reason that step exists: a browser missing one shared
 library installs perfectly and exits the moment it is launched.
 
-Beyond the coding agents, `tea`, Playwright's browsers, and SDKMAN are the
-software in a base image that does not come from the distro's
-own repository, and on Ubuntu it is also the only third-party repository and GPG
+Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, SDKMAN,
+Go, and Rust are the software in a base image that does not come from the
+distro's own repository, and on Ubuntu it is also the only third-party repository and GPG
 key a build adds: Ubuntu 24.04 ships Node.js 18 and the agents require 22.19 or
 newer, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
 Node.js of their own, and `npm` itself is held to the 11 line on all three:
