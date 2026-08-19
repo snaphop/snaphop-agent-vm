@@ -720,6 +720,19 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
 			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
 		}
+		// wrangler is packaged by no distro and published only to npm, so it
+		// rides on the Node runtime the agents already need.
+		if !strings.Contains(recipe, "npm install -g wrangler") {
+			t.Errorf("%s does not install wrangler", d.Containerfile)
+		}
+		// Anonymous metrics are on by default. A disposable VM an agent drives
+		// is not a machine whose operator opted in, and the setting has to
+		// reach a non-interactive command, which reads /etc/environment
+		// through PAM and no profile script.
+		if !strings.Contains(recipe, "printf 'WRANGLER_SEND_METRICS=false\\n' >> /etc/environment") {
+			t.Errorf("%s does not turn off wrangler's usage metrics in /etc/environment", d.Containerfile)
+		}
+
 		if !strings.Contains(recipe, "COPY chromium.sh /usr/local/bin/chromium") {
 			t.Errorf("%s does not expose Chromium as `chromium`; the browser would only be reachable through Playwright", d.Containerfile)
 		}
@@ -959,7 +972,7 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank") {
 			t.Errorf("%s does not launch Chromium during the build; a missing shared library would only surface inside a VM", d.Containerfile)
 		}
-		for _, check := range []string{"gh --version", "tea --version", "playwright --version"} {
+		for _, check := range []string{"gh --version", "tea --version", "wrangler --version", "playwright --version"} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
 			}

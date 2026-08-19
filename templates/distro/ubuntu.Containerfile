@@ -279,6 +279,27 @@ RUN set -eu; \
       "https://dl.gitea.com/tea/${version}/tea-${version}-linux-${arch}"; \
     chmod 0755 /usr/local/bin/tea
 
+# wrangler, Cloudflare's CLI.
+#
+# No family packages it and Cloudflare publishes it only to npm, so it is
+# installed with npm on all three -- the Node runtime the agents above need is
+# already in the image, so it costs nothing beyond the package itself. The
+# version is unpinned like every other one here (ADR-0006).
+#
+# No credential is baked in: `wrangler login` is an OAuth flow and an API
+# credential is per-VM, arriving through --cloud-init if at all, because a base
+# image is shared by every VM built on it (SECURITY.md). A fresh guest has the
+# command and no Cloudflare account attached to it.
+RUN npm install -g wrangler \
+ && npm cache clean --force
+
+# Wrangler reports anonymous usage metrics unless told not to, and a disposable
+# VM an agent drives is not a machine whose operator chose to opt in. This goes
+# in /etc/environment for the same reason PLAYWRIGHT_BROWSERS_PATH does: it has
+# to reach the non-interactive `ssh <vm> wrangler deploy` an agent actually
+# runs, which reads that file through PAM but no profile script.
+RUN printf 'WRANGLER_SEND_METRICS=false\n' >> /etc/environment
+
 # Playwright, and the one Chromium in this image.
 #
 # The browsers go to /opt/ms-playwright rather than the per-user default under
@@ -352,6 +373,7 @@ RUN chmod 0644 /etc/profile.d/agent-vm-sdkman.sh
 RUN set -eu; \
     gh --version >/dev/null || { echo "gh installed but cannot run" >&2; exit 1; }; \
     tea --version >/dev/null || { echo "tea installed but cannot run" >&2; exit 1; }; \
+    wrangler --version >/dev/null || { echo "wrangler installed but cannot run" >&2; exit 1; }; \
     playwright --version >/dev/null || { echo "playwright installed but cannot run" >&2; exit 1; }; \
     if ! chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>/tmp/chromium-smoke.log; then \
       echo "chromium installed but cannot start headless:" >&2; \

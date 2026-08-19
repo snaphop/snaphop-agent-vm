@@ -17,6 +17,13 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now carry `wrangler`, Cloudflare's CLI, installed from npm on
+  the Node runtime the coding agents already need. It ships with no
+  credentials — `wrangler login` is an OAuth flow and an API credential is
+  per-VM — and `WRANGLER_SEND_METRICS=false` is set in `/etc/environment`, so a
+  guest reports no anonymous usage metrics unless its operator unsets it.
+  **Run `agent-vm image build <distro> --force` to pick this up.**
+
 - Base images now carry a Rust toolchain: `rustup` with the stable toolchain,
   so `rustc`, `cargo`, `rustfmt`, and `clippy` are in every VM. It is installed
   once into `/usr/local/rustup` and shared by every account rather than
