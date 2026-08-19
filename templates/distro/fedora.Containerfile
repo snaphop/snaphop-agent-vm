@@ -127,15 +127,28 @@ RUN set -eu; \
       exit 1; \
     fi
 
+# mise, the tool-version manager the coding agents and the JVM toolchain below
+# are installed with.
+#
+# The binary goes in /usr/local/bin so that `mise` is on the default PATH for
+# every account, including the non-interactive `ssh <vm> mise install` an agent
+# may run. What it installs is per account -- see below.
+RUN set -eu; \
+    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
+
 # The coding agents every guest comes up with.
 #
 # This is the one place in the image that installs software from outside the
 # distro's own repositories: none of these five are packaged by any distro.
-# Four publish to npm and are installed with it. agy is a Go binary with no npm
-# package, so it comes from its vendor's installer, pointed at /usr/local/bin
-# so that every account on the VM finds it rather than only root. That binary
-# self-updates in the background and cannot write to /usr/local/bin as a
-# non-root user, so guests keep the version the image was built with.
+# Three publish to npm and are installed through mise's npm backend rather than
+# with npm directly, so they are versioned the same way the JDK below is: an
+# agent that needs another release runs `mise use npm:<package>@<version>` in
+# its own account instead of writing to a root-owned global npm prefix it
+# cannot touch. agy is a Go binary with no npm package, so it comes from its
+# vendor's installer, pointed at /usr/local/bin so that every account on the VM
+# finds it rather than only root. That binary self-updates in the background
+# and cannot write to /usr/local/bin as a non-root user, so guests keep the
+# version the image was built with.
 #
 # The versions are deliberately unpinned, like every other package here: these
 # tools ship several releases a week and a pinned one would be stale before the
@@ -143,20 +156,99 @@ RUN set -eu; \
 # for the source image, not from the agent versions (ADR-0006).
 # npm is held to the 11 line because npm 12 does not run these packages'
 # postinstall scripts, and claude and opencode both download their native
-# binary in one. npm 12 installs them without complaint and the commands then
-# fail at the first run with "native binary not installed" -- a broken guest
-# that looks like a successful build. Arch hits this today (it packages npm 12
-# against whatever Node it currently ships); Ubuntu and Fedora will when their
-# npm catches up, so all three are pinned rather than only the one that breaks
-# now. The smoke test below is what will say when this pin can be lifted.
+# binary in one. The installs below are told to use this npm rather than mise's
+# own npm client, so the pin governs them as much as a direct `npm install -g`.
+# npm 12 installs
+# them without complaint and the commands then fail at the first run with
+# "native binary not installed" -- a broken guest that looks like a successful
+# build. Arch hits this today (it packages npm 12 against whatever Node it
+# currently ships); Ubuntu and Fedora will when their npm catches up, so all
+# three are pinned rather than only the one that breaks now. The smoke test
+# below is what will say when this pin can be lifted.
 RUN npm install -g npm@11 \
  && npm cache clean --force
 
-RUN npm install -g \
-      @anthropic-ai/claude-code \
-      opencode-ai \
-      @earendil-works/pi-coding-agent \
- && npm cache clean --force
+# The install goes into /etc/skel, like everything else mise manages here, so
+# the agents are in place before anyone logs in rather than being downloaded
+# per account inside a guest that may have no network at all. See the JVM
+# toolchain below for why the destination is skel and not one shared directory.
+#
+# Two mise settings are what make these packages work rather than merely
+# install, and both concern the postinstall scripts discussed above.
+# npm.shell_out sends the install through the npm binary pinned above instead
+# of mise's own npm client, and npm_args turns off the --ignore-scripts mise
+# passes by default -- which is what would otherwise skip those scripts. mise
+# warns and carries on rather than failing when they are skipped, so the build
+# would get as far as the smoke test below before anything said so. They are
+# written into the skel configuration rather than passed as environment
+# variables here, so an account that later moves an agent to another version
+# installs it the same way.
+RUN set -eu; \
+    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
+           MISE_CONFIG_DIR=/etc/skel/.config/mise \
+           MISE_STATE_DIR=/etc/skel/.local/state/mise \
+           MISE_CACHE_DIR=/tmp/mise-cache; \
+    mise settings set npm.shell_out true; \
+    mise use --global --yes \
+      'npm:@anthropic-ai/claude-code[npm_args=--ignore-scripts=false]' \
+      'npm:opencode-ai[npm_args=--ignore-scripts=false]' \
+      'npm:@earendil-works/pi-coding-agent[npm_args=--ignore-scripts=false]'; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
+# The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
+#
+# Neither version is pinned, like every other package here -- a pinned one would
+# be a release behind before the image was rebuilt, and reproducibility comes
+# from the digest the manifest records for the source image (ADR-0006).
+# The JDK is `java@temurin` and not `java@latest`, which is an Oracle build of
+# OpenJDK: mise names a distribution by prefix, and an unprefixed version takes
+# whichever one it defaults to. A version mise cannot resolve or install fails
+# the build rather than silently shipping a guest with no JDK.
+#
+# This writes into /etc/skel, the copy every account created later inherits, so
+# the JDK and Maven are in place before anyone logs in instead of being
+# downloaded per account inside a guest that may have no network at all. It goes
+# to /etc/skel rather than one shared directory because installing a tool writes
+# into mise's data directory, so a single shared one would have every user on
+# the VM writing to the same place.
+#
+# The cache is a build-time scratch directory and is discarded: it holds the
+# downloaded archives, which are of no use once they have been extracted, and
+# every account inheriting a copy of them would be wasted space in every guest.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes java@temurin maven@latest; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
+# root is created before /etc/skel exists in this form and never inherits from
+# it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a
+# plain copy of .local and .config: the agent configuration below lands in
+# both as well.
+RUN set -eu; \
+    mkdir -p /root/.local/share /root/.local/state /root/.config; \
+    cp -a /etc/skel/.local/share/mise /root/.local/share/mise; \
+    cp -a /etc/skel/.local/state/mise /root/.local/state/mise; \
+    cp -a /etc/skel/.config/mise /root/.config/mise
+
+COPY mise.sh /etc/profile.d/agent-vm-mise.sh
+RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
+
+# The three mise-installed agents, on the default PATH of every account.
+#
+# A shim is a symlink to the mise binary, which dispatches on the name it was
+# called by and resolves the version from the calling account's own mise
+# configuration -- so a single symlink in /usr/local/bin serves every account
+# without pointing into any account's home. That is what keeps
+# `ssh <vm> claude -p ...` working: an ssh command runs no login shell, so it
+# never sources the profile script above that puts the per-account shim
+# directory on PATH.
+RUN set -eu; \
+    for command in claude opencode pi; do \
+      ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
+    done
 
 # codex comes from OpenAI's own installer rather than from npm.
 #
@@ -325,55 +417,6 @@ RUN printf 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright\n' >> /etc/environment
 COPY chromium.sh /usr/local/bin/chromium
 RUN chmod 0755 /usr/local/bin/chromium
 
-# mise, the tool-version manager the JVM toolchain below is installed with.
-#
-# The binary goes in /usr/local/bin so that `mise` is on the default PATH for
-# every account, including the non-interactive `ssh <vm> mise install` an agent
-# may run. What it installs is per account -- see below.
-RUN set -eu; \
-    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
-
-# The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
-#
-# Neither version is pinned, like every other package here -- a pinned one would
-# be a release behind before the image was rebuilt, and reproducibility comes
-# from the digest the manifest records for the source image (ADR-0006).
-# The JDK is `java@temurin` and not `java@latest`, which is an Oracle build of
-# OpenJDK: mise names a distribution by prefix, and an unprefixed version takes
-# whichever one it defaults to. A version mise cannot resolve or install fails
-# the build rather than silently shipping a guest with no JDK.
-#
-# This writes into /etc/skel, the copy every account created later inherits, so
-# the JDK and Maven are in place before anyone logs in instead of being
-# downloaded per account inside a guest that may have no network at all. It goes
-# to /etc/skel rather than one shared directory because installing a tool writes
-# into mise's data directory, so a single shared one would have every user on
-# the VM writing to the same place.
-#
-# The cache is a build-time scratch directory and is discarded: it holds the
-# downloaded archives, which are of no use once they have been extracted, and
-# every account inheriting a copy of them would be wasted space in every guest.
-RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
-    MISE_CONFIG_DIR=/etc/skel/.config/mise \
-    MISE_STATE_DIR=/etc/skel/.local/state/mise \
-    MISE_CACHE_DIR=/tmp/mise-cache \
-      mise use --global --yes java@temurin maven@latest; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
-
-# root is created before /etc/skel exists in this form and never inherits from
-# it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a
-# plain copy of .local and .config: earlier steps have already put agent
-# configuration in both.
-RUN set -eu; \
-    mkdir -p /root/.local/share /root/.local/state /root/.config; \
-    cp -a /etc/skel/.local/share/mise /root/.local/share/mise; \
-    cp -a /etc/skel/.local/state/mise /root/.local/state/mise; \
-    cp -a /etc/skel/.config/mise /root/.config/mise
-
-COPY mise.sh /etc/profile.d/agent-vm-mise.sh
-RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
-
 # Run each of these once, and fail the build if any of them does not work.
 #
 # Chromium is the reason this step exists. A browser with one shared library
@@ -393,7 +436,7 @@ RUN set -eu; \
     rm -f /tmp/chromium-smoke.log; \
     mise --version >/dev/null || { echo "mise installed but cannot run" >&2; exit 1; }; \
     [ -d /etc/skel/.local/share/mise/shims ] \
-      || { echo "the mise shims are missing from /etc/skel, so accounts cloud-init creates will not have java or mvn" >&2; exit 1; }; \
+      || { echo "the mise shims are missing from /etc/skel, so accounts cloud-init creates will not have the agents, java or mvn" >&2; exit 1; }; \
     bash -lc 'command -v java' >/dev/null 2>&1 \
       || { echo "no java on the path of a login shell; the shims are not on PATH or the mise java install did not take" >&2; exit 1; }; \
     bash -lc 'java -version' >/dev/null 2>&1 \

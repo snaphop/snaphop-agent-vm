@@ -249,7 +249,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
-| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime |
+| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime; `claude`, `opencode` and `pi` are managed by `mise` |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` (Cloudflare) |
 | Browser automation | `playwright` with a headless `chromium` |
@@ -267,11 +267,22 @@ browsers, mise, Go, and Rust comes from the distro's own repository.
 
 Every base image carries five coding agents, so a VM is usable by an agent the
 moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. Three are
-installed from npm and need a Node.js runtime, which is installed alongside
-them; `agy` and `codex` have no npm install and come from their vendors' own
+npm packages and need a Node.js runtime, which is installed alongside them;
+`agy` and `codex` have no npm install and come from their vendors' own
 scripts into `/usr/local/bin`, where every account on the VM finds them. Their
 versions are not pinned — they are whatever was current when the image was
 built, and rebuilding the image is how a guest gets newer ones.
+
+`claude`, `opencode`, and `pi` are installed through `mise`'s npm backend
+(`npm:@anthropic-ai/claude-code`, `npm:opencode-ai`,
+`npm:@earendil-works/pi-coding-agent`) rather than with `npm install -g`, the
+same tool-version manager the JDK and Maven come from. The install lands in
+`/etc/skel`, so each account cloud-init creates inherits its own copy and can
+move an agent to another release with `mise use npm:<package>@<version>`
+without root. Each of the three also has a symlink in `/usr/local/bin` pointing
+at the `mise` binary — a shim, which resolves the version from the calling
+account's own configuration — so `ssh <vm> claude -p '…'` finds the command
+even though an ssh command runs no login shell.
 
 `codex` is installed by OpenAI's installer (`https://chatgpt.com/codex/install.sh`)
 rather than from npm, because `codex remote-control` runs only against the
@@ -322,10 +333,10 @@ do at all. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
 profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 
-The JVM toolchain comes from [mise](https://mise.jdx.dev). The `mise` binary
-itself is shared, in `/usr/local/bin`, so every account has the command; what it
-installs is per account, into `/etc/skel` so each account cloud-init creates
-gets its own copy. Installing a tool writes into mise's data directory, so one
+The JVM toolchain — and `claude`, `opencode`, and `pi`, described above — comes
+from [mise](https://mise.jdx.dev). The `mise` binary itself is shared, in
+`/usr/local/bin`, so every account has the command; what it installs is per
+account, into `/etc/skel` so each account cloud-init creates gets its own copy. Installing a tool writes into mise's data directory, so one
 shared copy would have every user on the VM writing to the same place.
 
 The newest Temurin JDK mise offers and Maven are installed into that copy during
@@ -342,9 +353,16 @@ non-interactive `ssh <vm> mvn -version`. Use `ssh <vm> bash -lc 'mvn -version'`,
 or put that directory on the path in the script itself — the shims are ordinary
 executables, so unlike a shell function there is nothing to source.
 
+The three mise-installed agents are not reached that way: each has a symlink in
+`/usr/local/bin` pointing at the `mise` binary, which is itself a shim — it
+dispatches on the name it was called by and reads the calling account's own
+configuration — so `ssh <vm> claude -p '…'` works without a login shell.
+
 To use a different version inside a guest, run `mise use java@21` in a project
-or `mise use -g java@21` for the account. Those write to that account's own mise
-directory, so they need no `sudo` and affect no other user.
+or `mise use -g java@21` for the account, and likewise
+`mise use -g npm:@anthropic-ai/claude-code@2.1.0` for an agent. Those write to
+that account's own mise directory, so they need no `sudo` and affect no other
+user.
 
 #### Go and Rust
 
@@ -384,6 +402,12 @@ newer, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
 Node.js of their own, and `npm` itself is held to the 11 line on all three:
 npm 12 does not run the postinstall scripts `claude` and `opencode` use to fetch
 their native binaries, so they would install cleanly and then fail at first use.
+The three mise-installed agents are told to use that `npm` (`npm.shell_out`)
+rather than mise's own npm client, and to install with
+`--ignore-scripts=false`, which mise otherwise passes as `true` — it warns
+and carries on when a package's scripts are skipped, so the pin alone would
+not be enough. Both are written into each account's mise configuration, so a
+later `mise use npm:…@<version>` inside a guest installs the same way.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of
