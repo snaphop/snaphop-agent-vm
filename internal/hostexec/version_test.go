@@ -35,6 +35,9 @@ func TestParseToolVersion_FromCapturedToolOutput(t *testing.T) {
 		{"virt-ls", VirtLs, "virt-ls--version.txt", Version{Major: 1, Minor: 56}},
 		{"virt-copy-out", VirtCopyOut, "virt-copy-out--version.txt", Version{Major: 1, Minor: 60, Patch: 1}},
 		{"virt-sysprep", VirtSysprep, "virt-sysprep--version.txt", Version{Major: 1, Minor: 56}},
+		// gh prints a release URL on a second line, so this also covers the
+		// parser not assuming single-line output.
+		{"gh", GH, "gh--version.txt", Version{Major: 2, Minor: 97}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

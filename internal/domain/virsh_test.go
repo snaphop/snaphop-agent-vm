@@ -142,6 +142,25 @@ func TestMAC_ReadsTheFirstInterfaceFromARealDomiflistTable(t *testing.T) {
 	}
 }
 
+// virsh prints a blank line after the last name, which every caller of
+// ListNames would otherwise see as a domain named "". The fixture is what the
+// real tool emits, so the trailing newline being there is a fact rather than
+// something a test author remembered.
+func TestListNames_DropsTheBlankLineVirshPrints(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-list-all-name.txt"),
+	})
+
+	names, err := manager(fake).ListNames(context.Background())
+	if err != nil {
+		t.Fatalf("ListNames: %v", err)
+	}
+	if len(names) != 1 || names[0] != "test" {
+		t.Errorf("ListNames = %q, want exactly [test]", names)
+	}
+}
+
 func TestState_ReadsTheStateOfADefinedDomain(t *testing.T) {
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{Stdout: "agent-01\n\n"})
