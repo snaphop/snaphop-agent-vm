@@ -272,11 +272,12 @@ func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
 	}
 }
 
-// agentNPMPackages are the coding agents installed from npm. agy is absent
-// because it has no npm package and arrives through its vendor's installer.
+// agentNPMPackages are the coding agents installed from npm. agy and codex are
+// absent because neither is installed from npm: agy has no npm package at all,
+// and codex is installed from OpenAI's own installer, which is the only thing
+// that produces the standalone package `codex remote-control` requires.
 var agentNPMPackages = []string{
 	"@anthropic-ai/claude-code",
-	"@openai/codex",
 	"opencode-ai",
 	"@earendil-works/pi-coding-agent",
 }
@@ -309,6 +310,26 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 			if !strings.Contains(recipe, pkg) {
 				t.Errorf("%s does not install %q; guests built from it will be missing an agent docs/cli.md promises", d.Containerfile, pkg)
 			}
+		}
+
+		// codex is installed from OpenAI's installer rather than npm, and
+		// where it lands matters twice over: /usr/local/bin so every
+		// account finds the command, and a CODEX_HOME outside any one home
+		// so every account shares the ~300 MiB standalone package that
+		// codex remote-control starts its app-server from.
+		if !strings.Contains(recipe, "chatgpt.com/codex/install.sh") {
+			t.Errorf("%s does not install codex from OpenAI's installer; an npm-installed codex has no standalone package and `codex remote-control` refuses to run without one", d.Containerfile)
+		}
+		if strings.Contains(recipe, "@openai/codex") {
+			t.Errorf("%s still installs @openai/codex from npm; that install shadows the installer's codex on PATH and cannot run remote control", d.Containerfile)
+		}
+		for _, setting := range []string{"CODEX_INSTALL_DIR=/usr/local/bin", "CODEX_HOME=/usr/local/lib/codex", "CODEX_NON_INTERACTIVE=1"} {
+			if !strings.Contains(recipe, setting) {
+				t.Errorf("%s does not set %s for the codex installer; it would install into the build user's home, prompt, or edit a shell profile", d.Containerfile, setting)
+			}
+		}
+		if !strings.Contains(recipe, "test -x /usr/local/lib/codex/packages/standalone/current/codex") {
+			t.Errorf("%s does not check that the codex installer produced a standalone package; remote control would fail in every VM built on the image", d.Containerfile)
 		}
 
 		// agy has no npm package. Installing it anywhere but a directory on
@@ -381,10 +402,17 @@ func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
 		Permissions struct {
 			DefaultMode string `json:"defaultMode"`
 		} `json:"permissions"`
+		RemoteControlAtStartup bool `json:"remoteControlAtStartup"`
 	}{}
 	readJSON(t, "distro/claude-settings.json", &claude)
 	if claude.Permissions.DefaultMode != "bypassPermissions" {
 		t.Errorf("claude-settings.json sets permissions.defaultMode to %q, want \"bypassPermissions\"; any other mode stops to ask", claude.Permissions.DefaultMode)
+	}
+	// The settings-file equivalent of `claude --remote-control`. claude treats
+	// it as security-sensitive and ignores it from project or local settings,
+	// so this per-account file is the only place that can turn it on.
+	if !claude.RemoteControlAtStartup {
+		t.Error("claude-settings.json does not set remoteControlAtStartup; claude sessions in a VM would start without Remote Control")
 	}
 
 	opencode := struct {
@@ -436,7 +464,7 @@ func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
 // file missing from the build context fails the build minutes in, after the
 // package installation has already been paid for.
 func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
-	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "agent-aliases.sh"} {
+	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "agent-aliases.sh", "codex-remote-control.sh"} {
 		if !slices.Contains(buildContextFiles, name) {
 			t.Errorf("%s is not in buildContextFiles %v, so podman's build context will not contain it", name, buildContextFiles)
 		}
@@ -666,6 +694,68 @@ func TestUserSetupScript_DoesBothJobsItIsThereFor(t *testing.T) {
 	// account has to come from coreutils.
 	if strings.Contains(script, "$(hostname)") {
 		t.Error("the first-boot script calls hostname, which Arch does not install; use uname -n")
+	}
+}
+
+// TestCodexRemoteControl_StartsAtEveryBootWithoutBreakingIt guards the unit
+// and script that bring Codex's remote-control daemon up on a running VM.
+//
+// The daemon cannot be started at build time and it is not a first-boot job
+// either: it dies with the VM, so it is started again on every boot. It also
+// needs credentials that only arrive per-VM (SECURITY.md), so on a VM where
+// nobody has run `codex login` this must report the failure and leave the boot
+// alone — a VM unreachable because a daemon nobody asked for could not
+// authenticate would be far worse than one without remote control.
+func TestCodexRemoteControl_StartsAtEveryBootWithoutBreakingIt(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "COPY codex-remote-control.sh /usr/local/sbin/agent-vm-codex-remote-control") {
+			t.Errorf("%s does not install the codex remote-control script", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "enable agent-vm-codex-remote-control.service") {
+			t.Errorf("%s does not enable agent-vm-codex-remote-control.service; the daemon would never start on a VM", d.Containerfile)
+		}
+		// Wanted by cloud-final.service, not multi-user.target: a unit
+		// ordered after cloud-final and wanted by that target forms a cycle
+		// systemd breaks by dropping our job, leaving the unit enabled,
+		// inactive, and silent.
+		if !strings.Contains(recipe, "'WantedBy=cloud-final.service' \\\n      > /usr/lib/systemd/system/agent-vm-codex-remote-control.service") {
+			t.Errorf("%s does not attach the codex remote-control unit to cloud-final.service; ordering it after cloud-final under multi-user.target forms a cycle and the job is silently dropped", d.Containerfile)
+		}
+	}
+
+	script := readTemplate(t, "distro/codex-remote-control.sh")
+
+	if !strings.Contains(script, "codex remote-control start") {
+		t.Error("the boot script does not start codex remote control")
+	}
+	// The daemon reads the account's own credentials, and runuser without -l
+	// keeps root's environment: without an explicit HOME every account's
+	// daemon would authenticate as root.
+	if !strings.Contains(script, `runuser -u "${name}" -- env HOME="${home}"`) {
+		t.Error("the boot script does not run codex as the account with that account's HOME; every daemon would use root's credentials")
+	}
+	// codex remote-control starts its app-server from a fixed path under the
+	// account's CODEX_HOME and refuses to run when it is absent. One shared
+	// package is ~300 MiB, so each account gets a symlink rather than a copy.
+	if !strings.Contains(script, "/usr/local/lib/codex/packages/standalone/current") {
+		t.Error("the boot script does not link accounts to the shared standalone package; codex remote-control refuses to start without one")
+	}
+	if !strings.Contains(script, `if [ -e "${link}" ] || [ -L "${link}" ]; then`) {
+		t.Error("the boot script does not leave an existing ~/.codex/packages/standalone/current alone; a re-run could replace an operator's own install")
+	}
+	// A missing login is the normal state of a fresh VM. Failing the unit for
+	// it would mark the boot degraded for something nobody asked for.
+	if !strings.Contains(script, "codex login") {
+		t.Error("the boot script does not tell the operator how to make remote control work; a failure with no next step is not an error message")
+	}
+	if strings.Contains(script, "exit 1") {
+		t.Error("the boot script can exit non-zero; a VM with no codex credentials would boot degraded")
 	}
 }
 

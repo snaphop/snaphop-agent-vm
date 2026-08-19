@@ -71,6 +71,7 @@ var buildContextFiles = []string{
 	"chromium.sh",
 	"sdkman.sh",
 	"user-setup.sh",
+	"codex-remote-control.sh",
 	"tmux-menu.sh",
 	"tmux-menu-profile.sh",
 }
