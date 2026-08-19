@@ -7,8 +7,7 @@ Both follow the same repository rules and quality bar.
 
 - Go 1.22 or newer (pure Go build — no cgo, no libvirt headers)
 - A Linux host with KVM (`/dev/kvm`), libvirt 9.0+, and QEMU 8.0+
-- `virt-install` 4.0+, `qemu-img`, `podman` 4.0+ (or `skopeo` 1.11+),
-  libguestfs 1.50+
+- `virt-install` 4.0+, `qemu-img`, `podman` 4.0+, libguestfs 1.50+
 - `golangci-lint`
 - Membership in the `kvm` and `libvirt` groups
 

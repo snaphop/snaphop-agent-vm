@@ -49,13 +49,14 @@ single-host tool with no daemon of its own.
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -json link bridge validation         │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
+│  internal/github     gh api calls for --github-ssh-key, on the host only           │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
 │  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status    │
 └───────────────────────────────────────┬────────────────────────────────────────────┘
                                         │ argv + machine-readable output
         ┌───────────────────────────────┼────────────────────────────┐
         ▼                               ▼                            ▼
- podman / skopeo              virt-install, virsh              qemu-img, virt-make-fs
+ podman                       virt-install, virsh              qemu-img, virt-make-fs
  (pull, build, export)        (define, lifecycle, query)       virt-ls, virt-copy-out
         │                               │                       virt-sysprep, ssh
         │                               ▼                            │
@@ -104,7 +105,7 @@ versions are enforced by `agent-vm doctor`.
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -json link show type bridge` |
-| OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` (or `skopeo copy`) |
+| OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` |
 | Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
 | Kernel/initrd extraction | `virt-ls`, `virt-copy-out` |
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
@@ -128,6 +129,23 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 
 ## Components
 
+### `internal/cli`
+
+- **Responsibility:** Orchestration and nothing else. Parses flags, resolves
+  configuration, calls the package that owns each concern, decides what the
+  operator sees on stdout and stderr, asks for confirmation before a
+  destructive operation, and maps every failure to a documented exit code. It
+  does not render XML, build argument vectors, or spawn processes itself.
+- **Public interface:** the whole command line — subcommands, flags, defaults,
+  `--output json` fields, and exit codes ([`cli.md`](./cli.md)) — plus the
+  hidden `__complete` helper the generated shell completions call.
+- **Failure behavior:** classification lives in one place (`exitCodeFor`), so a
+  new error type gets its code by declaring what kind of failure it is rather
+  than by threading a number through call sites. Nothing panics out to `main`.
+- **Compatibility constraints:** flags, `--help` text, and `cli.md` move
+  together; renaming a flag or changing an exit code's meaning is a contract
+  change.
+
 ### `internal/config`
 
 - **Responsibility:** Resolve and validate configuration — defaults, config
@@ -150,7 +168,9 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   needs and a container lacks (kernel, `systemd`, `cloud-init`,
   `openssh-server`, `sudo`, `qemu-guest-agent`) plus the tooling an agent expects
   to find already installed (networking and diagnostic tools, `curl`/`wget`,
-  `git`, a C toolchain, Python, and Docker) → `podman export` to flatten →
+  `git`, a C toolchain, Python, Docker, language toolchains, and the coding
+  agents themselves — the full inventory is in
+  [`cli.md`](./cli.md#guest-tooling)) → `podman export` to flatten →
   `virt-make-fs` to produce `base.qcow2` → `virt-ls`/`virt-copy-out` to extract
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and
@@ -158,15 +178,18 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 - **Public interface:** the on-disk image layout, the `manifest.json` schema, and
   the per-distro `Containerfile`s — which are the readable, reviewable form of all
   distro-specific knowledge in the project.
-- **Key dependencies:** `podman`/`skopeo`, `qemu-img`, libguestfs
+- **Key dependencies:** `podman`, `qemu-img`, libguestfs
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), each behind an
   interface so tests substitute a fake at the process boundary. Network access to a
   registry — the only external dependency in the system.
 - **Failure behavior:** builds into a temporary directory and renames into place
   only on success, so a failed or interrupted build never leaves a partially
-  written base image that a VM could boot from. Registry failures are retried
-  with backoff; a digest mismatch is fatal and never falls back to an unpinned
-  image.
+  written base image that a VM could boot from, and the workspace is removed
+  whether the failure was ours or a tool's. Nothing is retried: a failed pull or
+  build surfaces the tool's own error and the operator reruns `image build`. A
+  digest that cannot be read back from what was pulled is fatal, and the build
+  never falls back to an unpinned reference. A rebuild keeps the previous image
+  until the new one is complete.
 - **Compatibility constraints:** base images produced by older releases must stay
   bootable, or `schemaVersion` rises and the rebuild path is documented.
 
@@ -238,6 +261,23 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   unknown `schemaVersion` is refused, not guessed at.
 - **Compatibility constraints:** the layout is public; scripts and operators read
   it directly.
+
+### `internal/github`
+
+- **Responsibility:** Add and remove SSH **public** keys on the operator's
+  GitHub account through `gh api`, for `create --github-ssh-key` and
+  `destroy --github-ssh-key`. `gh api` is used rather than `gh ssh-key
+  add`/`delete` because it returns the key's numeric id, which is the handle
+  `destroy` needs later, and takes that id back without a prompt.
+- **Public interface:** the `guest.githubKey` field in `vm.json` and the key
+  title `agent-vm <name> on <host>`.
+- **Failure behavior:** `gh auth status` is checked before a VM is created, so
+  an expired login costs nothing. A `gh` failure after the VM exists leaves the
+  VM in place and names the command to rerun; a key already deleted on
+  github.com is not an error.
+- **Compatibility constraints:** it runs on the **host**, with the operator's
+  existing login. No GitHub credential ever enters a guest, and the guest's
+  private key never leaves it (SECURITY.md).
 
 ### `internal/progress`
 
@@ -392,7 +432,7 @@ configuration; the only key material referenced is an SSH public key path.
 | `virt-install` (`virtinst`) | 4.0 | Define and start domains; build the cloud-init seed | `create` fails before a domain exists | Exit `3` or the tool's own error with argv; upstream virt-manager |
 | `virsh` | 9.0 | Lifecycle, inspection, addresses, NAT network | Lifecycle and query commands fail | Exit `3`; shipped with libvirt |
 | `qemu-img` | 8.0 | Overlay creation, disk facts | `create` fails before defining a domain | Retry after fixing the host; upstream QEMU |
-| `podman` / `skopeo` | 4.0 / 1.11 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Retry with backoff; upstream |
+| `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization | `image build` fails; appliance problems are the usual cause | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | `agent-vm ssh` | Only that subcommand fails | Host operator |

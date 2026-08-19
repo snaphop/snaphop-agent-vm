@@ -17,7 +17,7 @@
 - **Key dependencies / frameworks:** existing host CLI tools, orchestrated rather
   than reimplemented (ADR-0009) — `virt-install` (defines domains and builds the
   cloud-init seed), `virsh` (lifecycle, inspection, NAT network, addresses,
-  console), QEMU/KVM, `qemu-img` (copy-on-write overlays), `podman`/`skopeo` (OCI
+  console), QEMU/KVM, `qemu-img` (copy-on-write overlays), `podman` (OCI
   pull, build, flatten), libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`,
   `virt-sysprep`), `ip` (bridge validation), and `ssh`. The Go code is pure Go —
   no cgo, no libvirt bindings.
@@ -34,10 +34,11 @@
 describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
-`Containerfile`s), `internal/guestinit`, `internal/domain`, and the `doctor`,
-`image`, `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
-`destroy`, `--version`, and `--dry-run` surfaces in `internal/cli` — every
-command in the documented contract. What remains is hardening: the integration
+`Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
+`internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
+`start`, `stop`, `restart`, `ssh`, `console`, `destroy`, `completion`,
+`--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
+documented contract. What remains is hardening: the integration
 suite in `test/integration/` now covers the image build **and** the VM
 lifecycle — create, boot, SSH, stop/start/restart, destroy, rollback after a
 failed create, and the refusal to destroy a domain this tool did not create —
@@ -83,6 +84,7 @@ path documented.
 │   ├── network/            # virsh net-* for NAT, ip -json bridge validation
 │   ├── guestinit/          # cloud-init user-data generation
 │   ├── state/              # state directory, vm.json, locking
+│   ├── github/             # gh api calls for --github-ssh-key, host-side only
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
@@ -140,7 +142,7 @@ Prerequisites:
   `libvirt` groups
 - libvirt 9.0+ (`libvirtd` or `virtqemud`, plus `virsh`) and QEMU 8.0+
 - `virt-install` 4.0+ (`virtinst` on Debian/Ubuntu)
-- `qemu-img`, `podman` 4.0+ (or `skopeo` 1.11+), and libguestfs 1.50+
+- `qemu-img`, `podman` 4.0+, and libguestfs 1.50+
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`)
 - `gh` 2.0+ — optional, and needed only by `--github-ssh-key` on `create` and
   `destroy`
@@ -245,6 +247,10 @@ Major modules and responsibilities:
   validates an existing host bridge with `ip -json link`.
 - `internal/state` — owns the state directory, per-VM `vm.json`, and the file
   locks that keep concurrent `create`/`destroy` calls from racing.
+- `internal/github` — adds and removes SSH **public** keys on the operator's
+  GitHub account through `gh api`, for `--github-ssh-key` on `create` and
+  `destroy`. It runs on the host with the operator's existing login; no GitHub
+  credential ever enters a guest.
 - `internal/progress` — renders the progress of a long, multi-step operation: a
   bar redrawn in place on a terminal, one plain line per step anywhere else.
   Presentation only; the package doing the work reports which step it reached.
@@ -340,7 +346,7 @@ formatting-only changes may be omitted.
   test through public boundaries (`internal/cli` entry points, not private
   helpers).
 - Mock external systems at the process boundary: `virt-install`, `virsh`,
-  `qemu-img`, `podman`/`skopeo`, and the libguestfs tools each sit behind an
+  `qemu-img`, `podman`, and the libguestfs tools each sit behind an
   interface that tests can substitute. Do not mock inside your own packages.
 - Output parsers are tested against fixtures in `test/toolout/` captured from real
   tools, with the producing tool's version recorded alongside. Hand-written fake

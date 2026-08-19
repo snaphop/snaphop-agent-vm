@@ -103,7 +103,9 @@ Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `/dev/kvm` and libvirt access another way and the checks that test those directly
 are the ones that matter. Free space below 10 GiB is a warning: a cached base
 image needs 2–3 GiB and thin overlays grow as guests write. A NAT network that is
-not defined yet is a pass — `create` defines it on demand. `doctor` only inspects;
+not defined yet is a pass — `create` defines it on demand, on
+`192.168.171.0/24` with libvirt allocating the bridge device (see
+[`docs/host-setup.md`](./host-setup.md#5-nat-networking-default)). `doctor` only inspects;
 it never changes host state.
 
 The **host firewall forwarding** check exists because libvirt accepting the
@@ -135,8 +137,10 @@ them never match on an IPv4-only NAT network. It reports
 ruleset cannot be read without root and a false failure would exit non-zero on a
 working host. The remedy names the NAT network to look the bridge up with, since
 libvirt allocates the bridge (`virbrN`) and its name is not knowable from
-configuration alone. The check is skipped for bridged mode, where guest traffic
-is not routed through the host at all. Only `ufw` is understood, so a pass means
+configuration alone. The check is skipped in bridged mode, where a guest sits on the LAN
+directly and its traffic never reaches the host's forward hook. It asks about
+the network *mode*, not whether a bridge is configured, so a host that sets a
+default `[network.bridge] interface` and still creates NAT VMs is checked. Only `ufw` is understood, so a pass means
 "no `ufw` problem" rather than "no firewall problem";
 [`docs/host-setup.md`](./host-setup.md#host-firewalls-and-the-virbrn-bridge)
 covers the rule to add, why it can stop matching when libvirt allocates a
@@ -163,7 +167,7 @@ version:
 | QEMU (`qemu-system-*`, `qemu-img`) | 8.0 |
 | `virt-install` | 4.0 |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 |
-| `podman` (or `skopeo`) | 4.0 (1.11) |
+| `podman` | 4.0 |
 | `ip` (iproute2), `ssh` | any |
 
 ```bash
@@ -850,4 +854,106 @@ lock that has to be cleared by hand.
 
 Both `manifest.json` and `vm.json` carry a `schemaVersion`. The tool refuses to
 operate on a version it does not understand and says what to rebuild instead of
-guessing.
+guessing. Both are at version `1`.
+
+## Stored Records
+
+These two files are a public contract: scripts and agent supervisors read them
+directly, and they are also what `--output json` prints — `create` and `info`
+emit the `vm.json` record, `image inspect` emits one manifest, and `image list`
+emits an array of them. Fields are added compatibly; renaming or removing one,
+or changing what a value means, raises `schemaVersion`.
+
+### `vms/<name>/vm.json`
+
+The system of record for a VM's configuration and provenance. Runtime state is
+**not** here — libvirt owns that, and the tool asks it rather than caching an
+answer that goes stale.
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "agent-01",
+  "createdAt": "2026-08-19T09:14:03Z",
+  "libvirtUri": "qemu:///system",
+  "distro": "ubuntu:24.04",
+  "baseImage": {
+    "distro": "ubuntu",
+    "tag": "24.04",
+    "sourceRef": "docker.io/library/ubuntu:24.04",
+    "sourceDigest": "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
+    "path": "/home/you/.local/share/agent-vm/images/ubuntu/24.04/base.qcow2"
+  },
+  "resources": { "vcpus": 2, "memory": "4G", "disk": "50G" },
+  "network": { "mode": "nat", "name": "agent-vm-nat", "mac": "52:54:00:1a:2b:3c" },
+  "guest": {
+    "user": "agent",
+    "sshKeyPaths": ["/home/you/.ssh/id_ed25519.pub"]
+  },
+  "paths": {
+    "dir": "/home/you/.local/share/agent-vm/vms/agent-01",
+    "overlay": "/home/you/.local/share/agent-vm/vms/agent-01/root.qcow2",
+    "userData": "/home/you/.local/share/agent-vm/vms/agent-01/user-data",
+    "domainXml": "/home/you/.local/share/agent-vm/vms/agent-01/domain.xml",
+    "consoleLog": "/home/you/.local/share/agent-vm/vms/agent-01/console.log"
+  },
+  "createdBy": {
+    "agentVmVersion": "0.1.0",
+    "virtInstallVersion": "5.1.0",
+    "virtInstallArgv": ["virt-install", "--connect", "qemu:///system", "…"]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | Schema of this file. A file with an unknown version is refused, never guessed at. |
+| `name`, `createdAt`, `libvirtUri` | Identity, creation time (UTC), and the connection the domain was defined on. |
+| `distro` | The `<distro>:<tag>` reference as it was requested. |
+| `baseImage` | The image the overlay is backed by, **by digest as well as by name** — a tag can be rebuilt, a digest cannot. `path` is the backing file. |
+| `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. |
+| `network` | `mode` is `nat` or `bridge`; `name` is the libvirt network in NAT mode, `bridge` the host interface in bridge mode, and `mac` is what libvirt allocated. Recorded so exposure stays auditable after the fact. |
+| `guest.user` | The account to SSH in as. |
+| `guest.sshKeyPaths` | Paths of the **public** keys that were authorized. Key material is never recorded. |
+| `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
+| `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the generated user-data, the captured `domain.xml`, and `console.log`. |
+| `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |
+
+### `images/<distro>/<tag>/manifest.json`
+
+What a cached base image is and how it was produced.
+
+```json
+{
+  "schemaVersion": 1,
+  "distro": "ubuntu",
+  "tag": "24.04",
+  "builtAt": "2026-08-19T09:14:03Z",
+  "platform": "linux/amd64",
+  "sourceRef": "docker.io/library/ubuntu:24.04",
+  "sourceDigest": "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
+  "kernelVersion": "6.8.0-31-generic",
+  "kernelCmdline": "root=/dev/vda1 console=ttyS0 rw",
+  "baseDiskBytes": 1502576640,
+  "toolVersions": {
+    "podman": "6.1.0",
+    "virt-make-fs": "1.56.0",
+    "virt-ls": "1.56.0",
+    "virt-copy-out": "1.56.0",
+    "virt-sysprep": "1.56.0"
+  },
+  "agentVmVersion": "0.1.0"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `schemaVersion` | Schema of this file. Base images built by an older release stay bootable, or this rises with a documented rebuild path. |
+| `distro`, `tag`, `builtAt`, `platform` | Identity, build time (UTC), and the OS/arch that was pulled. |
+| `sourceRef` | The OCI reference that was named. |
+| `sourceDigest` | What was actually pulled — the authoritative identity, and what everything after the pull was built on. |
+| `kernelVersion` | The kernel in the image, read from `/usr/lib/modules`. |
+| `kernelCmdline` | The command line every VM on this image boots with. Under direct kernel boot it lives on the host, not in the guest, so it is only discoverable here ([ADR-0004](./decisions/0004-direct-kernel-boot-with-copy-on-write-overlays.md)). |
+| `baseDiskBytes` | Size of `base.qcow2` in bytes. |
+| `toolVersions` | The version of each tool that produced the image, so an artifact built by a known-bad version can be found later. |
+| `agentVmVersion` | The `agent-vm` build that ran the pipeline. |

@@ -15,6 +15,17 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Fixed
+
+- `agent-vm doctor` no longer skips the **host firewall forwarding** check on a
+  host that has a default bridge configured but creates NAT VMs. The check
+  keyed on `[network.bridge] interface` being set at all rather than on the
+  network mode, so following the advice in `docs/host-setup.md` to configure a
+  default bridge silently turned off the one check that catches a `ufw` host
+  dropping guest traffic — the failure where a VM boots, answers SSH, resolves
+  DNS, and hangs on every outbound connection. It now skips only in bridged
+  mode, where guest traffic genuinely never reaches the host's forward hook.
+
 ### Added
 
 - Building a base image now shows its progress. On a terminal it is one line,
@@ -46,31 +57,6 @@ migration or rebuild step a user has to take.
   login shell. **Run `agent-vm image build <distro> --force` to pick this
   up** — existing cached images have no Rust.
 
-### Changed
-
-- The Go toolchain in a base image now comes from the current go.dev release
-  instead of the distribution's package. Every family packaged a different and
-  often years-old Go, and a guest whose Go is older than the `go` directive of
-  the repository an agent was handed cannot build it at all; all three families
-  now carry the same release. `go` and `gofmt` are in `/usr/local/bin` as
-  before, and `~/go/bin` and `~/.cargo/bin` are added to the path of a login
-  shell. Existing cached images keep their packaged Go until rebuilt with
-  `agent-vm image build <distro> --force`.
-
-- `codex` in a base image now comes from OpenAI's own installer
-  (`https://chatgpt.com/codex/install.sh`) instead of the `@openai/codex` npm
-  package. `codex remote-control` only runs against the standalone package that
-  installer produces — it starts its app-server from a fixed path under the
-  account's `CODEX_HOME` and refuses to run when that directory is missing,
-  which is what an npm install leaves behind. The package is installed once
-  into `/usr/local/lib/codex` and shared by every account (it is around
-  300 MiB), with the command in `/usr/local/bin` as before, and each account
-  gets a symlink to it under `~/.codex` at first boot so credentials and
-  configuration stay per-account. **Run `agent-vm image build <distro> --force`
-  to pick this up** — existing cached images still have the npm build.
-
-### Added
-
 - `claude` in a VM now starts with Remote Control enabled in every session. Base
   images set `remoteControlAtStartup` in the per-account settings file, which is
   the settings-file equivalent of `claude --remote-control`; claude ignores that
@@ -87,30 +73,6 @@ migration or rebuild step a user has to take.
   in `journalctl -u agent-vm-codex-remote-control` — deliberately without
   failing the boot. After logging in inside the VM, `sudo systemctl start
   agent-vm-codex-remote-control` starts it.
-
-### Fixed
-
-- `ping` works for the guest's own user again. In a guest the command failed
-  with `socket: Operation not permitted ... missing cap_net_raw+p capability`
-  for anything but root, which looks exactly like a VM with no network even
-  though its lease, route, and TCP traffic were all fine. The capability distro
-  packaging puts on `/usr/bin/ping` is an extended attribute, and it does not
-  survive the `podman export` tar that `virt-make-fs` turns into the disk;
-  Ubuntu and Fedora then leave `net.ipv4.ping_group_range` at the kernel's
-  empty default, so the fallback to an ICMP socket was closed too. Base images
-  now ship a sysctl drop-in that opens that range. **Run
-  `agent-vm image build <distro> --force` to pick this up** — existing cached
-  images still produce guests with the old behavior.
-
-- `agent-vm create --github-ssh-key` no longer fails with `cat:
-  .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
-  booted. The guest generates that key from a first-boot unit that runs after
-  cloud-init's final stage, which is later than the point where SSH starts
-  answering, so the read raced the guest. It is now retried for up to
-  `--wait-for-ssh` and, if the key never appears, the error names the
-  `agent-vm-user-setup.service` unit to look at.
-
-### Added
 
 - `agent-vm create` no longer needs `--ssh-key` on a host where you already
   have an SSH key. When no key is named by the flag, `AGENT_VM_SSH_KEY`, or the
@@ -200,7 +162,118 @@ migration or rebuild step a user has to take.
   the seed does not create, was renamed from `agent-vm-docker-group.service` to
   `agent-vm-user-setup.service` and now does both jobs above.
 
+### Changed
+
+- The Go toolchain in a base image now comes from the current go.dev release
+  instead of the distribution's package. Every family packaged a different and
+  often years-old Go, and a guest whose Go is older than the `go` directive of
+  the repository an agent was handed cannot build it at all; all three families
+  now carry the same release. `go` and `gofmt` are in `/usr/local/bin` as
+  before, and `~/go/bin` and `~/.cargo/bin` are added to the path of a login
+  shell. Existing cached images keep their packaged Go until rebuilt with
+  `agent-vm image build <distro> --force`.
+
+- `codex` in a base image now comes from OpenAI's own installer
+  (`https://chatgpt.com/codex/install.sh`) instead of the `@openai/codex` npm
+  package. `codex remote-control` only runs against the standalone package that
+  installer produces — it starts its app-server from a fixed path under the
+  account's `CODEX_HOME` and refuses to run when that directory is missing,
+  which is what an npm install leaves behind. The package is installed once
+  into `/usr/local/lib/codex` and shared by every account (it is around
+  300 MiB), with the command in `/usr/local/bin` as before, and each account
+  gets a symlink to it under `~/.codex` at first boot so credentials and
+  configuration stay per-account. **Run `agent-vm image build <distro> --force`
+  to pick this up** — existing cached images still have the npm build.
+
+- Base images are no longer built purely from their distribution's own
+  repositories. The coding agents are not packaged by any distro, so a build now
+  reaches npm and one vendor install script, and on Ubuntu it also adds the
+  NodeSource repository and GPG key — Ubuntu 24.04 ships Node.js 18 and the
+  agents need 22.19 or newer. Fedora and Arch use their own Node.js. A build
+  fails outright if the Node.js it ends up with is older than 22.19, rather than
+  producing an image whose agents silently cannot start, and holds `npm` to the
+  11 line because npm 12 skips the postinstall scripts two of the agents need. Building a base image
+  already required network access to a registry; it now also requires reaching
+  these sources.
+
+- The state directory now also contains `networks/`, holding the network XML
+  passed to `virsh net-define` as a record, and `locks/`. Both are documented in
+  `docs/cli.md`.
+
+- The NAT network is defined on `192.168.171.0/24` rather than colliding with
+  libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
+  bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
+
+- `create --no-start` is now rejected with exit `2` and an explanation, instead
+  of being listed as a working flag. `virt-install` always boots a guest that
+  has cloud-init data — the generated seed is attached to that first boot only
+  and is absent from the domain it leaves defined — so a VM stopped before
+  cloud-init finished would never receive its SSH key and could not be reached
+  afterwards. Create the VM and stop it instead:
+  `agent-vm create <name> && agent-vm stop <name>`. Documented in
+  `docs/cli.md`.
+
+- A cached base image directory also holds the `Containerfile` it was built
+  from, as a record of the recipe that produced it. Documented in
+  `docs/cli.md`.
+
+- `--dry-run` now guarantees that nothing changes, including the state
+  directory itself: it is not created, and commands that would delete or write
+  print what they would do instead. `image build` prints its whole pipeline
+  with `<placeholders>` for the values that only exist once a build has run,
+  rather than executing the read-only half of a pipeline whose earlier steps
+  were skipped.
+
+- Replaced the repository's generic project-template documentation with
+  project-specific instructions: `AGENTS.md` now describes the real layout,
+  commands, contracts, and prohibited actions; `SECURITY.md` states the trust
+  boundaries that apply when an untrusted agent runs inside a VM; and
+  `CONTRIBUTING.md` and `CODE_REVIEW.md` reflect the actual verification steps.
+
+- Repository layout now follows Go conventions (`cmd/`, `internal/`,
+  `templates/`, `test/`) in place of the placeholder `src/` and `tests/`
+  directories.
+
+- Reworked the design to drive existing tools rather than reimplement them
+  (ADR-0009): domains are defined with `virt-install` and managed with `virsh`
+  instead of through libvirt Go bindings and a hand-maintained domain XML template;
+  base images are built with `podman` plus `virt-make-fs`/`virt-copy-out`/
+  `virt-sysprep`; cloud-init seeds are built by `virt-install`; and `ssh` and
+  `virsh console` are exec'd directly. The build is now pure Go with no cgo, and
+  the required host tools and their minimum versions are documented and checked by
+  `agent-vm doctor`.
+
+- `create`, `destroy`, `image build`, and `image rm` now report a lock they
+  could not release instead of discarding the failure. A stuck lock is host
+  state an operator has to clear before the next run, so it is no longer
+  silent.
+
+### Removed
+
+- The template setup checklist (`docs/project-setup.md`), which no longer applies
+  now that the repository is a real project; it became `docs/host-setup.md`.
+
 ### Fixed
+
+- `ping` works for the guest's own user again. In a guest the command failed
+  with `socket: Operation not permitted ... missing cap_net_raw+p capability`
+  for anything but root, which looks exactly like a VM with no network even
+  though its lease, route, and TCP traffic were all fine. The capability distro
+  packaging puts on `/usr/bin/ping` is an extended attribute, and it does not
+  survive the `podman export` tar that `virt-make-fs` turns into the disk;
+  Ubuntu and Fedora then leave `net.ipv4.ping_group_range` at the kernel's
+  empty default, so the fallback to an ICMP socket was closed too. Base images
+  now ship a sysctl drop-in that opens that range. **Run
+  `agent-vm image build <distro> --force` to pick this up** — existing cached
+  images still produce guests with the old behavior.
+
+- `agent-vm create --github-ssh-key` no longer fails with `cat:
+  .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
+  booted. The guest generates that key from a first-boot unit that runs after
+  cloud-init's final stage, which is later than the point where SSH starts
+  answering, so the read raced the guest. It is now retried for up to
+  `--wait-for-ssh` and, if the key never appears, the error names the
+  `agent-vm-user-setup.service` unit to look at.
 
 - Arch guests boot again. The image ships no `/etc/machine-id`, which systemd
   reads as a first boot, and Arch enables `systemd-firstboot.service` — which,
@@ -277,7 +350,6 @@ migration or rebuild step a user has to take.
   Existing cached base images are unaffected and still boot. They will not have
   these tools until rebuilt with `agent-vm image build --force`.
 
-
 - Base images now ship five coding agents — `claude`, `codex`, `opencode`, `pi`,
   and `agy` — so a new VM is usable by an agent the moment it becomes reachable,
   instead of starting with an install. Four come from npm and bring a Node.js 24
@@ -306,7 +378,6 @@ migration or rebuild step a user has to take.
 
   Existing cached base images are unaffected and still boot. They will not have
   the agents until rebuilt with `agent-vm image build --force`.
-
 
 - `agent-vm completion <bash|zsh|fish>` prints a tab-completion script for the
   shell you name, so `agent-vm ` and Tab offers command names, a command's own
@@ -367,6 +438,7 @@ migration or rebuild step a user has to take.
   configured and still produces guests that never get an address, so an
   interface allowed to forward but not allowed to answer DHCP (67/udp) or DNS
   (53) is reported, with the rules to add for that specific interface.
+
 - `agent-vm doctor` now reports whether the account the hypervisor runs as can
   reach the state directory. Under `qemu:///system` QEMU runs as libvirt's own
   user (`libvirt-qemu`, `qemu`, or whatever `/etc/libvirt/qemu.conf` sets), which
@@ -381,10 +453,12 @@ migration or rebuild step a user has to take.
   has already been fixed with `setfacl` is reported as passing; it is skipped
   rather than guessed when the hypervisor's account cannot be identified, and it
   does not apply to `qemu:///session`, where QEMU runs as the invoking user.
+
 - The first working `agent-vm` binary. It builds as a single static Go binary
   with no cgo, and implements the `doctor` command, the `--version` report, and
   the global flags (`--config`, `--state-dir`, `--libvirt-uri`, `--output`,
   `--verbose`, `--quiet`, `--yes`, `--dry-run`).
+
 - `agent-vm doctor` checks whether a host can run VMs: `/dev/kvm`, the libvirt
   connection, group membership, the state directory and its free space, whether
   the hypervisor's own account can reach the state directory, every required
@@ -392,23 +466,29 @@ migration or rebuild step a user has to take.
   bridge. Each check reports pass, warn, fail, or skip with a remedy; only a
   failure exits non-zero (exit `3`). It is available as `--output json` for
   scripts, and it never changes host state.
+
 - `agent-vm --version` reports the tool's version together with the detected
   versions of `virsh`, `virt-install`, `qemu-img`, `podman`, the libguestfs
   tools, `ip`, and `ssh`, so "which versions am I running against?" is
   answerable before something breaks.
+
 - Configuration resolution with the documented precedence — defaults, then
   `config.toml`, then `AGENT_VM_*` environment variables, then flags — with
   validation that fails before any host state changes. The documented defaults
   (2 vCPU, 4 GiB RAM, 50 GiB disk, NAT, `ubuntu`, guest user `agent`) are
   enforced by tests so a change to one is visible as a contract change.
+
 - The state directory, `vm.json`, and `manifest.json`, both carrying a
   `schemaVersion` that the tool refuses to guess at, plus advisory file locks
   that keep two `agent-vm` processes from racing on the same VM or base image.
   A crashed process never leaves a lock behind for a human to clear.
+
 - NAT network management (`virsh net-define`/`net-start`/`net-autostart` from
   embedded network XML) and host bridge validation via `ip -json link`.
+
 - `scripts/check.sh` (format, vet, lint, unit tests) and
   `scripts/build-release.sh` (static binary per architecture).
+
 - The base image build pipeline and the `agent-vm image build`, `image list`,
   `image inspect`, and `image rm` commands. A build pulls the source image,
   pins it to the digest that was actually fetched, builds the embedded
@@ -417,28 +497,35 @@ migration or rebuild step a user has to take.
   and generalizes the image with `virt-sysprep` so no two VMs share a machine
   ID or SSH host key. It records the source digest, kernel version, kernel
   command line, and the version of every tool that took part.
+
 - Per-distro build recipes for Ubuntu, Fedora, and Arch Linux in
   `templates/distro/`, which are the readable form of all distro-specific
   knowledge in the project. Each installs a kernel, an initramfs generator,
   systemd, cloud-init, sshd, sudo, and the QEMU guest agent, and restricts
   cloud-init to the NoCloud datasource so a guest never probes a metadata
   service on the network.
+
 - Golden-file testing (`internal/golden`, `test/golden/`), regenerated with
   `go test ./... -update-golden`. The first golden file pins the tool
   invocations an Ubuntu base image build performs.
+
 - Design documentation for `snaphop-agent-vm`: a tool that creates disposable
   QEMU/KVM virtual machines for AI coding agents, so an agent can run commands
   with root access on a throwaway machine instead of on the developer's host.
+
 - The `agent-vm` command-line contract in `docs/cli.md`, covering VM lifecycle
   (`create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
   `destroy`), base image management (`image build`, `list`, `inspect`, `rm`),
   host verification (`doctor`), configuration precedence, exit codes, and the
   on-disk state layout.
+
 - A system map in `docs/architecture.md` describing components, the `create`
   data flow and its rollback behavior, trust boundaries, external dependencies,
   and known operational risks.
+
 - A host preparation and troubleshooting guide in `docs/host-setup.md`, including
   bridge setup and how to check real disk consumption of thin VM disks.
+
 - Architecture Decision Records for the choices that shape the product:
   libvirt + QEMU/KVM as the virtualization stack (ADR-0002), OCI container
   images as the source of VM root filesystems (ADR-0003), copy-on-write overlays
@@ -447,6 +534,7 @@ migration or rebuild step a user has to take.
   Fedora, and Arch Linux (ADR-0006), the default 2 vCPU / 4 GiB / 50 GiB VM
   profile (ADR-0007), a single Go binary with no daemon (ADR-0008), and
   orchestrating existing host CLI tools instead of reimplementing them (ADR-0009).
+
 - A `--dry-run` global flag that prints the exact tool invocations an operation
   would perform without running them, a `--virt-install-arg` pass-through for
   anything the CLI does not expose, and an "Underlying Commands" table in
@@ -461,18 +549,21 @@ migration or rebuild step a user has to take.
   base image digest, the MAC address, and the exact `virt-install` version and
   argument vector that created the VM, so "what made this, from what?" is
   answerable from the state directory alone.
+
 - `create` is transactional: a failure anywhere through "define and start"
   removes the domain, the overlay, and the state directory, and reports both the
   original failure and anything the cleanup could not remove (exit `7`). The one
   exception is the boot wait — a `--wait-for-ssh` timeout exits `6` and leaves
   the VM in place with its `console.log`, because a slow boot and a failed boot
   need the same evidence.
+
 - Generated cloud-init user-data (`internal/guestinit`), pinned by golden files.
   It authorizes your public keys, creates the guest user with password login
   disabled and root login disabled, and nothing else. User-data you supply with
   `--cloud-init` is merged as a separate MIME part with explicit merge rules, so
   a mistake in your file cannot quietly replace the keys that let you in, and its
   contents are never logged or echoed in an error.
+
 - Domain management (`internal/domain`): the `virt-install` argument vector,
   golden-pinned for both network modes, and the `virsh` calls behind lifecycle
   and inspection. `virsh undefine` is never given `--remove-all-storage` — this
@@ -503,6 +594,7 @@ migration or rebuild step a user has to take.
   *is* that process. Arguments after `--` reach the guest untouched, even ones
   that look like `agent-vm` flags. `--dry-run` prints the exact `ssh` or
   `virsh console` command instead of running it, so you can use it by hand.
+
 - `ssh` authenticates with the private key that sits beside the public key you
   authorized (`id_ed25519` next to `id_ed25519.pub`), naming it to `ssh` only
   when it exists and never reading it. `create`'s readiness probe offers the
@@ -515,6 +607,7 @@ migration or rebuild step a user has to take.
   (`--yes` skips the question). `--force` powers the guest off immediately and
   `--keep-disk` removes only the libvirt domain, leaving the disk and the state
   directory behind.
+
 - `destroy` will not remove anything that is not this tool's: a name with no
   record in this state directory is a not-found error that never reaches
   libvirt, and a domain whose disk is not the overlay recorded here exits `5`
@@ -523,66 +616,6 @@ migration or rebuild step a user has to take.
   destroy is about to delete the disk and that is the last moment unwritten
   data can still be saved. A VM whose domain has already vanished from libvirt
   can still have its leftover state removed.
-
-### Changed
-
-- Base images are no longer built purely from their distribution's own
-  repositories. The coding agents are not packaged by any distro, so a build now
-  reaches npm and one vendor install script, and on Ubuntu it also adds the
-  NodeSource repository and GPG key — Ubuntu 24.04 ships Node.js 18 and the
-  agents need 22.19 or newer. Fedora and Arch use their own Node.js. A build
-  fails outright if the Node.js it ends up with is older than 22.19, rather than
-  producing an image whose agents silently cannot start, and holds `npm` to the
-  11 line because npm 12 skips the postinstall scripts two of the agents need. Building a base image
-  already required network access to a registry; it now also requires reaching
-  these sources.
-
-- The state directory now also contains `networks/`, holding the network XML
-  passed to `virsh net-define` as a record, and `locks/`. Both are documented in
-  `docs/cli.md`.
-- The NAT network is defined on `192.168.171.0/24` rather than colliding with
-  libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
-  bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
-- `create --no-start` is now rejected with exit `2` and an explanation, instead
-  of being listed as a working flag. `virt-install` always boots a guest that
-  has cloud-init data — the generated seed is attached to that first boot only
-  and is absent from the domain it leaves defined — so a VM stopped before
-  cloud-init finished would never receive its SSH key and could not be reached
-  afterwards. Create the VM and stop it instead:
-  `agent-vm create <name> && agent-vm stop <name>`. Documented in
-  `docs/cli.md`.
-- A cached base image directory also holds the `Containerfile` it was built
-  from, as a record of the recipe that produced it. Documented in
-  `docs/cli.md`.
-- `--dry-run` now guarantees that nothing changes, including the state
-  directory itself: it is not created, and commands that would delete or write
-  print what they would do instead. `image build` prints its whole pipeline
-  with `<placeholders>` for the values that only exist once a build has run,
-  rather than executing the read-only half of a pipeline whose earlier steps
-  were skipped.
-- Replaced the repository's generic project-template documentation with
-  project-specific instructions: `AGENTS.md` now describes the real layout,
-  commands, contracts, and prohibited actions; `SECURITY.md` states the trust
-  boundaries that apply when an untrusted agent runs inside a VM; and
-  `CONTRIBUTING.md` and `CODE_REVIEW.md` reflect the actual verification steps.
-- Repository layout now follows Go conventions (`cmd/`, `internal/`,
-  `templates/`, `test/`) in place of the placeholder `src/` and `tests/`
-  directories.
-- Reworked the design to drive existing tools rather than reimplement them
-  (ADR-0009): domains are defined with `virt-install` and managed with `virsh`
-  instead of through libvirt Go bindings and a hand-maintained domain XML template;
-  base images are built with `podman` plus `virt-make-fs`/`virt-copy-out`/
-  `virt-sysprep`; cloud-init seeds are built by `virt-install`; and `ssh` and
-  `virsh console` are exec'd directly. The build is now pure Go with no cgo, and
-  the required host tools and their minimum versions are documented and checked by
-  `agent-vm doctor`.
-
-- `create`, `destroy`, `image build`, and `image rm` now report a lock they
-  could not release instead of discarding the failure. A stuck lock is host
-  state an operator has to clear before the next run, so it is no longer
-  silent.
-
-### Fixed
 
 - A VM only reached the network's metadata service, and took four minutes to
   become reachable over SSH, on every boot after its first. Ubuntu's own
@@ -607,7 +640,6 @@ migration or rebuild step a user has to take.
   old file name; rebuild them with `agent-vm image build --force` to pick up the
   fix.
 
-
 - Ubuntu guests can install packages again. Every Ubuntu base image produced a
   guest whose apt sources named a suite called `UNAVAILABLE`, so `apt update`
   returned `404 Not Found` for every repository and nothing could be installed.
@@ -617,6 +649,7 @@ migration or rebuild step a user has to take.
   with `--no-install-recommends`, so it was absent and cloud-init substituted
   the literal string `UNAVAILABLE`. The Ubuntu image now installs `lsb-release`
   explicitly. Requires the same image rebuild as the DNS fix below.
+
 - Guests can resolve DNS names again. Every base image was built with an empty
   `/etc/resolv.conf`, so a VM came up with a working DHCP lease, a working
   default route and `systemd-resolved` running and holding the correct DNS
@@ -637,6 +670,7 @@ migration or rebuild step a user has to take.
   with `agent-vm image build --force <distro>:<tag>`. VMs created from a
   rebuilt image pick the fix up on their next boot; VMs already created from an
   old image do not, and need to be recreated.
+
 - `create`, `ssh`, and `list` no longer report a VM's address as `127.0.0.1`.
   Once the QEMU guest agent starts answering, `virsh domifaddr --source agent`
   lists the guest's loopback interface first, and the tool took that address at
@@ -644,6 +678,7 @@ migration or rebuild step a user has to take.
   the host's own SSH server instead of the guest. On a host running sshd this
   surfaced as `create` timing out with "did not accept SSH" on a VM that had in
   fact booted correctly. Loopback addresses are now skipped.
+
 - `agent-vm info` reports disk sizes for a **running** VM again. A running
   domain holds a write lock on its overlay, which made `qemu-img info` refuse to
   open it, so the virtual size, on-host size, and backing file silently
@@ -658,11 +693,6 @@ migration or rebuild step a user has to take.
   SSH public keys are injected, bridged networking (which removes the NAT
   boundary) is always opt-in, and destructive operations are confined to state
   this tool created.
-
-### Removed
-
-- The template setup checklist (`docs/project-setup.md`), which no longer applies
-  now that the repository is a real project; it became `docs/host-setup.md`.
 
 ## [0.1.0] - 2026-08-17
 

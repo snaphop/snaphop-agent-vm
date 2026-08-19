@@ -10,9 +10,11 @@ thrown away when the task is done.
 
 > **Status: implementation in progress.** Every command in the documented
 > contract is implemented — `doctor`, `image build`/`list`/`inspect`/`rm`,
-> `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`, and
-> `destroy` — and the integration suite has booted all three supported distros
-> in NAT mode on a real KVM host. Bridged mode is not yet exercised end to end.
+> `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
+> `destroy`, and `completion` — and the integration suite has built and booted
+> all three supported distros on a real KVM host, in **both** network modes:
+> the full lifecycle has been run for each distro under NAT and against a real
+> host bridge. What remains is hardening rather than missing commands.
 > [`docs/cli.md`](./docs/cli.md) remains the specification the implementation
 > must satisfy; where the two disagree, one of them is a bug.
 
@@ -37,10 +39,12 @@ None of that is new virtualization machinery — it is `virt-install`, `virsh`,
 
 - A Linux host with hardware virtualization (`/dev/kvm`)
 - libvirt 9.0+ (`libvirtd` or `virtqemud`, plus `virsh`) and QEMU 8.0+
-- `virt-install` 4.0+, `qemu-img`, `podman` 4.0+ (or `skopeo` 1.11+),
-  libguestfs 1.50+, plus `ip` (iproute2) and `ssh`
+- `virt-install` 4.0+, `qemu-img`, `podman` 4.0+, libguestfs 1.50+, plus `ip`
+  (iproute2) and `ssh`
 - Go 1.22+ to build from source (pure Go — no cgo, no libvirt headers)
 - Your user in the `kvm` and `libvirt` groups
+- Optional: `gh` 2.0+, needed only by `--github-ssh-key` on `create` and
+  `destroy`
 
 Host preparation, including bridge setup, is in
 [`docs/host-setup.md`](./docs/host-setup.md). Verify a host with:
@@ -101,6 +105,22 @@ Each is pinned by digest in its base image manifest, so a rebuild is explicit
 rather than something that happens behind your back. Adding a new distro
 *family* requires an ADR; adding a new tag within a supported family does not.
 
+## What A VM Comes With
+
+A base image is not a bare distro: it carries the tools an agent expects to
+find already installed, so `create` stays fast and a guest works offline.
+Beyond what makes a container image boot as a VM (kernel, `systemd`,
+`cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every image ships
+`git`, a C toolchain, Python, Go, Rust, a JDK with Maven, Docker, `gh` and
+`tea`, `wrangler`, Playwright with a headless Chromium, `tmux` with a session
+menu at login, and five coding agents — `claude`, `codex`, `opencode`, `pi`,
+and `agy` — each configured in its most permissive mode, because the VM is the
+sandbox. Guests can also run VMs of their own.
+
+**No credentials are baked in.** The agents ship configured but
+unauthenticated; logins arrive per VM. The full inventory, and why each piece
+is where it is, is in [`docs/cli.md`](./docs/cli.md#guest-tooling).
+
 ## Networking
 
 - **NAT (default).** The VM sits on a libvirt-managed NAT network. It can reach
@@ -150,7 +170,7 @@ make per-task VMs practical
 | Define and start a VM | `virt-install` |
 | Lifecycle, inspection, addresses, console, NAT network | `virsh` |
 | Copy-on-write overlays | `qemu-img` |
-| Pull, build, and flatten OCI images | `podman` (or `skopeo`) |
+| Pull, build, and flatten OCI images | `podman` |
 | Root filesystem, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | Host bridge validation | `ip -json link` |
 | Guest shell | `ssh` |

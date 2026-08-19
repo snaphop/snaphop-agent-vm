@@ -241,8 +241,11 @@ func forwardingCheck(cfg *config.Config, state ufwState) check {
 	const name = "host firewall forwarding"
 
 	// A bridged guest is on the operator's LAN directly and its traffic is not
-	// routed through the host, so the forward hook never sees it.
-	if cfg.Bridge != "" {
+	// routed through the host, so the forward hook never sees it. This asks
+	// about the network *mode*, not whether a bridge is configured: a host that
+	// sets a default bridge and still creates NAT VMs needs this check, and
+	// keying it on cfg.Bridge silently skipped exactly that host.
+	if cfg.BridgeMode() {
 		return check{
 			Name: name, Status: statusSkip,
 			Detail: "skipped: only NAT mode routes guest traffic through the host",
