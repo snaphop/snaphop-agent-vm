@@ -18,19 +18,21 @@ migration or rebuild step a user has to take.
 ### Changed
 
 - Base images now install the `claude`, `opencode`, and `pi` CLIs with **mise**
-  (its npm backend) instead of a global `npm install -g`. The commands work
-  exactly as before, including over a non-interactive `ssh <vm> claude -p '…'`:
-  each has a symlink in `/usr/local/bin` pointing at the `mise` binary, which
-  resolves the version from the calling account's own configuration. What
-  changes inside a guest: the agents are per account, installed into `/etc/skel`
-  during the build the same way the JDK is, so an account can move one to
-  another release with `mise use npm:@anthropic-ai/claude-code@<version>`
-  without `sudo` — where a global npm prefix previously needed root, and the
-  settings that make such an install run the packages' postinstall scripts are
-  part of the account's mise configuration. `codex` and
-  `agy` are unchanged, and still come from their vendors' installers. Existing
-  base images are unaffected — rebuild an image (`agent-vm image build --force`)
-  to pick this up.
+  (`mise use -g claude opencode pi`) instead of a global `npm install -g`. The
+  registry names resolve to each vendor's own native release, so the three no
+  longer run on Node — and `npm` is no longer held to the 11 line, because
+  nothing left in the image depends on an npm postinstall script. The commands
+  work exactly as before, including over a non-interactive
+  `ssh <vm> claude -p '…'`: each has a symlink in `/usr/local/bin` pointing at
+  the `mise` binary, which resolves the version from the calling account's own
+  configuration. What changes inside a guest: the agents are per account,
+  installed into `/etc/skel` during the build the same way the JDK is, so an
+  account can move one to another release with `mise use -g claude@<version>`
+  without `sudo` — where a global npm prefix previously needed root. Node.js is
+  still installed (`wrangler`, Playwright, and any JavaScript work in the guest
+  need it), and `codex` and `agy` are unchanged, still from their vendors'
+  installers. Existing base images are unaffected — rebuild an image
+  (`agent-vm image build --force`) to pick this up.
 
 - Base images now install the JDK and Maven with **mise** instead of SDKMAN.
   `java` and `mvn` work exactly as before — the newest Temurin JDK and Maven,

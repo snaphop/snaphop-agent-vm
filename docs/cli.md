@@ -249,7 +249,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
-| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, on a Node.js 24 runtime; `claude`, `opencode` and `pi` are managed by `mise` |
+| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` (Cloudflare) |
 | Browser automation | `playwright` with a headless `chromium` |
@@ -266,26 +266,24 @@ browsers, mise, Go, and Rust comes from the distro's own repository.
 #### Coding agents
 
 Every base image carries five coding agents, so a VM is usable by an agent the
-moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. Three are
-npm packages and need a Node.js runtime, which is installed alongside them;
-`agy` and `codex` have no npm install and come from their vendors' own
-scripts into `/usr/local/bin`, where every account on the VM finds them. Their
-versions are not pinned — they are whatever was current when the image was
-built, and rebuilding the image is how a guest gets newer ones.
+moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. All five
+are vendor-built native binaries; `agy` and `codex` come from their vendors' own
+installer scripts into `/usr/local/bin`, where every account on the VM finds
+them. Their versions are not pinned — they are whatever was current when the
+image was built, and rebuilding the image is how a guest gets newer ones.
 
-`claude`, `opencode`, and `pi` are installed through `mise`'s npm backend
-(`npm:@anthropic-ai/claude-code`, `npm:opencode-ai`,
-`npm:@earendil-works/pi-coding-agent`) rather than with `npm install -g`, the
-same tool-version manager the JDK and Maven come from. The install lands in
-`/etc/skel`, so each account cloud-init creates inherits its own copy and can
-move an agent to another release with `mise use npm:<package>@<version>`
-without root. Each of the three also has a symlink in `/usr/local/bin` pointing
+`claude`, `opencode`, and `pi` are installed with `mise` (`mise use -g claude
+opencode pi`), the same tool-version manager the JDK and Maven come from; those
+registry names resolve to each vendor's own release archive. The install lands
+in `/etc/skel`, so each account cloud-init creates inherits its own copy and can
+move an agent to another release with `mise use -g claude@<version>` without
+root. Each of the three also has a symlink in `/usr/local/bin` pointing
 at the `mise` binary — a shim, which resolves the version from the calling
 account's own configuration — so `ssh <vm> claude -p '…'` finds the command
 even though an ssh command runs no login shell.
 
 `codex` is installed by OpenAI's installer (`https://chatgpt.com/codex/install.sh`)
-rather than from npm, because `codex remote-control` runs only against the
+rather than from npm or mise, because `codex remote-control` runs only against the
 standalone package that installer produces: it starts its app-server from a fixed
 path under the account's `CODEX_HOME`, and an npm install leaves no such
 directory. The package is installed once into `/usr/local/lib/codex` and shared —
@@ -312,7 +310,8 @@ It is fetched from Gitea's release server on all three families instead, which
 also keeps the version identical everywhere.
 
 `wrangler`, Cloudflare's CLI, comes from npm on all three families — no distro
-packages it, and it rides on the Node runtime the coding agents already need.
+packages it, and it rides on the Node runtime the image installs for it and
+Playwright.
 It carries no credentials: `wrangler login` is an OAuth flow and an API
 credential is per-VM, so a fresh guest has the command and no Cloudflare
 account attached to it. `WRANGLER_SEND_METRICS=false` is set in
@@ -359,10 +358,9 @@ dispatches on the name it was called by and reads the calling account's own
 configuration — so `ssh <vm> claude -p '…'` works without a login shell.
 
 To use a different version inside a guest, run `mise use java@21` in a project
-or `mise use -g java@21` for the account, and likewise
-`mise use -g npm:@anthropic-ai/claude-code@2.1.0` for an agent. Those write to
-that account's own mise directory, so they need no `sudo` and affect no other
-user.
+or `mise use -g java@21` for the account, and likewise `mise use -g claude@2.1.0`
+for an agent. Those write to that account's own mise directory, so they need no
+`sudo` and affect no other user.
 
 #### Go and Rust
 
@@ -397,17 +395,10 @@ library installs perfectly and exits the moment it is launched.
 Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, mise,
 Go, and Rust are the software in a base image that does not come from the
 distro's own repository, and on Ubuntu it is also the only third-party repository and GPG
-key a build adds: Ubuntu 24.04 ships Node.js 18 and the agents require 22.19 or
-newer, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
-Node.js of their own, and `npm` itself is held to the 11 line on all three:
-npm 12 does not run the postinstall scripts `claude` and `opencode` use to fetch
-their native binaries, so they would install cleanly and then fail at first use.
-The three mise-installed agents are told to use that `npm` (`npm.shell_out`)
-rather than mise's own npm client, and to install with
-`--ignore-scripts=false`, which mise otherwise passes as `true` — it warns
-and carries on when a package's scripts are skipped, so the pin alone would
-not be enough. Both are written into each account's mise configuration, so a
-later `mise use npm:…@<version>` inside a guest installs the same way.
+key a build adds: Ubuntu 24.04 ships Node.js 18, below the 22.19 floor this
+image asserts, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
+Node.js of their own. Nothing in the image is installed from npm except
+`wrangler` and `playwright`.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of

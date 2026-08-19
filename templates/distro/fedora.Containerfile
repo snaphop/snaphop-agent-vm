@@ -107,23 +107,25 @@ RUN chmod 0755 /usr/local/bin/agent-vm-menu
 COPY tmux-menu-profile.sh /etc/profile.d/zz-agent-vm-tmux-menu.sh
 RUN chmod 0644 /etc/profile.d/zz-agent-vm-tmux-menu.sh
 
-# Node.js, which the agent CLIs below run on. Fedora's own package is current
-# enough, so unlike Ubuntu this needs no third-party repository. The version
-# assertion below is what catches it if that stops being true.
+# Node.js: what wrangler and Playwright run on, and what a guest handed a
+# JavaScript repository builds with. Fedora's own package is current enough, so
+# unlike Ubuntu this needs no third-party repository. The version assertion
+# below is what catches it if that stops being true.
 RUN dnf -y install \
       nodejs \
       npm \
  && dnf clean all
 
-# The agents need Node 22.19 or newer -- pi and claude both refuse to start on
-# anything older. A guest whose agents will not start is indistinguishable from
-# a broken image until someone SSHes in hours later, so a too-old Node fails
-# the build here instead of shipping.
+# 22.19 or newer is the floor this image promises: wrangler and Playwright both
+# want a current release, and a guest handed a JavaScript repository is likelier
+# to need a new Node than an old one. A guest that cannot run what it was given
+# is indistinguishable from a broken image until someone SSHes in hours later,
+# so a too-old Node fails the build here instead of shipping.
 RUN set -eu; \
     major="$(node -p 'process.versions.node.split(".")[0]')"; \
     minor="$(node -p 'process.versions.node.split(".")[1]')"; \
     if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 19 ]; }; then \
-      echo "node $(node -v) is too old: the agent CLIs require >= 22.19" >&2; \
+      echo "node $(node -v) is too old: this image requires >= 22.19" >&2; \
       exit 1; \
     fi
 
@@ -140,11 +142,12 @@ RUN set -eu; \
 #
 # This is the one place in the image that installs software from outside the
 # distro's own repositories: none of these five are packaged by any distro.
-# Three publish to npm and are installed through mise's npm backend rather than
-# with npm directly, so they are versioned the same way the JDK below is: an
-# agent that needs another release runs `mise use npm:<package>@<version>` in
-# its own account instead of writing to a root-owned global npm prefix it
-# cannot touch. agy is a Go binary with no npm package, so it comes from its
+# claude, opencode and pi come from mise's registry -- the names below resolve
+# to each vendor's own release archive -- so they are versioned the same way
+# the JDK below is: an account that needs another release runs
+# `mise use -g claude@<version>` for itself, where a root-owned global npm
+# prefix would have needed sudo. They are the vendors' native builds and carry
+# no Node dependency of their own. agy has no such release and comes from its
 # vendor's installer, pointed at /usr/local/bin so that every account on the VM
 # finds it rather than only root. That binary self-updates in the background
 # and cannot write to /usr/local/bin as a non-root user, so guests keep the
@@ -154,45 +157,17 @@ RUN set -eu; \
 # tools ship several releases a week and a pinned one would be stale before the
 # image was rebuilt. Reproducibility comes from the digest the manifest records
 # for the source image, not from the agent versions (ADR-0006).
-# npm is held to the 11 line because npm 12 does not run these packages'
-# postinstall scripts, and claude and opencode both download their native
-# binary in one. The installs below are told to use this npm rather than mise's
-# own npm client, so the pin governs them as much as a direct `npm install -g`.
-# npm 12 installs
-# them without complaint and the commands then fail at the first run with
-# "native binary not installed" -- a broken guest that looks like a successful
-# build. Arch hits this today (it packages npm 12 against whatever Node it
-# currently ships); Ubuntu and Fedora will when their npm catches up, so all
-# three are pinned rather than only the one that breaks now. The smoke test
-# below is what will say when this pin can be lifted.
-RUN npm install -g npm@11 \
- && npm cache clean --force
-
+#
 # The install goes into /etc/skel, like everything else mise manages here, so
 # the agents are in place before anyone logs in rather than being downloaded
 # per account inside a guest that may have no network at all. See the JVM
 # toolchain below for why the destination is skel and not one shared directory.
-#
-# Two mise settings are what make these packages work rather than merely
-# install, and both concern the postinstall scripts discussed above.
-# npm.shell_out sends the install through the npm binary pinned above instead
-# of mise's own npm client, and npm_args turns off the --ignore-scripts mise
-# passes by default -- which is what would otherwise skip those scripts. mise
-# warns and carries on rather than failing when they are skipped, so the build
-# would get as far as the smoke test below before anything said so. They are
-# written into the skel configuration rather than passed as environment
-# variables here, so an account that later moves an agent to another version
-# installs it the same way.
 RUN set -eu; \
-    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
-           MISE_CONFIG_DIR=/etc/skel/.config/mise \
-           MISE_STATE_DIR=/etc/skel/.local/state/mise \
-           MISE_CACHE_DIR=/tmp/mise-cache; \
-    mise settings set npm.shell_out true; \
-    mise use --global --yes \
-      'npm:@anthropic-ai/claude-code[npm_args=--ignore-scripts=false]' \
-      'npm:opencode-ai[npm_args=--ignore-scripts=false]' \
-      'npm:@earendil-works/pi-coding-agent[npm_args=--ignore-scripts=false]'; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes claude opencode pi; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
 # The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
@@ -278,11 +253,11 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
 
 # Run every agent once, and fail the build if any of them cannot start.
 #
-# Installing an agent and having a working agent are different things: a
-# package whose postinstall did not run installs cleanly and only fails when
-# someone finally types the command, inside a VM, long after the image was
-# built and cached. This is the step that turns that into a failed build, and
-# it is what makes the npm pin above self-policing.
+# Installing an agent and having a working agent are different things: an
+# archive for the wrong architecture, or one whose entry point cannot find what
+# it needs, unpacks cleanly and only fails when someone finally types the
+# command, inside a VM, long after the image was built and cached. This is the
+# step that turns that into a failed build.
 RUN set -eu; \
     for agent in claude codex opencode pi agy; do \
       if ! "$agent" --version >/dev/null 2>&1; then \
