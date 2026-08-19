@@ -294,3 +294,35 @@ func TestImageRm_DryRunRemovesNothing(t *testing.T) {
 		t.Error("--dry-run removed the image")
 	}
 }
+
+// Build progress is progress output, so --quiet silences it and it never
+// appears on stdout, where `--output json` results are parsed (docs/cli.md).
+func TestBuildProgress_WritesStepsToStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{Stdout: &stdout, Stderr: &stderr}
+
+	app.buildProgress().Step(1, 10, "pulling the source image")
+
+	if !strings.Contains(stderr.String(), "[1/10] pulling the source image") {
+		t.Errorf("stderr does not carry the step: %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout carried progress output: %q", stdout.String())
+	}
+}
+
+func TestBuildProgress_IsSuppressedWhenThereIsNothingToReport(t *testing.T) {
+	cases := map[string]*App{
+		"--quiet":   {Stderr: &bytes.Buffer{}, quiet: true},
+		"--dry-run": {Stderr: &bytes.Buffer{}, dryRun: true},
+	}
+	for name, app := range cases {
+		if got := app.buildProgress(); got != nil {
+			t.Errorf("%s still reports build progress (%T)", name, got)
+		}
+	}
+
+	if (&App{Stderr: &bytes.Buffer{}}).buildProgress() == nil {
+		t.Error("a plain run reports no build progress")
+	}
+}

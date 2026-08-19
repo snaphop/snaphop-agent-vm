@@ -11,6 +11,7 @@ import (
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/progress"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
@@ -54,7 +55,22 @@ func (a *App) builder() (*image.Builder, error) {
 		Store:          store,
 		Logger:         a.logger,
 		AgentVMVersion: Version,
+		Progress:       a.buildProgress(),
 	}, nil
+}
+
+// buildProgress returns what an image build reports its steps to. A build is
+// several minutes of other programs working silently, so the operator gets a
+// bar rather than a still terminal — on stderr, with the rest of the progress
+// output (docs/cli.md).
+func (a *App) buildProgress() image.Progress {
+	// --quiet asked for no progress, and --dry-run runs no build to report on.
+	if a.quiet || a.dryRun {
+		return nil
+	}
+	// --verbose is already logging to stderr; a line redrawn in place would be
+	// overwritten by the next log record, so those runs get plain step lines.
+	return progress.NewBar(a.Stderr, !a.verbose)
 }
 
 func runImageBuild(ctx context.Context, app *App, args []string) error {

@@ -49,6 +49,7 @@ single-host tool with no daemon of its own.
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -json link bridge validation         │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
+│  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
 │  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status    │
 └───────────────────────────────────────┬────────────────────────────────────────────┘
                                         │ argv + machine-readable output
@@ -237,6 +238,20 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   unknown `schemaVersion` is refused, not guessed at.
 - **Compatibility constraints:** the layout is public; scripts and operators read
   it directly.
+
+### `internal/progress`
+
+- **Responsibility:** Render the progress of a long, multi-step operation — today
+  the image build, whose steps are minutes of other programs working silently.
+  Presentation only: the package doing the work reports the step it reached, and
+  this one decides what an operator sees.
+- **Public interface:** internal, but its output is: progress goes to stderr,
+  never stdout, so `--output json` stays pipeable.
+- **Failure behavior:** none of its own. It writes to a stream and reports
+  nothing when there is nothing to report — a cached image, or `--quiet`.
+- **Compatibility constraints:** a redrawn line is written only to a terminal.
+  A captured stream (a pipe, a log, a `--verbose` run sharing stderr with slog)
+  gets one plain line per step and no terminal control characters.
 
 ### `internal/hostexec`
 

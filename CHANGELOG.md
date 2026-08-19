@@ -17,6 +17,18 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Building a base image now shows its progress. On a terminal it is one line,
+  redrawn in place, with a bar, the step number, what the step is doing, and the
+  elapsed time — so a build that spends minutes inside `podman build` or
+  `virt-sysprep` no longer looks like a hung terminal. Where the output is
+  captured instead of displayed — a pipe, a log file, a CI job, or a
+  `--verbose` run whose logs share stderr — each step is one plain
+  `[4/10] exporting the root filesystem` line and no terminal control
+  characters are written. It goes to stderr like every other progress message,
+  so `--output json` is still safe to pipe, `--quiet` silences it, and a cached
+  image that needs no build reports nothing. `create` reports a base image it
+  has to build the same way.
+
 - Base images now carry `wrangler`, Cloudflare's CLI, installed from npm on
   the Node runtime the coding agents already need. It ships with no
   credentials — `wrangler login` is an OAuth flow and an API credential is
