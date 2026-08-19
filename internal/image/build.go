@@ -69,7 +69,7 @@ var buildContextFiles = []string{
 	"opencode.json",
 	"agent-aliases.sh",
 	"chromium.sh",
-	"sdkman.sh",
+	"mise.sh",
 	"toolchains.sh",
 	"user-setup.sh",
 	"codex-remote-control.sh",

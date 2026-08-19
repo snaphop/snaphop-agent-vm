@@ -205,7 +205,7 @@ func TestContainerfiles_InstallTheTmuxSessionMenu(t *testing.T) {
 		if !strings.Contains(recipe, "COPY tmux-menu.sh /usr/local/bin/agent-vm-menu") {
 			t.Errorf("%s does not install the tmux session menu where every account can run it", d.Containerfile)
 		}
-		// zz- so the menu starts after PATH and SDKMAN are set: the shells
+		// zz- so the menu starts after PATH and the mise shims are set: the shells
 		// tmux starts inherit the environment this login shell ends up with.
 		if !strings.Contains(recipe, "COPY tmux-menu-profile.sh /etc/profile.d/zz-agent-vm-tmux-menu.sh") {
 			t.Errorf("%s does not start the menu from a profile script that sorts after the rest of /etc/profile.d", d.Containerfile)
@@ -683,7 +683,8 @@ func TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt(t *testing.T) {
 }
 
 // TestContainerfiles_InstallTheDevTooling guards the second half of the guest
-// contract: gh, tea, Playwright with a headless Chromium, and SDKMAN.
+// contract: gh, tea, Playwright with a headless Chromium, and the JVM
+// toolchain mise installs.
 //
 // Two of these have a trap in them that a looser assertion would walk into.
 // Ubuntu's `tea` package is an unrelated text editor, so a recipe that
@@ -745,27 +746,32 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 			}
 		}
 
-		if !strings.Contains(recipe, "get.sdkman.io") {
-			t.Errorf("%s does not install SDKMAN", d.Containerfile)
+		// mise goes to /usr/local/bin rather than the installer's default of
+		// ~/.local/bin, so that every account has it on the default PATH.
+		if !strings.Contains(recipe, "MISE_INSTALL_PATH=/usr/local/bin/mise") {
+			t.Errorf("%s does not install mise where every account has it on PATH", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "SDKMAN_DIR=/etc/skel/.sdkman") {
-			t.Errorf("%s does not install SDKMAN into /etc/skel; accounts cloud-init creates would have none, and a shared copy would have every user writing to one directory", d.Containerfile)
-		}
-		if !strings.Contains(recipe, "COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh") {
-			t.Errorf("%s does not install the SDKMAN shell init; `sdk` is a shell function and does not exist until it is sourced", d.Containerfile)
-		}
-
 		// The JVM toolchain has to be installed into the skel copy, before it
 		// is cloned to /root: a JDK downloaded per account at first use would
-		// be a download a network-isolated guest cannot make.
-		if !strings.Contains(recipe, `sdk install java "$java_id"`) {
-			t.Errorf("%s does not install a JDK with SDKMAN; a guest would come up with `sdk` and no Java", d.Containerfile)
+		// be a download a network-isolated guest cannot make. It goes to
+		// /etc/skel rather than one shared directory because installing a tool
+		// writes into mise's data directory.
+		if !strings.Contains(recipe, "MISE_DATA_DIR=/etc/skel/.local/share/mise") {
+			t.Errorf("%s does not install the mise toolchain into /etc/skel; accounts cloud-init creates would have none, and a shared copy would have every user writing to one directory", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "-tem") {
-			t.Errorf("%s does not select a Temurin JDK", d.Containerfile)
+		// java@temurin, not java@latest: mise names a distribution by prefix,
+		// and an unprefixed version gets an Oracle build of OpenJDK instead of
+		// the Temurin one docs/cli.md promises.
+		if !strings.Contains(recipe, "mise use --global --yes java@temurin maven@latest") {
+			t.Errorf("%s does not install a Temurin JDK and Maven with mise; a guest would come up with `mise` and no Java, or with the wrong JDK", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "sdk install maven") {
-			t.Errorf("%s does not install Maven with SDKMAN", d.Containerfile)
+		if !strings.Contains(recipe, "cp -a /etc/skel/.local/share/mise /root/.local/share/mise") {
+			t.Errorf("%s does not copy the toolchain to /root, which is created before /etc/skel holds it and never inherits from it", d.Containerfile)
+		}
+		// The shims are executables, not a shell function, but they still have
+		// to be put on PATH for a login shell to find java and mvn.
+		if !strings.Contains(recipe, "COPY mise.sh /etc/profile.d/agent-vm-mise.sh") {
+			t.Errorf("%s does not install the mise shell init; the shims would be on no account's PATH", d.Containerfile)
 		}
 	}
 }
@@ -972,18 +978,19 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank") {
 			t.Errorf("%s does not launch Chromium during the build; a missing shared library would only surface inside a VM", d.Containerfile)
 		}
-		for _, check := range []string{"gh --version", "tea --version", "wrangler --version", "playwright --version"} {
+		for _, check := range []string{"gh --version", "tea --version", "wrangler --version", "playwright --version", "mise --version"} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
 			}
 		}
-		if !strings.Contains(recipe, "SDKMAN is missing from /etc/skel") {
-			t.Errorf("%s does not check that SDKMAN landed in /etc/skel, which is where accounts cloud-init creates get it from", d.Containerfile)
+		if !strings.Contains(recipe, "the mise shims are missing from /etc/skel") {
+			t.Errorf("%s does not check that the mise shims landed in /etc/skel, which is where accounts cloud-init creates get them from", d.Containerfile)
 		}
-		// sdk is a shell function, so the file existing says nothing about
-		// whether it is actually defined in a login shell.
-		if !strings.Contains(recipe, `bash -lc 'type sdk'`) {
-			t.Errorf("%s does not check that `sdk` is defined in a login shell; the profile script could be missing and the file check would still pass", d.Containerfile)
+		// The shims existing in /etc/skel says nothing about whether the
+		// profile script puts them on PATH, which is what makes `java`
+		// resolvable at all.
+		if !strings.Contains(recipe, `bash -lc 'command -v java'`) {
+			t.Errorf("%s does not check that java resolves in a login shell; the profile script could be missing and the shim check would still pass", d.Containerfile)
 		}
 		for _, check := range []string{`bash -lc 'java -version'`, `bash -lc 'mvn -version'`} {
 			if !strings.Contains(recipe, check) {

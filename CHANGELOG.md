@@ -15,6 +15,20 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Changed
+
+- Base images now install the JDK and Maven with **mise** instead of SDKMAN.
+  `java` and `mvn` work exactly as before — the newest Temurin JDK and Maven,
+  installed during the build so a network-isolated guest needs no download, put
+  on the path of a login shell by `/etc/profile.d/agent-vm-mise.sh`. What
+  changes inside a guest: the `sdk` command is gone and `mise` replaces it, so
+  switching versions is `mise use java@21` rather than `sdk install java 21`;
+  the toolchain lives in `~/.local/share/mise` instead of `~/.sdkman`; and
+  because mise's shims are ordinary executables rather than a shell function, a
+  script that needs `mvn` non-interactively can put `~/.local/share/mise/shims`
+  on `PATH` instead of sourcing anything. Existing base images are unaffected —
+  rebuild an image (`agent-vm image build --force`) to pick this up.
+
 ### Fixed
 
 - `agent-vm doctor` no longer skips the **host firewall forwarding** check on a

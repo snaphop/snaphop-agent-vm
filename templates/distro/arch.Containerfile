@@ -304,44 +304,54 @@ RUN printf 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright\n' >> /etc/environment
 COPY chromium.sh /usr/local/bin/chromium
 RUN chmod 0755 /usr/local/bin/chromium
 
-# SDKMAN, installed into /etc/skel so each account cloud-init creates gets its
-# own copy -- installing a JDK writes into it, so a single shared directory
-# would have every user on the VM writing to the same place. rcupdate=false
-# stops the installer appending its own block to a shell profile; the file
-# copied in below does that job for every account at once.
+# mise, the tool-version manager the JVM toolchain below is installed with.
+#
+# The binary goes in /usr/local/bin so that `mise` is on the default PATH for
+# every account, including the non-interactive `ssh <vm> mise install` an agent
+# may run. What it installs is per account -- see below.
 RUN set -eu; \
-    SDKMAN_DIR=/etc/skel/.sdkman bash -c 'curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash'
+    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
 
-# The JVM toolchain itself: the newest Temurin JDK SDKMAN offers, and Maven.
+# The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
 #
-# The JDK version is resolved from `sdk list java` during the build rather than
-# pinned, like every other package here -- a pinned one would be a release
-# behind before the image was rebuilt, and reproducibility comes from the
-# digest the manifest records for the source image (ADR-0006). The first
-# Temurin identifier in that list is the newest: SDKMAN prints each vendor's
-# versions in descending order. A list that no longer contains one fails the
-# build rather than silently shipping a guest with no JDK.
+# Neither version is pinned, like every other package here -- a pinned one would
+# be a release behind before the image was rebuilt, and reproducibility comes
+# from the digest the manifest records for the source image (ADR-0006).
+# The JDK is `java@temurin` and not `java@latest`, which is an Oracle build of
+# OpenJDK: mise names a distribution by prefix, and an unprefixed version takes
+# whichever one it defaults to. A version mise cannot resolve or install fails
+# the build rather than silently shipping a guest with no JDK.
 #
-# This writes into /etc/skel/.sdkman, the copy every account created later
-# inherits, so the JDK and Maven are in place before anyone logs in instead of
-# being downloaded per account inside a guest that may have no network at all.
-RUN set -e; \
-    bash -c 'set -e; \
-      export SDKMAN_DIR=/etc/skel/.sdkman; \
-      . "$SDKMAN_DIR/bin/sdkman-init.sh"; \
-      java_id="$(sdk list java | grep -oE "[0-9][0-9.]+-tem" | head -n1)"; \
-      if [ -z "$java_id" ]; then \
-        echo "no Temurin JDK in SDKMAN list; the identifier format must have changed" >&2; \
-        exit 1; \
-      fi; \
-      echo "installing Temurin $java_id"; \
-      sdk install java "$java_id"; \
-      sdk install maven'
+# This writes into /etc/skel, the copy every account created later inherits, so
+# the JDK and Maven are in place before anyone logs in instead of being
+# downloaded per account inside a guest that may have no network at all. It goes
+# to /etc/skel rather than one shared directory because installing a tool writes
+# into mise's data directory, so a single shared one would have every user on
+# the VM writing to the same place.
+#
+# The cache is a build-time scratch directory and is discarded: it holds the
+# downloaded archives, which are of no use once they have been extracted, and
+# every account inheriting a copy of them would be wasted space in every guest.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes java@temurin maven@latest; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
-RUN cp -a /etc/skel/.sdkman /root/.sdkman
+# root is created before /etc/skel exists in this form and never inherits from
+# it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a
+# plain copy of .local and .config: earlier steps have already put agent
+# configuration in both.
+RUN set -eu; \
+    mkdir -p /root/.local/share /root/.local/state /root/.config; \
+    cp -a /etc/skel/.local/share/mise /root/.local/share/mise; \
+    cp -a /etc/skel/.local/state/mise /root/.local/state/mise; \
+    cp -a /etc/skel/.config/mise /root/.config/mise
 
-COPY sdkman.sh /etc/profile.d/agent-vm-sdkman.sh
-RUN chmod 0644 /etc/profile.d/agent-vm-sdkman.sh
+COPY mise.sh /etc/profile.d/agent-vm-mise.sh
+RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 
 # Run each of these once, and fail the build if any of them does not work.
 #
@@ -360,14 +370,15 @@ RUN set -eu; \
       exit 1; \
     fi; \
     rm -f /tmp/chromium-smoke.log; \
-    [ -s /etc/skel/.sdkman/bin/sdkman-init.sh ] \
-      || { echo "SDKMAN is missing from /etc/skel, so accounts cloud-init creates will not have it" >&2; exit 1; }; \
-    bash -lc 'type sdk' >/dev/null 2>&1 \
-      || { echo "sdk is not defined in a login shell; the profile script or the SDKMAN install is wrong" >&2; exit 1; }; \
+    mise --version >/dev/null || { echo "mise installed but cannot run" >&2; exit 1; }; \
+    [ -d /etc/skel/.local/share/mise/shims ] \
+      || { echo "the mise shims are missing from /etc/skel, so accounts cloud-init creates will not have java or mvn" >&2; exit 1; }; \
+    bash -lc 'command -v java' >/dev/null 2>&1 \
+      || { echo "no java on the path of a login shell; the shims are not on PATH or the mise java install did not take" >&2; exit 1; }; \
     bash -lc 'java -version' >/dev/null 2>&1 \
-      || { echo "no JDK on the path of a login shell; the SDKMAN java install did not take" >&2; exit 1; }; \
+      || { echo "java is on the path of a login shell but cannot run; the mise java install did not take" >&2; exit 1; }; \
     bash -lc 'mvn -version' >/dev/null 2>&1 \
-      || { echo "no Maven on the path of a login shell; the SDKMAN maven install did not take" >&2; exit 1; }
+      || { echo "no Maven on the path of a login shell; the mise maven install did not take" >&2; exit 1; }
 
 # The Go and Rust toolchains, both from upstream rather than from the family's
 # own packages.
@@ -377,7 +388,7 @@ RUN set -eu; \
 # toolchain, and a guest whose Go is older than the `go` directive of the
 # repository it was handed cannot build that repository at all. Upstream Go
 # and rustup keep all three images on the same release -- the same reasoning as
-# tea above. Neither is pinned, for the same reason SDKMAN's JDK is not:
+# tea above. Neither is pinned, for the same reason mise's JDK is not:
 # reproducibility comes from the digest the manifest records (ADR-0006), and a
 # pin here would be a release behind before the image was rebuilt.
 #
