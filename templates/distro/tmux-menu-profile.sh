@@ -10,7 +10,7 @@
 #   * AGENT_VM_NO_MENU as a documented way out for anyone who wants the plain
 #     shell every time.
 #
-# It sorts last (zz-) so that PATH, SDKMAN, and the rest of /etc/profile.d have
+# It sorts last (zz-) so that PATH, the mise shims, and the rest of /etc/profile.d have
 # already been applied: the shells tmux starts inherit this environment.
 case $- in
 *i*) ;;

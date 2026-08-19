@@ -111,7 +111,7 @@ A base image is not a bare distro: it carries the tools an agent expects to
 find already installed, so `create` stays fast and a guest works offline.
 Beyond what makes a container image boot as a VM (kernel, `systemd`,
 `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every image ships
-`git`, a C toolchain, Python, Go, Rust, a JDK with Maven, Docker, `gh` and
+`git`, a C toolchain, Python, Go, Rust, a JDK with Maven (via mise), Docker, `gh` and
 `tea`, `wrangler`, Playwright with a headless Chromium, `tmux` with a session
 menu at login, and five coding agents — `claude`, `codex`, `opencode`, `pi`,
 and `agy` — each configured in its most permissive mode, because the VM is the

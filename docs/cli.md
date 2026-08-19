@@ -253,7 +253,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` (Cloudflare) |
 | Browser automation | `playwright` with a headless `chromium` |
-| JVM toolchain | `sdkman` (`sdk`) with the latest Temurin JDK and Maven (`java`, `mvn`) |
+| JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `go` and `gofmt` from go.dev, plus `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
 | Virtualization | `qemu-kvm`, `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
@@ -261,7 +261,7 @@ instead of on every first boot, and a VM works the same way offline.
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
 three. Everything except the coding agents, `tea`, `wrangler`, Playwright's
-browsers, SDKMAN, Go, and Rust comes from the distro's own repository.
+browsers, mise, Go, and Rust comes from the distro's own repository.
 
 #### Coding agents
 
@@ -292,7 +292,7 @@ failing the boot. Log in inside the VM and run
 start` as that account) to start it then; `journalctl -u
 agent-vm-codex-remote-control` is where a failure is reported.
 
-#### Forge CLIs, wrangler, browsers, and SDKMAN
+#### Forge CLIs, wrangler, browsers, and the JVM toolchain
 
 `gh` comes from each distribution's own repository. `tea` does not: only Arch
 packages it, and on Ubuntu the name `tea` belongs to an unrelated text editor,
@@ -322,19 +322,29 @@ do at all. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
 profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 
-SDKMAN is installed per account, into `/etc/skel` so each account cloud-init
-creates gets its own copy; installing a JDK writes into that directory, so one
-shared copy would have every user on the VM writing to the same place. The
-newest Temurin JDK SDKMAN offers and Maven are installed into that copy during
+The JVM toolchain comes from [mise](https://mise.jdx.dev). The `mise` binary
+itself is shared, in `/usr/local/bin`, so every account has the command; what it
+installs is per account, into `/etc/skel` so each account cloud-init creates
+gets its own copy. Installing a tool writes into mise's data directory, so one
+shared copy would have every user on the VM writing to the same place.
+
+The newest Temurin JDK mise offers and Maven are installed into that copy during
 the build, so every account has `java` and `mvn` without downloading anything —
 which a network-isolated guest could not do anyway. Neither version is pinned:
-they are whatever was current when the image was built.
+they are whatever was current when the image was built. The JDK is requested as
+`java@temurin` rather than `java@latest`, which would be an Oracle build of
+OpenJDK: mise names a distribution by prefix.
 
-Note that SDKMAN puts them on the path through a profile script, so `java`,
-`mvn`, and `sdk` itself exist in a login shell and not in a non-interactive
-`ssh <vm> mvn -version`. Use `ssh <vm> bash -lc 'mvn -version'`, or have the
-script source `"$SDKMAN_DIR/bin/sdkman-init.sh"` itself. That is how SDKMAN
-works everywhere, not something this image imposes.
+`java` and `mvn` are reached through mise's shims in
+`~/.local/share/mise/shims`, which `/etc/profile.d/agent-vm-mise.sh` puts on the
+path of a login shell. They therefore resolve in a login shell and not in a
+non-interactive `ssh <vm> mvn -version`. Use `ssh <vm> bash -lc 'mvn -version'`,
+or put that directory on the path in the script itself — the shims are ordinary
+executables, so unlike a shell function there is nothing to source.
+
+To use a different version inside a guest, run `mise use java@21` in a project
+or `mise use -g java@21` for the account. Those write to that account's own mise
+directory, so they need no `sudo` and affect no other user.
 
 #### Go and Rust
 
@@ -348,8 +358,8 @@ whatever was current when the image was built.
 Go lives in `/usr/local/go` and Rust in `/usr/local/rustup`, with `go`, `gofmt`,
 and the rustup proxies (`cargo`, `rustc`, `rustup`, `rustfmt`, `clippy`)
 symlinked into `/usr/local/bin`. That directory is on the default path, so
-unlike SDKMAN these work in a non-interactive `ssh <vm> cargo build` and not
-only in a login shell. `RUSTUP_HOME` is set in `/etc/environment` for the same
+unlike the JVM toolchain these work in a non-interactive `ssh <vm> cargo build`
+and not only in a login shell. `RUSTUP_HOME` is set in `/etc/environment` for the same
 reason `PLAYWRIGHT_BROWSERS_PATH` is: the rustup proxies find their toolchain
 through it, and a non-interactive command reads that file but no profile script.
 
@@ -360,13 +370,13 @@ deliberately left unset, so `cargo install` writes into that account's own
 `~/go/bin` are added to the path of a login shell by
 `/etc/profile.d/agent-vm-toolchains.sh`.
 
-A build runs `gh`, `tea`, `wrangler`, and `playwright`, launches headless Chromium against
+A build runs `gh`, `tea`, `wrangler`, `playwright`, and `mise`, launches headless Chromium against
 `about:blank`, runs `java` and `mvn` in a login shell, runs each virtualization
 tool once, runs `go`, `gofmt`, `golangci-lint`, `rustc`, `cargo`, `rustup`,
 `cargo fmt`, and `cargo clippy`, and fails if any of it does not work. Chromium is the reason that step exists: a browser missing one shared
 library installs perfectly and exits the moment it is launched.
 
-Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, SDKMAN,
+Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, mise,
 Go, and Rust are the software in a base image that does not come from the
 distro's own repository, and on Ubuntu it is also the only third-party repository and GPG
 key a build adds: Ubuntu 24.04 ships Node.js 18 and the agents require 22.19 or
