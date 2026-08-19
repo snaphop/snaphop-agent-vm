@@ -145,10 +145,29 @@ func TestCheckForwarding_SkipsBridgedMode(t *testing.T) {
 	got := forwardingCheckFor(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
+		Network:    config.NetworkBridge,
 		Bridge:     "br0",
 	})
 	if got.Status != statusSkip {
 		t.Errorf("status = %q, want %q", got.Status, statusSkip)
+	}
+}
+
+// TestCheckForwarding_ReportsNATEvenWithADefaultBridgeConfigured is the
+// regression: docs/host-setup.md tells operators to set a default bridge so
+// `--bridge` need not be repeated, and that is orthogonal to the mode a VM is
+// created in. A host doing that while creating NAT VMs still routes guest
+// traffic through the forward hook, so skipping it there hid the one failure
+// this check exists to catch.
+func TestCheckForwarding_ReportsNATEvenWithADefaultBridgeConfigured(t *testing.T) {
+	got := forwardingCheckFor(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", &config.Config{
+		LibvirtURI: "qemu:///system",
+		NATNetwork: "agent-vm-nat",
+		Network:    config.NetworkNAT,
+		Bridge:     "br0",
+	})
+	if got.Status != statusWarn {
+		t.Errorf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
 	}
 }
 
