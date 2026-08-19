@@ -34,6 +34,14 @@ migration or rebuild step a user has to take.
   installers. Existing base images are unaffected — rebuild an image
   (`agent-vm image build --force`) to pick this up.
 
+- `wrangler` and `playwright` are now installed with **mise** as well
+  (`mise use -g npm:wrangler npm:playwright`) rather than `npm install -g`.
+  They are the only npm packages left in the image — npm is the only place
+  either is published — and, like the agents, each has a `/usr/local/bin`
+  symlink to the `mise` binary so `ssh <vm> wrangler deploy` keeps working
+  without a login shell. Playwright's browsers still live in
+  `/opt/ms-playwright`, shared by every account rather than copied per user.
+
 - Base images now install the JDK and Maven with **mise** instead of SDKMAN.
   `java` and `mvn` work exactly as before — the newest Temurin JDK and Maven,
   installed during the build so a network-isolated guest needs no download, put

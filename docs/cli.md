@@ -251,8 +251,8 @@ instead of on every first boot, and a VM works the same way offline.
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
-| Cloud CLIs | `wrangler` (Cloudflare) |
-| Browser automation | `playwright` with a headless `chromium` |
+| Cloud CLIs | `wrangler` (Cloudflare), managed by `mise` |
+| Browser automation | `playwright`, managed by `mise`, with a headless `chromium` |
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `go` and `gofmt` from go.dev, plus `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
@@ -309,9 +309,10 @@ so installing it from apt would put the wrong program at the right command.
 It is fetched from Gitea's release server on all three families instead, which
 also keeps the version identical everywhere.
 
-`wrangler`, Cloudflare's CLI, comes from npm on all three families — no distro
-packages it, and it rides on the Node runtime the image installs for it and
-Playwright.
+`wrangler`, Cloudflare's CLI, is installed with `mise` from npm
+(`mise use -g npm:wrangler`) on all three families — no distro packages it, and
+npm is the only place Cloudflare publishes it. It rides on the Node runtime the
+image installs for it and Playwright.
 It carries no credentials: `wrangler login` is an OAuth flow and an API
 credential is per-VM, so a fresh guest has the command and no Cloudflare
 account attached to it. `WRANGLER_SEND_METRICS=false` is set in
@@ -397,8 +398,9 @@ Go, and Rust are the software in a base image that does not come from the
 distro's own repository, and on Ubuntu it is also the only third-party repository and GPG
 key a build adds: Ubuntu 24.04 ships Node.js 18, below the 22.19 floor this
 image asserts, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
-Node.js of their own. Nothing in the image is installed from npm except
-`wrangler` and `playwright`.
+Node.js of their own. `wrangler` and `playwright` are the only npm packages
+left in the image, and both are installed through `mise`'s npm backend rather
+than with `npm install -g`.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of

@@ -210,6 +210,22 @@ RUN set -eu; \
       mise use --global --yes java@temurin maven@latest; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
+# wrangler and Playwright, the two npm packages left in the image.
+#
+# Neither is packaged by any family and both are published only to npm, so they
+# come from mise's npm backend -- `npm:` names rather than the registry names
+# the agents use, because npm is the only place they exist. They are installed
+# here, with everything else mise manages, so that root inherits them in the
+# copy below and the build can run `playwright install chromium` a few steps
+# later. What each is for, and the environment each needs, is further down.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes npm:wrangler npm:playwright; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
 # root is created before /etc/skel exists in this form and never inherits from
 # it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a
 # plain copy of .local and .config: the agent configuration below lands in
@@ -223,17 +239,17 @@ RUN set -eu; \
 COPY mise.sh /etc/profile.d/agent-vm-mise.sh
 RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 
-# The three mise-installed agents, on the default PATH of every account.
+# The mise-installed commands, on the default PATH of every account.
 #
 # A shim is a symlink to the mise binary, which dispatches on the name it was
 # called by and resolves the version from the calling account's own mise
 # configuration -- so a single symlink in /usr/local/bin serves every account
 # without pointing into any account's home. That is what keeps
-# `ssh <vm> claude -p ...` working: an ssh command runs no login shell, so it
-# never sources the profile script above that puts the per-account shim
-# directory on PATH.
+# `ssh <vm> claude -p ...` and `ssh <vm> wrangler deploy` working: an ssh
+# command runs no login shell, so it never sources the profile script above
+# that puts the per-account shim directory on PATH.
 RUN set -eu; \
-    for command in claude opencode pi; do \
+    for command in claude opencode pi wrangler playwright; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -348,17 +364,14 @@ RUN set -eu; \
 
 # wrangler, Cloudflare's CLI.
 #
-# No family packages it and Cloudflare publishes it only to npm, so it is
-# installed with npm on all three -- the Node runtime the agents above need is
-# already in the image, so it costs nothing beyond the package itself. The
-# version is unpinned like every other one here (ADR-0006).
+# The command itself is installed with mise above, from npm, which is the only
+# place Cloudflare publishes it. The version is unpinned like every other one
+# here (ADR-0006).
 #
 # No credential is baked in: `wrangler login` is an OAuth flow and an API
 # credential is per-VM, arriving through --cloud-init if at all, because a base
 # image is shared by every VM built on it (SECURITY.md). A fresh guest has the
 # command and no Cloudflare account attached to it.
-RUN npm install -g wrangler \
- && npm cache clean --force
 
 # Wrangler reports anonymous usage metrics unless told not to, and a disposable
 # VM an agent drives is not a machine whose operator chose to opt in. This goes
@@ -369,18 +382,17 @@ RUN printf 'WRANGLER_SEND_METRICS=false\n' >> /etc/environment
 
 # Playwright, and the one Chromium in this image.
 #
-# The browsers go to /opt/ms-playwright rather than the per-user default under
-# ~/.cache, so that every account on the VM shares one copy instead of each
-# downloading its own on first use -- which a network-isolated guest could not
-# do at all.
+# The `playwright` command is installed with mise above; what is left here is
+# the browser it drives. The browsers go to /opt/ms-playwright rather than the
+# per-user default under ~/.cache, so that every account on the VM shares one
+# copy instead of each downloading its own on first use -- which a
+# network-isolated guest could not do at all. It also keeps them out of the
+# per-account mise copy, which would otherwise carry a browser per user.
 #
 # PLAYWRIGHT_BROWSERS_PATH goes in /etc/environment rather than a profile
 # script because PAM applies it to every session, including the
 # non-interactive `ssh <vm> node script.js` that an agent actually uses. A
 # profile.d file would leave exactly that case pointing at an empty ~/.cache.
-RUN npm install -g playwright \
- && npm cache clean --force
-
 RUN apt-get update \
  && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright install --with-deps chromium \
  && apt-get clean \

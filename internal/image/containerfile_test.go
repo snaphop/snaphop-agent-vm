@@ -279,6 +279,10 @@ func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
 // `codex remote-control` requires.
 var miseAgents = []string{"claude", "opencode", "pi"}
 
+// miseShims are every command installed with mise that a guest has to be able
+// to run without a login shell, in the order the recipes link them.
+var miseShims = []string{"claude", "opencode", "pi", "wrangler", "playwright"}
+
 // TestContainerfiles_InstallTheCodingAgents guards the guest contract that a VM
 // comes up with claude, codex, opencode, pi and agy already installed.
 //
@@ -310,8 +314,8 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 		// A mise install reaches a login shell through the shims, but
 		// `ssh <vm> claude -p ...` runs no login shell, so each agent also
 		// needs a symlink to mise on the default PATH.
-		if !strings.Contains(recipe, "for command in "+strings.Join(miseAgents, " ")+"; do") {
-			t.Errorf("%s does not link %v into /usr/local/bin; a non-interactive `ssh <vm> claude -p ...` would not find them", d.Containerfile, miseAgents)
+		if !strings.Contains(recipe, "for command in "+strings.Join(miseShims, " ")+"; do") {
+			t.Errorf("%s does not link %v into /usr/local/bin; a non-interactive `ssh <vm> claude -p ...` would not find them", d.Containerfile, miseShims)
 		}
 
 		// codex is installed from OpenAI's installer rather than npm, and
@@ -713,16 +717,13 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 			t.Errorf("%s does not install tea from Gitea's release server; only Arch packages it, and on Ubuntu the name belongs to an unrelated text editor", d.Containerfile)
 		}
 
-		if !strings.Contains(recipe, "npm install -g playwright") {
-			t.Errorf("%s does not install Playwright", d.Containerfile)
+		// Playwright and wrangler are published only to npm, so they are the
+		// one place mise's npm backend is still used.
+		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright") {
+			t.Errorf("%s does not install wrangler and Playwright with mise", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
 			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
-		}
-		// wrangler is packaged by no distro and published only to npm, so it
-		// rides on the Node runtime the agents already need.
-		if !strings.Contains(recipe, "npm install -g wrangler") {
-			t.Errorf("%s does not install wrangler", d.Containerfile)
 		}
 		// Anonymous metrics are on by default. A disposable VM an agent drives
 		// is not a machine whose operator opted in, and the setting has to
