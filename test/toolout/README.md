@@ -45,6 +45,13 @@ guest agent reports, which is every interface the guest can see — including
 protocol on one interface produces. The `test:///default` capture has neither,
 which is how the address picker came to return the loopback address.
 
+`podman-image-inspect.json` is a multi-architecture repository's inspect
+output, which is what makes it worth having: alongside the image's own `Digest`
+it carries a `RepoDigests` array holding a second, different digest — the
+manifest list's. Pinning a build to that one would record provenance for an
+artifact other than the one podman pulled, and a hand-written fixture with a
+single digest in it could not catch the mistake.
+
 The `qemu-img` capture is of an overlay created with
 `qemu-img create -f qcow2 -F qcow2 -b base.qcow2 root.qcow2 50G`, so it shows
 what matters about a VM's root disk: a 50 GiB virtual size, an actual size
@@ -72,15 +79,8 @@ for it. Capture it — with a matching table row — if the skopeo path in
 [ADR-0009](../../docs/decisions/0009-orchestrate-existing-host-cli-tools.md) is
 ever implemented.
 
-Three fixtures are captured but not yet used by any test, which AGENTS.md §7
-does not accept as coverage for the parsers they belong to:
-
-- `podman-image-inspect.json` — the digest parser in `internal/image` is still
-  tested against hand-written JSON. Point that test at this fixture.
-- `gh--version.txt` — `parseToolVersion` has a case for `gh` but no row for it
-  in the captured-output table test in `internal/hostexec`. Add one.
-- `virsh-list-all-name.txt` — the domain-name listing in `internal/domain` is
-  tested against inline output rather than this capture.
+Every other fixture here is read by a test. Keep it that way: a capture nothing
+asserts on is a file that goes stale without anything noticing.
 
 There is also no capture of `virsh domifaddr` for a guest that has **no**
 address yet — the state a VM is in for the first seconds of its boot, and the
