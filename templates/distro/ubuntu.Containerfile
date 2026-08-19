@@ -166,10 +166,33 @@ RUN npm install -g npm@11 \
 
 RUN npm install -g \
       @anthropic-ai/claude-code \
-      @openai/codex \
       opencode-ai \
       @earendil-works/pi-coding-agent \
  && npm cache clean --force
+
+# codex comes from OpenAI's own installer rather than from npm.
+#
+# `codex remote-control` -- the daemon this image starts at every boot -- runs
+# only against the standalone package that installer lays down: it starts and
+# updates its app-server from a fixed path,
+# $CODEX_HOME/packages/standalone/current, and refuses to run when that
+# directory is absent, which is what an npm-installed codex leaves behind.
+#
+# The package is installed once and shared: it goes to /usr/local/lib/codex and
+# the command to /usr/local/bin, rather than into one account's home, because
+# it is ~300 MiB and root and every account cloud-init creates need it. Each
+# account gets a symlink to it at first boot -- see codex-remote-control.sh.
+# CODEX_NON_INTERACTIVE stops the installer prompting for a shell it does not
+# have, and /usr/local/bin already being on PATH is what stops it appending a
+# PATH block to a shell profile.
+RUN set -eu; \
+    export CODEX_NON_INTERACTIVE=1 \
+           CODEX_INSTALL_DIR=/usr/local/bin \
+           CODEX_HOME=/usr/local/lib/codex; \
+    curl -fsSL https://chatgpt.com/codex/install.sh | sh; \
+    chmod -R a+rX /usr/local/lib/codex; \
+    test -x /usr/local/lib/codex/packages/standalone/current/codex \
+      || { echo 'the codex installer did not produce a standalone package; codex remote-control would refuse to start in every VM built on this image' >&2; exit 1; }
 
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
 
@@ -388,6 +411,40 @@ RUN printf '%s\n' \
       'WantedBy=cloud-final.service' \
       > /usr/lib/systemd/system/agent-vm-user-setup.service \
  && systemctl --root=/ enable agent-vm-user-setup.service
+
+# Codex's remote-control daemon, started for every interactive account at every
+# boot.
+#
+# It cannot be started at build time and it is not a first-boot job either: the
+# daemon dies with the VM it runs in, so it is started again on each boot. It
+# also needs credentials, which are per-VM and arrive after the account exists
+# (SECURITY.md), so on a VM where nobody has run `codex login` this unit fails
+# to connect and says so in the journal. That is not a boot failure -- the
+# script reports it and exits 0 -- and running `systemctl start
+# agent-vm-codex-remote-control` after logging in is what starts the daemon
+# then.
+COPY codex-remote-control.sh /usr/local/sbin/agent-vm-codex-remote-control
+RUN chmod 0755 /usr/local/sbin/agent-vm-codex-remote-control
+
+# Wanted by cloud-final.service for the same reason as the unit above: a unit
+# ordered after cloud-final and wanted by multi-user.target forms a cycle that
+# systemd breaks by silently dropping our job.
+RUN printf '%s\n' \
+      '[Unit]' \
+      'Description=Codex remote control for interactive accounts' \
+      'After=cloud-final.service agent-vm-user-setup.service network-online.target' \
+      'Wants=cloud-final.service network-online.target' \
+      '' \
+      '[Service]' \
+      'Type=oneshot' \
+      'RemainAfterExit=yes' \
+      'ExecStart=/usr/local/sbin/agent-vm-codex-remote-control' \
+      'TimeoutStartSec=300' \
+      '' \
+      '[Install]' \
+      'WantedBy=cloud-final.service' \
+      > /usr/lib/systemd/system/agent-vm-codex-remote-control.service \
+ && systemctl --root=/ enable agent-vm-codex-remote-control.service
 
 # The virtualization stack, so a VM can create VMs of its own.
 #

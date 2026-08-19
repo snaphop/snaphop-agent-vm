@@ -15,6 +15,31 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Changed
+
+- `codex` in a base image now comes from OpenAI's own installer
+  (`https://chatgpt.com/codex/install.sh`) instead of the `@openai/codex` npm
+  package. `codex remote-control` only runs against the standalone package that
+  installer produces — it starts its app-server from a fixed path under the
+  account's `CODEX_HOME` and refuses to run when that directory is missing,
+  which is what an npm install leaves behind. The package is installed once
+  into `/usr/local/lib/codex` and shared by every account (it is around
+  300 MiB), with the command in `/usr/local/bin` as before, and each account
+  gets a symlink to it under `~/.codex` at first boot so credentials and
+  configuration stay per-account. **Run `agent-vm image build <distro> --force`
+  to pick this up** — existing cached images still have the npm build.
+
+### Added
+
+- Every VM now starts Codex's remote-control daemon at boot, for `root` and for
+  every interactive account, through the new
+  `agent-vm-codex-remote-control.service` unit. Remote control needs
+  credentials, which are per-VM and never come from a base image or a seed, so
+  on a VM where nobody has run `codex login` the attempt fails and is reported
+  in `journalctl -u agent-vm-codex-remote-control` — deliberately without
+  failing the boot. After logging in inside the VM, `sudo systemctl start
+  agent-vm-codex-remote-control` starts it.
+
 ### Fixed
 
 - `ping` works for the guest's own user again. In a guest the command failed

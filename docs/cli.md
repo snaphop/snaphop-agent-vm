@@ -245,12 +245,31 @@ repository.
 #### Coding agents
 
 Every base image carries five coding agents, so a VM is usable by an agent the
-moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. Four are
+moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. Three are
 installed from npm and need a Node.js runtime, which is installed alongside
-them; `agy` has no npm package and is installed from its vendor's script into
-`/usr/local/bin`, where every account on the VM finds it. Their versions are not
-pinned — they are whatever was current when the image was built, and rebuilding
-the image is how a guest gets newer ones.
+them; `agy` and `codex` have no npm install and come from their vendors' own
+scripts into `/usr/local/bin`, where every account on the VM finds them. Their
+versions are not pinned — they are whatever was current when the image was
+built, and rebuilding the image is how a guest gets newer ones.
+
+`codex` is installed by OpenAI's installer (`https://chatgpt.com/codex/install.sh`)
+rather than from npm, because `codex remote-control` runs only against the
+standalone package that installer produces: it starts its app-server from a fixed
+path under the account's `CODEX_HOME`, and an npm install leaves no such
+directory. The package is installed once into `/usr/local/lib/codex` and shared —
+it is around 300 MiB — with the command itself in `/usr/local/bin`. Each account
+gets a symlink to it at `~/.codex/packages/standalone/current` on first boot, so
+credentials and configuration stay per-account.
+
+Every VM starts Codex's remote-control daemon at boot for `root` and every
+interactive account, through the `agent-vm-codex-remote-control.service` unit
+(`codex remote-control start`). That daemon needs credentials, which are per-VM
+and never come from a base image or a seed, so on a VM where nobody has run
+`codex login` the attempt fails and says so in the journal — deliberately without
+failing the boot. Log in inside the VM and run
+`sudo systemctl start agent-vm-codex-remote-control` (or `codex remote-control
+start` as that account) to start it then; `journalctl -u
+agent-vm-codex-remote-control` is where a failure is reported.
 
 #### Forge CLIs, browsers, and SDKMAN
 
@@ -301,8 +320,9 @@ Node.js of their own, and `npm` itself is held to the 11 line on all three:
 npm 12 does not run the postinstall scripts `claude` and `opencode` use to fetch
 their native binaries, so they would install cleanly and then fail at first use.
 
-A build fails outright if the Node.js it ends up with is older than 22.19, and it
-runs each of the five agents once at the end and fails if any of them cannot
+A build fails outright if the Node.js it ends up with is older than 22.19, checks
+that the codex installer really produced its standalone package, and runs each of
+the five agents once at the end and fails if any of them cannot
 start. Installing an agent and having a working agent are different things, and
 the difference would otherwise only surface inside a VM long after the image was
 built and cached.
