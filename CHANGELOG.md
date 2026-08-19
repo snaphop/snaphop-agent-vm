@@ -15,7 +15,28 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Added
+
+- Base images now carry a Rust toolchain: `rustup` with the stable toolchain,
+  so `rustc`, `cargo`, `rustfmt`, and `clippy` are in every VM. It is installed
+  once into `/usr/local/rustup` and shared by every account rather than
+  downloaded per user at first use, which a network-isolated guest could not do
+  at all — so `rustup update` needs `sudo`, while `cargo install` still writes
+  into the account's own `~/.cargo`. The entry points are in `/usr/local/bin`,
+  so they work in a non-interactive `ssh <vm> cargo build` and not only in a
+  login shell. **Run `agent-vm image build <distro> --force` to pick this
+  up** — existing cached images have no Rust.
+
 ### Changed
+
+- The Go toolchain in a base image now comes from the current go.dev release
+  instead of the distribution's package. Every family packaged a different and
+  often years-old Go, and a guest whose Go is older than the `go` directive of
+  the repository an agent was handed cannot build it at all; all three families
+  now carry the same release. `go` and `gofmt` are in `/usr/local/bin` as
+  before, and `~/go/bin` and `~/.cargo/bin` are added to the path of a login
+  shell. Existing cached images keep their packaged Go until rebuilt with
+  `agent-vm image build <distro> --force`.
 
 - `codex` in a base image now comes from OpenAI's own installer
   (`https://chatgpt.com/codex/install.sh`) instead of the `@openai/codex` npm

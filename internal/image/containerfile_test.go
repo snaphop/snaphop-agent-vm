@@ -471,6 +471,106 @@ func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
 	}
 }
 
+// TestContainerfiles_InstallTheGoAndRustToolchains guards the two toolchains
+// that do not come from the family's packages.
+//
+// Every family packages some Go, and the versions are years apart -- an image
+// whose Go is older than the `go` directive of the repository an agent is
+// given cannot build it at all -- so Go comes from go.dev and Rust from rustup
+// on all three, which is what keeps the images on one release. Both have to be
+// reachable without a profile script: the `ssh <vm> go build` an agent runs is
+// not a login shell.
+func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "https://go.dev/dl/${version}.linux-${goarch}.tar.gz") {
+			t.Errorf("%s does not install Go from go.dev; a family's package would put a different release in each image", d.Containerfile)
+		}
+		// An image is built for x86_64 and aarch64 hosts alike, and the
+		// release tarball is named for the architecture.
+		for _, goarch := range []string{"goarch=amd64", "goarch=arm64"} {
+			if !strings.Contains(recipe, goarch) {
+				t.Errorf("%s does not map an architecture to %q, so the Go download would 404 there", d.Containerfile, goarch)
+			}
+		}
+		if !strings.Contains(recipe, "ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/") {
+			t.Errorf("%s does not link the Go entry points into /usr/local/bin; `ssh <vm> go build` never sources a profile script", d.Containerfile)
+		}
+
+		if !strings.Contains(recipe, "https://sh.rustup.rs") {
+			t.Errorf("%s does not install Rust through rustup", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "RUSTUP_HOME=/usr/local/rustup") {
+			t.Errorf("%s does not install Rust into a shared /usr/local/rustup; every account would download its own toolchain at first use", d.Containerfile)
+		}
+		// The rustup proxies resolve their toolchain through RUSTUP_HOME, so a
+		// shared installation is only usable if every account sees that
+		// variable -- including a non-interactive command, which reads
+		// /etc/environment through PAM and no profile script at all.
+		if !strings.Contains(recipe, "printf 'RUSTUP_HOME=/usr/local/rustup\\n' >> /etc/environment") {
+			t.Errorf("%s does not put RUSTUP_HOME in /etc/environment; cargo would look for a toolchain in an empty ~/.rustup", d.Containerfile)
+		}
+		// CARGO_HOME is left unset on purpose: cargo then defaults to the
+		// account's own ~/.cargo, so `cargo install` does not need root and
+		// accounts do not share an install root.
+		if strings.Contains(recipe, "CARGO_HOME=/usr/local/cargo\\n' >> /etc/environment") {
+			t.Errorf("%s exports CARGO_HOME image-wide; `cargo install` would then write into a root-owned directory", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY toolchains.sh /etc/profile.d/agent-vm-toolchains.sh") {
+			t.Errorf("%s does not install the toolchain PATH script; binaries from `go install` and `cargo install` would not be on the path", d.Containerfile)
+		}
+
+		// golangci-lint is not packaged by Ubuntu at all, and where it is
+		// packaged the version differs per family.
+		if !strings.Contains(recipe, "golangci-lint/HEAD/install.sh") {
+			t.Errorf("%s does not install golangci-lint from its own installer", d.Containerfile)
+		}
+
+		// A toolchain that unpacked but cannot run looks exactly like a
+		// working one until someone types the command inside a VM.
+		for _, check := range []string{
+			"go version", "gofmt", "golangci-lint --version",
+			"rustc --version", "cargo --version", "rustup --version",
+			"cargo fmt --version", "cargo clippy --version",
+		} {
+			if !strings.Contains(recipe, check) {
+				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
+			}
+		}
+		// cargo is exercised the way a guest reaches it. The shared
+		// RUSTUP_HOME is the part that can be wrong while every file is in
+		// place, and only sourcing /etc/environment proves it is not.
+		if !strings.Contains(recipe, "set -a; . /etc/environment; set +a;") {
+			t.Errorf("%s does not smoke-test cargo through /etc/environment, which is the only thing that proves the shared RUSTUP_HOME reaches a guest", d.Containerfile)
+		}
+	}
+}
+
+// TestToolchainProfile_LeavesTheToolchainsOutOfPath is the other half of that
+// contract. The profile script exists for what a user installs later; putting
+// the toolchains themselves on the path through it would make them invisible
+// to every non-interactive command.
+func TestToolchainProfile_LeavesTheToolchainsOutOfPath(t *testing.T) {
+	script := readTemplate(t, "distro/toolchains.sh")
+
+	for _, dir := range []string{"$HOME/go/bin", "$HOME/.cargo/bin"} {
+		if !strings.Contains(script, dir) {
+			t.Errorf("toolchains.sh does not put %s on the path, so binaries a user installs would not be found", dir)
+		}
+	}
+	if strings.Contains(script, "/usr/local/go/bin") || strings.Contains(script, "/usr/local/cargo/bin") {
+		t.Error("toolchains.sh puts a toolchain directory on the path; the toolchains are linked into /usr/local/bin instead, so they work in a non-interactive command too")
+	}
+	if !slices.Contains(buildContextFiles, "toolchains.sh") {
+		t.Errorf("toolchains.sh is not in buildContextFiles %v, so podman's build context will not contain it", buildContextFiles)
+	}
+}
+
 func readTemplate(t *testing.T, path string) string {
 	t.Helper()
 	contents, err := templates.FS.ReadFile(path)
@@ -769,15 +869,15 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 	packages := map[string][]string{
 		distro.Ubuntu.Containerfile: {
 			"qemu-kvm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
-			"dnsmasq-base", "guestfs-tools", "podman", "golang-go",
+			"dnsmasq-base", "guestfs-tools", "podman",
 		},
 		distro.Fedora.Containerfile: {
 			"qemu-kvm", "libvirt", "libvirt-client", "virt-install",
-			"dnsmasq", "guestfs-tools", "podman", "golang",
+			"dnsmasq", "guestfs-tools", "podman",
 		},
 		distro.Arch.Containerfile: {
 			"qemu-base", "libvirt", "virt-install",
-			"dnsmasq", "guestfs-tools", "podman", "go",
+			"dnsmasq", "guestfs-tools", "podman",
 		},
 	}
 
@@ -803,12 +903,6 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 		// per network. libvirt only needs the binary.
 		if d.Containerfile == distro.Ubuntu.Containerfile && strings.Contains(recipe, "\n      dnsmasq \\\n") {
 			t.Errorf("%s installs the full dnsmasq package; libvirt needs dnsmasq-base, and the daemon package would contend with libvirt's own instances", d.Containerfile)
-		}
-
-		// golangci-lint is not packaged by Ubuntu at all, and where it is
-		// packaged the version differs per family.
-		if !strings.Contains(recipe, "golangci-lint/HEAD/install.sh") {
-			t.Errorf("%s does not install golangci-lint from its own installer", d.Containerfile)
 		}
 
 		// The guest half of nested virtualization. The host half is
@@ -886,7 +980,6 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		for _, check := range []string{
 			"virsh --version", "virt-install --version", "qemu-img --version",
 			"virt-make-fs --version", "podman --version", "dnsmasq --version",
-			"go version", "golangci-lint --version",
 		} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
