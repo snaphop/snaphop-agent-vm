@@ -17,6 +17,18 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `ping` works for the guest's own user again. In a guest the command failed
+  with `socket: Operation not permitted ... missing cap_net_raw+p capability`
+  for anything but root, which looks exactly like a VM with no network even
+  though its lease, route, and TCP traffic were all fine. The capability distro
+  packaging puts on `/usr/bin/ping` is an extended attribute, and it does not
+  survive the `podman export` tar that `virt-make-fs` turns into the disk;
+  Ubuntu and Fedora then leave `net.ipv4.ping_group_range` at the kernel's
+  empty default, so the fallback to an ICMP socket was closed too. Base images
+  now ship a sysctl drop-in that opens that range. **Run
+  `agent-vm image build <distro> --force` to pick this up** — existing cached
+  images still produce guests with the old behavior.
+
 - `agent-vm create --github-ssh-key` no longer fails with `cat:
   .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
   booted. The guest generates that key from a first-boot unit that runs after
