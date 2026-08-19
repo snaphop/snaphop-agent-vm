@@ -84,6 +84,9 @@ type Builder struct {
 	Store          *state.Store
 	Logger         *slog.Logger
 	AgentVMVersion string
+	// Progress, when set, is told which step the build has reached. It is
+	// nil for --quiet and in tests.
+	Progress Progress
 }
 
 // BuildOptions are the inputs to one build.
@@ -133,6 +136,11 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		platform = "linux/" + runtime.GOARCH
 	}
 
+	// From here on the build actually does something, so it is worth
+	// reporting. A cache hit above returns without a single step.
+	steps := reporter{to: b.Progress}
+	defer func() { steps.finish(err) }()
+
 	work, err := b.newWorkspace(d.Name, tag)
 	if err != nil {
 		return nil, err
@@ -147,11 +155,12 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		}
 	}()
 
-	manifest, err := b.buildInto(ctx, work, opts, sourceRef, platform)
+	manifest, err := b.buildInto(ctx, steps, work, opts, sourceRef, platform)
 	if err != nil {
 		return nil, err
 	}
 
+	steps.at(stepCommit)
 	if err := b.commit(work, d.Name, tag); err != nil {
 		return nil, err
 	}
@@ -181,12 +190,14 @@ func (b *Builder) newWorkspace(distroName, tag string) (*workspace, error) {
 	}, nil
 }
 
-func (b *Builder) buildInto(ctx context.Context, work *workspace, opts BuildOptions, sourceRef, platform string) (*state.Manifest, error) {
+func (b *Builder) buildInto(ctx context.Context, steps reporter, work *workspace, opts BuildOptions, sourceRef, platform string) (*state.Manifest, error) {
 	d, tag := opts.Ref.Distro, opts.Ref.Tag
 
+	steps.at(stepPull)
 	if err := b.pull(ctx, sourceRef, platform); err != nil {
 		return nil, err
 	}
+	steps.at(stepDigest)
 	digest, err := b.resolveDigest(ctx, sourceRef)
 	if err != nil {
 		return nil, err
@@ -201,23 +212,29 @@ func (b *Builder) buildInto(ctx context.Context, work *workspace, opts BuildOpti
 		return nil, err
 	}
 	localTag := fmt.Sprintf("agent-vm/%s:%s", d.Name, tag)
+	steps.at(stepLayers)
 	if err := b.build(ctx, containerfile, work.dir, localTag, pinned, platform); err != nil {
 		return nil, err
 	}
+	steps.at(stepExport)
 	if err := b.export(ctx, localTag, work.tarPath); err != nil {
 		return nil, err
 	}
 
+	steps.at(stepDisk)
 	if err := b.makeDisk(ctx, work); err != nil {
 		return nil, err
 	}
+	steps.at(stepKernelVersion)
 	kernelVersion, err := b.kernelVersion(ctx, work.diskPath)
 	if err != nil {
 		return nil, err
 	}
+	steps.at(stepBootArtifacts)
 	if err := b.extractBootArtifacts(ctx, work, d); err != nil {
 		return nil, err
 	}
+	steps.at(stepSysprep)
 	if err := b.sysprep(ctx, work.diskPath); err != nil {
 		return nil, err
 	}
@@ -228,6 +245,7 @@ func (b *Builder) buildInto(ctx context.Context, work *workspace, opts BuildOpti
 		return nil, err
 	}
 
+	steps.at(stepManifest)
 	return b.writeManifest(ctx, work, opts, sourceRef, digest, platform, kernelVersion)
 }
 

@@ -83,6 +83,7 @@ path documented.
 │   ├── network/            # virsh net-* for NAT, ip -json bridge validation
 │   ├── guestinit/          # cloud-init user-data generation
 │   ├── state/              # state directory, vm.json, locking
+│   ├── progress/           # terminal progress rendering for long operations
 │   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
 ├── templates/              # embedded: per-distro Containerfiles, cloud-init
@@ -244,6 +245,9 @@ Major modules and responsibilities:
   validates an existing host bridge with `ip -json link`.
 - `internal/state` — owns the state directory, per-VM `vm.json`, and the file
   locks that keep concurrent `create`/`destroy` calls from racing.
+- `internal/progress` — renders the progress of a long, multi-step operation: a
+  bar redrawn in place on a terminal, one plain line per step anywhere else.
+  Presentation only; the package doing the work reports which step it reached.
 - `internal/hostexec` — the only package that spawns processes: argv construction,
   timeouts, logging with exit status, and tool version detection.
 

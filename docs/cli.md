@@ -187,6 +187,21 @@ including the tool versions used.
 
 Use `--dry-run` to print the whole pipeline without running it.
 
+A build is several minutes of other programs working silently, so it reports
+where it is. On a terminal that is one line, redrawn in place, showing a bar,
+the step number, the step, and the elapsed time:
+
+```
+[████████░░░░░░░░░░░░] 4/10 exporting the root filesystem 2m18s
+```
+
+Anywhere the output is captured rather than displayed — a pipe, a log file, a
+CI job, or a `--verbose` run whose logs share the stream — each step is one
+plain `[4/10] exporting the root filesystem` line instead, and no terminal
+control characters are written. Like all progress, it goes to stderr and is
+silenced by `--quiet`. A cached image reports nothing, because nothing is
+built. `create` builds a missing image the same way and reports it the same way.
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `--from <ref>` | distro's pinned default | Override the source OCI reference. |
