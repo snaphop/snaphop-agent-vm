@@ -77,6 +77,12 @@ do with `--network bridge` or an explicit host-path share.
   output, hostnames, command output — MUST be treated as untrusted: validated
   before use, never interpolated into a shell command or a path, and never
   trusted to identify a VM.
+- The coding agents inside a guest are deliberately configured in their most
+  permissive modes, and passwordless `sudo` for the login user is deliberate
+  too. That is sound only while the VM itself is the sandbox: it depends on the
+  boundaries above holding — no host path, no host credential, NAT by default.
+  A change that weakens one of those boundaries is a change to what those
+  permissions mean, not an isolated convenience.
 
 ### Secrets, Credentials, And Sensitive Data
 
@@ -89,6 +95,14 @@ do with `--network bridge` or an explicit host-path share.
   leaves it, and is destroyed with it.
 - MUST NOT bake credentials, tokens, or registry secrets into a base image.
   Base images are shared by every VM built on them and are cached indefinitely.
+  The coding agents a base image carries therefore ship configured but
+  **unauthenticated**; a login or API key reaches a VM separately, through
+  `--cloud-init` or from inside the guest.
+- Forge and cloud credentials MUST stay on the host. `--github-ssh-key` runs
+  `gh` on the host with the operator's existing login and sends only the
+  **public** half of a key the guest generated for itself; `gh` MUST NOT be
+  authenticated inside a guest by this tool, and a GitHub token MUST NEVER be
+  written into an image, a seed, or a guest's filesystem.
 - Registry credentials, when needed, MUST come from the host's existing container
   auth mechanism and MUST NOT be copied into the state directory or logged.
 - MUST NOT log secrets, registry authorization headers, the contents of
@@ -163,7 +177,7 @@ do with `--network bridge` or an explicit host-path share.
 - Validate type, length, range, format, and — for paths — containment, before use.
   VM names MUST match `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`; sizes and counts MUST be
   parsed and bounded, not passed through as strings.
-- Every tool (`virt-install`, `virsh`, `qemu-img`, `podman`/`skopeo`, libguestfs,
+- Every tool (`virt-install`, `virsh`, `qemu-img`, `podman`, libguestfs,
   `ip`, `ssh`) MUST be invoked through `internal/hostexec` with an explicit argument
   vector. MUST NOT build command strings for a shell, MUST NOT use `sh -c`, and MUST
   NOT pass untrusted values where a tool would interpret them as options — terminate

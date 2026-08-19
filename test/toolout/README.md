@@ -66,13 +66,21 @@ present.
 
 ## Missing captures
 
-No fixture exists yet for `skopeo --version`; skopeo was not installed on the
-host where these were captured, so that parser is not covered by a real
-capture. Add it — and a matching table row — when working on a host that has it.
+There is no `skopeo --version` capture, and none is needed yet: `internal/hostexec`
+defines a `skopeo` tool but nothing invokes skopeo and `doctor` does not check
+for it. Capture it — with a matching table row — if the skopeo path in
+[ADR-0009](../../docs/decisions/0009-orchestrate-existing-host-cli-tools.md) is
+ever implemented.
 
-`podman-image-inspect.json` is captured but not yet used: the digest parser in
-`internal/image` is still tested against hand-written JSON, which AGENTS.md §7
-does not accept as coverage. Point that test at this fixture.
+Three fixtures are captured but not yet used by any test, which AGENTS.md §7
+does not accept as coverage for the parsers they belong to:
+
+- `podman-image-inspect.json` — the digest parser in `internal/image` is still
+  tested against hand-written JSON. Point that test at this fixture.
+- `gh--version.txt` — `parseToolVersion` has a case for `gh` but no row for it
+  in the captured-output table test in `internal/hostexec`. Add one.
+- `virsh-list-all-name.txt` — the domain-name listing in `internal/domain` is
+  tested against inline output rather than this capture.
 
 There is also no capture of `virsh domifaddr` for a guest that has **no**
 address yet — the state a VM is in for the first seconds of its boot, and the

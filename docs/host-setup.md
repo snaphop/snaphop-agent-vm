@@ -79,12 +79,15 @@ Minimum versions, all checked by `agent-vm doctor`:
 | QEMU / `qemu-img` | 8.0 | guest execution, overlays |
 | `virt-install` | 4.0 | defining domains, cloud-init seeds |
 | libguestfs | 1.50 | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
-| `podman` (or `skopeo`) | 4.0 (1.11) | OCI pull, build, flatten |
+| `podman` | 4.0 | OCI pull, build, flatten |
 | `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub |
 
-`skopeo` works in place of `podman` for pulling, but `podman` is preferred because
-the per-distro image recipes are `Containerfile`s. No separate cloud-init tooling
-is needed on the host: `virt-install --cloud-init` builds the NoCloud seed.
+`podman` is required and has no substitute today: the per-distro image recipes
+are `Containerfile`s, and `podman build` is what runs them. `skopeo` appears as
+a possible alternative in
+[ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md) but nothing
+invokes it, and `doctor` does not look for it. No separate cloud-init tooling is
+needed on the host either: `virt-install --cloud-init` builds the NoCloud seed.
 
 Because the tool orchestrates these programs rather than reimplementing them
 ([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md)), a missing or
@@ -443,7 +446,7 @@ The first `image build` needs registry access and takes a few minutes. Subsequen
 | `exit 3`, `/dev/kvm` unusable | Virtualization disabled, or user not in `kvm` | firmware settings, `ls -l /dev/kvm` |
 | `Cannot access storage file ... Permission denied` on create | The hypervisor's account cannot search a directory above the state directory | `agent-vm doctor` (state directory access), then `setfacl -m u:<qemu user>:x` on the directory it names |
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
-| `image build` fails pulling | Registry unreachable, proxy, or rate limit | `skopeo inspect docker://<ref>` |
+| `image build` fails pulling | Registry unreachable, proxy, or rate limit | `podman pull <ref>` by hand; the error names the registry |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
 | VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
 | VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |
