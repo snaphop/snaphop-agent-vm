@@ -402,10 +402,17 @@ func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
 		Permissions struct {
 			DefaultMode string `json:"defaultMode"`
 		} `json:"permissions"`
+		RemoteControlAtStartup bool `json:"remoteControlAtStartup"`
 	}{}
 	readJSON(t, "distro/claude-settings.json", &claude)
 	if claude.Permissions.DefaultMode != "bypassPermissions" {
 		t.Errorf("claude-settings.json sets permissions.defaultMode to %q, want \"bypassPermissions\"; any other mode stops to ask", claude.Permissions.DefaultMode)
+	}
+	// The settings-file equivalent of `claude --remote-control`. claude treats
+	// it as security-sensitive and ignores it from project or local settings,
+	// so this per-account file is the only place that can turn it on.
+	if !claude.RemoteControlAtStartup {
+		t.Error("claude-settings.json does not set remoteControlAtStartup; claude sessions in a VM would start without Remote Control")
 	}
 
 	opencode := struct {

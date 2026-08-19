@@ -336,6 +336,13 @@ for permissions, so the image ships a shell alias that adds
 `--dangerously-skip-permissions`; that alias reaches interactive shells only, and
 a non-interactive caller such as `ssh <vm> agy -p '…'` must pass the flag itself.
 
+`claude` also starts its Remote Control bridge in every session — the
+`remoteControlAtStartup` setting, which is what `claude --remote-control` does
+from the command line. It is set in the per-account settings file because claude
+ignores that setting from project or local settings, and like Codex's daemon it
+needs credentials that only arrive per-VM: on a VM where nobody has run
+`claude login` a session simply starts without Remote Control connected.
+
 This is deliberate and depends on the VM being the sandbox: it is disposable and
 network-isolated by default, and nothing the host cares about is reachable from
 inside it (see [SECURITY.md](../SECURITY.md)). Restricting an agent inside a VM

@@ -31,6 +31,14 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `claude` in a VM now starts with Remote Control enabled in every session. Base
+  images set `remoteControlAtStartup` in the per-account settings file, which is
+  the settings-file equivalent of `claude --remote-control`; claude ignores that
+  setting from project or local settings, so the per-account file is the only
+  place that can turn it on. It needs credentials that arrive per-VM, so on a VM
+  where nobody has run `claude login` a session starts without Remote Control
+  connected. **Run `agent-vm image build <distro> --force` to pick this up.**
+
 - Every VM now starts Codex's remote-control daemon at boot, for `root` and for
   every interactive account, through the new
   `agent-vm-codex-remote-control.service` unit. Remote control needs

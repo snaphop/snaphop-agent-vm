@@ -226,6 +226,13 @@ RUN set -eu; \
 # Each lands in /etc/skel, which useradd copies into the login user cloud-init
 # creates, and in /root, whose home already exists here and so never consults
 # skel. pi is absent because it does not gate tool calls at all.
+# claude additionally starts its Remote Control bridge in every session, which
+# is what `claude --remote-control` does from the command line. It is set here
+# rather than in a project or local settings file on purpose: claude treats the
+# setting as security-sensitive and ignores it from repo-scoped settings, so a
+# per-account file is the only place that can turn it on. Like codex's daemon
+# it needs credentials that arrive per-VM, so on a VM where nobody has run
+# `claude login` it simply does not connect.
 COPY claude-settings.json /etc/skel/.claude/settings.json
 COPY codex-config.toml /etc/skel/.codex/config.toml
 COPY opencode.json /etc/skel/.config/opencode/opencode.json
