@@ -272,15 +272,16 @@ func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
 	}
 }
 
-// agentNPMPackages are the coding agents installed from npm. agy and codex are
-// absent because neither is installed from npm: agy has no npm package at all,
-// and codex is installed from OpenAI's own installer, which is the only thing
-// that produces the standalone package `codex remote-control` requires.
-var agentNPMPackages = []string{
-	"@anthropic-ai/claude-code",
-	"opencode-ai",
-	"@earendil-works/pi-coding-agent",
-}
+// miseAgents are the coding agents installed with mise, by the registry name
+// each recipe asks for. agy and codex are absent because neither has a mise
+// package: agy comes from its vendor's installer, and codex from OpenAI's own,
+// which is the only thing that produces the standalone package
+// `codex remote-control` requires.
+var miseAgents = []string{"claude", "opencode", "pi"}
+
+// miseShims are every command installed with mise that a guest has to be able
+// to run without a login shell, in the order the recipes link them.
+var miseShims = []string{"claude", "opencode", "pi", "wrangler", "playwright"}
 
 // TestContainerfiles_InstallTheCodingAgents guards the guest contract that a VM
 // comes up with claude, codex, opencode, pi and agy already installed.
@@ -301,15 +302,20 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 		}
 		recipe := string(contents)
 
-		// Four of the five are npm packages, so a Node runtime is not
-		// optional; without it the npm step fails the build outright.
+		// Node is no longer what the agents run on -- all five are native
+		// binaries -- but wrangler and Playwright are still npm installs,
+		// and a guest handed a JavaScript repository needs a runtime.
 		if !strings.Contains(recipe, "nodejs") {
-			t.Errorf("%s does not install Node.js; the npm-published agents cannot be installed without it", d.Containerfile)
+			t.Errorf("%s does not install Node.js; wrangler and Playwright cannot be installed without it", d.Containerfile)
 		}
-		for _, pkg := range agentNPMPackages {
-			if !strings.Contains(recipe, pkg) {
-				t.Errorf("%s does not install %q; guests built from it will be missing an agent docs/cli.md promises", d.Containerfile, pkg)
-			}
+		if !strings.Contains(recipe, "mise use --global --yes "+strings.Join(miseAgents, " ")) {
+			t.Errorf("%s does not install %v with mise; guests built from it will be missing an agent docs/cli.md promises", d.Containerfile, miseAgents)
+		}
+		// A mise install reaches a login shell through the shims, but
+		// `ssh <vm> claude -p ...` runs no login shell, so each agent also
+		// needs a symlink to mise on the default PATH.
+		if !strings.Contains(recipe, "for command in "+strings.Join(miseShims, " ")+"; do") {
+			t.Errorf("%s does not link %v into /usr/local/bin; a non-interactive `ssh <vm> claude -p ...` would not find them", d.Containerfile, miseShims)
 		}
 
 		// codex is installed from OpenAI's installer rather than npm, and
@@ -342,11 +348,11 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 			t.Errorf("%s installs agy without pointing it at /usr/local/bin; it will land in the build user's home and no guest account will find it", d.Containerfile)
 		}
 
-		// pi and claude refuse to start on Node older than 22.19. Catching
-		// that during the build is the difference between a failed build and
-		// a guest whose agents silently do not run.
-		if !strings.Contains(recipe, "the agent CLIs require >= 22.19") {
-			t.Errorf("%s does not assert a minimum Node version; a distro that ships Node older than 22.19 would produce an image whose agents cannot start", d.Containerfile)
+		// 22.19 is the Node floor the image promises. Catching a distro
+		// that drops below it during the build is the difference between a
+		// failed build and a guest that cannot run what it was handed.
+		if !strings.Contains(recipe, "this image requires >= 22.19") {
+			t.Errorf("%s does not assert a minimum Node version; a distro that ships Node older than 22.19 would produce an image below the floor docs/cli.md promises", d.Containerfile)
 		}
 	}
 }
@@ -591,12 +597,11 @@ func readJSON(t *testing.T, path string, into any) {
 // this whole feature is most exposed to: an agent that installs cleanly and
 // cannot run.
 //
-// claude and opencode both download a native binary in an npm postinstall
-// script. npm 12 does not run those scripts, so the install succeeds and the
-// command fails at first use — inside a VM, long after the image was built and
-// cached. The recipes hold npm to the 11 line, and run every agent once so
-// that a future npm or Node change fails the build instead of shipping a guest
-// whose agents do not work.
+// An archive for the wrong architecture, or one whose entry point cannot find
+// what it needs, unpacks cleanly and fails at first use — inside a VM, long
+// after the image was built and cached. The recipes run every agent once, so a
+// future packaging change fails the build instead of shipping a guest whose
+// agents do not work.
 func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
@@ -605,9 +610,6 @@ func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
 		}
 		recipe := readTemplate(t, "distro/"+d.Containerfile)
 
-		if !strings.Contains(recipe, "npm install -g npm@11") {
-			t.Errorf("%s does not hold npm to the 11 line; npm 12 skips the postinstall scripts claude and opencode use to fetch their native binaries, and both install cleanly then fail at first run", d.Containerfile)
-		}
 		if !strings.Contains(recipe, `for agent in claude codex opencode pi agy; do`) {
 			t.Errorf("%s does not run each agent once at build time; an agent that installs but cannot start would ship undetected", d.Containerfile)
 		}
@@ -715,16 +717,13 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 			t.Errorf("%s does not install tea from Gitea's release server; only Arch packages it, and on Ubuntu the name belongs to an unrelated text editor", d.Containerfile)
 		}
 
-		if !strings.Contains(recipe, "npm install -g playwright") {
-			t.Errorf("%s does not install Playwright", d.Containerfile)
+		// Playwright and wrangler are published only to npm, so they are the
+		// one place mise's npm backend is still used.
+		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright") {
+			t.Errorf("%s does not install wrangler and Playwright with mise", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
 			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
-		}
-		// wrangler is packaged by no distro and published only to npm, so it
-		// rides on the Node runtime the agents already need.
-		if !strings.Contains(recipe, "npm install -g wrangler") {
-			t.Errorf("%s does not install wrangler", d.Containerfile)
 		}
 		// Anonymous metrics are on by default. A disposable VM an agent drives
 		// is not a machine whose operator opted in, and the setting has to
