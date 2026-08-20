@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -590,6 +591,69 @@ func TestCreate_MergesOperatorCloudInitData(t *testing.T) {
 	}
 	if !strings.Contains(string(userData), strings.TrimSpace(publicKey)) {
 		t.Errorf("merging must not drop the authorized key:\n%s", userData)
+	}
+}
+
+func TestCreate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	configPath := filepath.Join(t.TempDir(), "opencode.json")
+	contents := `{"$schema":"https://opencode.ai/config.json","permission":{"bash":"ask"}}`
+	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+		t.Fatalf("writing the opencode config: %v", err)
+	}
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath, "--opencode-config", configPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(contents))
+	if !strings.Contains(string(userData), encoded) {
+		t.Errorf("the operator's opencode.json is not in the user-data:\n%s", userData)
+	}
+	if !strings.Contains(string(userData), "/etc/skel/.config/opencode/opencode.json") {
+		t.Errorf("the config is not written where the login user inherits it:\n%s", userData)
+	}
+}
+
+func TestCreate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	configPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(configPath, []byte("permission:\n  bash: allow\n"), 0o600); err != nil {
+		t.Fatalf("writing the opencode config: %v", err)
+	}
+
+	fake := createHost(t)
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--opencode-config", configPath)...)
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	// An opencode.json may hold credentials, so only its path is reported.
+	if strings.Contains(stderr, "bash: allow") {
+		t.Errorf("the operator's config must never be echoed:\n%s", stderr)
+	}
+}
+
+func TestCreate_RejectsAMissingOpencodeConfig(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	missing := filepath.Join(t.TempDir(), "opencode.json")
+
+	fake := createHost(t)
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--opencode-config", missing)...)
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, missing) {
+		t.Errorf("the error does not name the file:\n%s", stderr)
+	}
+	// A path typo must cost nothing on the host.
+	if len(fake.Calls()) != 0 {
+		t.Errorf("nothing may run before the inputs are accepted:\n%s", fake)
 	}
 }
 

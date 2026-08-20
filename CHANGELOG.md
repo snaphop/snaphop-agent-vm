@@ -17,6 +17,14 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `create --opencode-config <path>` installs your own `opencode.json` in the
+  VM, replacing the permissive default the base image ships. The file is
+  written to `/etc/skel/.config/opencode/opencode.json` and
+  `/root/.config/opencode/opencode.json` at first boot, so both the login user
+  and `root` start with it — no image rebuild, and no hand-editing after
+  logging in. It must be valid JSON, which is checked before anything is
+  created; like `--cloud-init` data, its contents are never logged.
+
 - `create --max-memory <size>` gives a VM memory it can grow into. `--memory`
   stays what the guest boots with; `--max-memory` is the ceiling it may reach
   while it runs, and the difference between the two becomes a `virtio-mem`

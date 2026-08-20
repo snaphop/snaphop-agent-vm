@@ -162,7 +162,7 @@ func completionSpecs() map[string]*completionSpec {
 
 	return map[string]*completionSpec{
 		"doctor":     {},
-		"create":     {flags: []string{"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge", "cloud-init", "no-start", "wait-for-ssh", "ssh-key", "host-authorized-keys", "virt-install-arg", "github-ssh-key"}},
+		"create":     {flags: []string{"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge", "cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key", "host-authorized-keys", "virt-install-arg", "github-ssh-key"}},
 		"list":       {},
 		"info":       {args: vmName},
 		"start":      {args: vmName},
