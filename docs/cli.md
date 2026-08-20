@@ -632,7 +632,7 @@ Constraints, all of which are checked before anything on the host changes:
   this tool boot with `memhp_default_state=online_movable`, which does that;
   a VM created from a base image cached before that command line existed will
   see the memory as offline blocks until the image is rebuilt with
-  `agent-vm image build --force <distro>`.
+  `agent-vm image build <distro> --force`.
 
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.

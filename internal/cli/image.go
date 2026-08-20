@@ -79,16 +79,14 @@ func runImageBuild(ctx context.Context, app *App, args []string) error {
 	from := flags.String("from", "", "override the source OCI reference")
 	platform := flags.String("platform", "", "image platform to pull (default: the host platform)")
 	force := flags.Bool("force", false, "rebuild even if a cached image already exists")
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
-	}
-	if flags.NArg() != 1 {
-		return exitf(ExitUsage, "usage: agent-vm image build <distro>[:<tag>]")
+	name, err := parseNamed(flags, args, "agent-vm image build <distro>[:<tag>] [flags]")
+	if err != nil {
+		return err
 	}
 
-	ref, err := distro.ParseRef(flags.Arg(0))
+	ref, err := distro.ParseRef(name)
 	if err != nil {
-		return &config.ValidationError{Field: "distro", Value: flags.Arg(0), Err: err}
+		return &config.ValidationError{Field: "distro", Value: name, Err: err}
 	}
 	opts := image.BuildOptions{
 		Ref:      ref,
@@ -267,16 +265,14 @@ func runImageRemove(ctx context.Context, app *App, args []string) error {
 	flags := flag.NewFlagSet("image rm", flag.ContinueOnError)
 	flags.SetOutput(app.Stderr)
 	force := flags.Bool("force", false, "remove even while VMs still use it as a backing file; their disks become unreadable")
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
-	}
-	if flags.NArg() != 1 {
-		return exitf(ExitUsage, "usage: agent-vm image rm <distro>[:<tag>]")
+	name, err := parseNamed(flags, args, "agent-vm image rm <distro>[:<tag>] [--force]")
+	if err != nil {
+		return err
 	}
 
-	ref, err := distro.ParseRef(flags.Arg(0))
+	ref, err := distro.ParseRef(name)
 	if err != nil {
-		return &config.ValidationError{Field: "distro", Value: flags.Arg(0), Err: err}
+		return &config.ValidationError{Field: "distro", Value: name, Err: err}
 	}
 	builder, err := app.builder()
 	if err != nil {

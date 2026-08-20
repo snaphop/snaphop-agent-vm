@@ -891,7 +891,7 @@ func TestVMGrowableMemory(t *testing.T) {
 	if !strings.Contains(cmdline, "memhp_default_state=online_movable") {
 		t.Skipf("the cached %s base image predates memhp_default_state=online_movable, so this guest\n"+
 			"cannot online hotplugged memory. Rebuild it and re-run:\n"+
-			"  agent-vm image build --force %s\nguest cmdline: %s",
+			"  agent-vm image build %s --force\nguest cmdline: %s",
 			*lifecycleDistro, *lifecycleDistro, cmdline)
 	}
 

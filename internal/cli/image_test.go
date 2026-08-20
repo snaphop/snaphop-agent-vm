@@ -326,3 +326,68 @@ func TestBuildProgress_IsSuppressedWhenThereIsNothingToReport(t *testing.T) {
 		t.Error("a plain run reports no build progress")
 	}
 }
+
+// The documented spelling puts a subcommand's own flags after the positional
+// argument — `agent-vm image build ubuntu --force` — which Go's flag package
+// stops parsing at. Both orderings have to work, or the command in the docs
+// exits 2 with "flag provided but not defined".
+func TestImageBuild_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"flags after the distro", []string{"--dry-run", "image", "build", "fedora", "--force"}},
+		{"flags before the distro", []string{"--dry-run", "image", "build", "--force", "fedora"}},
+		{"flags on both sides", []string{"--dry-run", "image", "build", "--platform", "linux/amd64", "fedora", "--force"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, stdout, stderr := cliRun(t, imageHost(), filepath.Join(t.TempDir(), "state"), tc.args...)
+			if code != ExitOK {
+				t.Fatalf("exit code = %d, want 0: %s", code, stderr)
+			}
+			if !strings.Contains(stdout, "podman pull") {
+				t.Errorf("the plan was not printed:\n%s", stdout)
+			}
+		})
+	}
+}
+
+func TestImageRm_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"flags after the distro", []string{"--yes", "--dry-run", "image", "rm", "ubuntu", "--force"}},
+		{"flags before the distro", []string{"--yes", "--dry-run", "image", "rm", "--force", "ubuntu"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cachedImage(t, dir)
+
+			code, stdout, stderr := cliRun(t, imageHost(), dir, tc.args...)
+			if code != ExitOK {
+				t.Fatalf("exit code = %d, want 0: %s", code, stderr)
+			}
+			if !strings.Contains(stdout, "ubuntu/24.04") {
+				t.Errorf("the plan does not say what it would remove:\n%s", stdout)
+			}
+		})
+	}
+}
+
+// A second positional is still a usage error: accepting flags after the name
+// must not turn a typo into a silently ignored argument.
+func TestImage_RejectsASecondDistroArgument(t *testing.T) {
+	for _, args := range [][]string{
+		{"image", "build", "fedora", "ubuntu"},
+		{"--yes", "image", "rm", "fedora", "ubuntu"},
+	} {
+		code, _, stderr := cliRun(t, imageHost(), t.TempDir(), args...)
+		if code != ExitUsage {
+			t.Errorf("%v exited %d, want %d: %s", args, code, ExitUsage, stderr)
+		}
+		if !strings.Contains(stderr, "ubuntu") {
+			t.Errorf("%v: the error does not name the unexpected argument: %s", args, stderr)
+		}
+	}
+}
