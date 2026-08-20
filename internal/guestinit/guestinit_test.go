@@ -1,6 +1,7 @@
 package guestinit
 
 import (
+	"encoding/base64"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -376,4 +377,78 @@ func equal(got, want []string) bool {
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+// The opencode.json a real operator would supply: the shape the base image
+// ships, with one permission tightened.
+const testOpencodeConfig = `{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "edit": "allow",
+    "bash": "ask",
+    "webfetch": "allow"
+  }
+}
+`
+
+func TestGenerate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
+	opts := options()
+	opts.OpencodeConfig = []byte(testOpencodeConfig)
+	opts.OpencodeSource = "/home/operator/opencode.json"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	golden.Assert(t, "user-data-opencode.yaml", got)
+
+	// /etc/skel is what the account cloud-init creates inherits, and /root has
+	// its own copy because a home directory that already exists never consults
+	// skel. Missing either leaves one of the two accounts on the image's file.
+	for _, path := range []string{
+		"path: /etc/skel/.config/opencode/opencode.json",
+		"path: /root/.config/opencode/opencode.json",
+	} {
+		if !strings.Contains(string(got), path) {
+			t.Errorf("user-data does not write %s:\n%s", path, got)
+		}
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(testOpencodeConfig))
+	if !strings.Contains(string(got), "content: "+encoded) {
+		t.Errorf("the config is not carried base64-encoded:\n%s", got)
+	}
+	// Emitting JSON into YAML unencoded is what this guards against: the braces
+	// and quotes would be read as YAML rather than as the document's contents.
+	if strings.Contains(string(got), `"$schema"`) {
+		t.Errorf("the config was emitted as raw JSON inside the YAML:\n%s", got)
+	}
+}
+
+func TestGenerate_OmitsWriteFilesWithoutAnOpencodeConfig(t *testing.T) {
+	got, err := Generate(options())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if strings.Contains(string(got), "write_files") {
+		t.Errorf("user-data writes files nobody asked for:\n%s", got)
+	}
+}
+
+func TestGenerate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
+	opts := options()
+	// A YAML file named opencode.json is the mistake worth catching: opencode
+	// would refuse to start, minutes after create reported success.
+	opts.OpencodeConfig = []byte("permission:\n  bash: allow\n")
+	opts.OpencodeSource = "/home/operator/opencode.json"
+
+	_, err := Generate(opts)
+	if err == nil {
+		t.Fatal("want a refusal to install an opencode.json that is not JSON")
+	}
+	if strings.Contains(err.Error(), "permission") {
+		t.Errorf("the error echoed the file's contents: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/home/operator/opencode.json") {
+		t.Errorf("the error does not name the file: %v", err)
+	}
 }

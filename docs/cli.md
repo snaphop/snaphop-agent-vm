@@ -454,6 +454,16 @@ These configuration files land in `/etc/skel`, so the login user cloud-init
 creates gets them, and in `/root`. They can be replaced per VM through
 `--cloud-init` without rebuilding the image.
 
+`opencode` has a flag of its own for that:
+`create --opencode-config <path>` reads an `opencode.json` from the host and
+writes it into both `/etc/skel/.config/opencode/opencode.json` and
+`/root/.config/opencode/opencode.json` at first boot, so the login user and
+`root` both get it in place of the image's copy. The file must be valid JSON —
+otherwise `opencode` would refuse to start, minutes after `create` reported
+success — and it is carried base64-encoded inside the generated user-data so
+that JSON quoting cannot be reshaped by YAML. Its contents are never logged or
+echoed in an error; only its path is.
+
 **No credentials are baked in.** A base image is shared by every VM built on it
 and cached indefinitely, so the agents ship configured but unauthenticated. API
 keys or logins have to reach each VM separately — through `--cloud-init`, or by
@@ -584,6 +594,7 @@ and must not already exist.
 | `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
 | `--host-authorized-keys` | off | Also authorize every key in this host account's `~/.ssh/authorized_keys` and `~/.ssh/authorized-keys/authorized_keys`. Combines with `--ssh-key`. |
 | `--cloud-init <path>` | none | Extra cloud-init user-data merged into the generated user-data. |
+| `--opencode-config <path>` | none | Your own `opencode.json`, installed in the guest in place of the one the base image ships. Must be valid JSON. |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |

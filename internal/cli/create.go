@@ -59,6 +59,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	networkMode := flags.String("network", "", "network mode: nat or bridge")
 	bridge := flags.String("bridge", "", "host bridge to attach to; required with --network bridge")
 	cloudInit := flags.String("cloud-init", "", "extra cloud-init user-data merged into the generated user-data")
+	opencodeConfig := flags.String("opencode-config", "", "opencode.json to install in the guest, replacing the one the base image ships")
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
@@ -133,6 +134,10 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return errNoSSHKeys()
 	}
 	extraUserData, err := readExtraUserData(*cloudInit)
+	if err != nil {
+		return err
+	}
+	opencodeJSON, err := readOpencodeConfig(*opencodeConfig)
 	if err != nil {
 		return err
 	}
@@ -211,6 +216,8 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		keyPaths:        keyPaths,
 		extraUserData:   extraUserData,
 		extraSource:     *cloudInit,
+		opencodeConfig:  opencodeJSON,
+		opencodeSource:  *opencodeConfig,
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
@@ -242,6 +249,28 @@ func readExtraUserData(path string) ([]byte, error) {
 		return nil, &config.ValidationError{
 			Field: "cloud-init user-data", Value: path,
 			Err: fmt.Errorf("the file is empty"),
+		}
+	}
+	return contents, nil
+}
+
+// readOpencodeConfig reads an operator-supplied opencode.json. Like
+// --cloud-init data it may hold credentials, so its contents are never logged
+// (SECURITY.md); only its path appears in messages. Whether it is valid JSON is
+// guestinit's check, so every caller building user-data gets it.
+func readOpencodeConfig(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, &config.ValidationError{Field: "opencode config", Value: path, Err: err}
+	}
+	if len(contents) == 0 {
+		return nil, &config.ValidationError{
+			Field: "opencode config", Value: path,
+			Err:    fmt.Errorf("the file is empty"),
+			Remedy: "Drop --opencode-config to keep the copy the base image ships.",
 		}
 	}
 	return contents, nil
@@ -368,6 +397,8 @@ type createRequest struct {
 	keyPaths        []string
 	extraUserData   []byte
 	extraSource     string
+	opencodeConfig  []byte
+	opencodeSource  string
 	virtInstallArgs []string
 	waitForSSH      time.Duration
 	githubSSHKey    bool
@@ -444,6 +475,8 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		SSHAuthorizedKeys: req.keys,
 		ExtraUserData:     req.extraUserData,
 		ExtraSource:       req.extraSource,
+		OpencodeConfig:    req.opencodeConfig,
+		OpencodeSource:    req.opencodeSource,
 		AgentVMVersion:    Version,
 	})
 	if err != nil {
