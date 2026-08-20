@@ -112,7 +112,7 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 		env = os.Getenv
 	}
 
-	cfg := defaults()
+	cfg := defaults(env)
 	fromEnv := environOverrides(env)
 
 	// The config file's location is itself configurable, at flag-then-env
@@ -130,7 +130,7 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 	}
 
 	for _, o := range []Overrides{fileOverrides, fromEnv, flags} {
-		if err := apply(cfg, o); err != nil {
+		if err := apply(env, cfg, o); err != nil {
 			return nil, err
 		}
 	}
@@ -141,9 +141,9 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 	return cfg, nil
 }
 
-func defaults() *Config {
+func defaults(env Environ) *Config {
 	return &Config{
-		StateDir:   filepath.Join(userDataDir(), "agent-vm"),
+		StateDir:   filepath.Join(userDataDir(env), "agent-vm"),
 		LibvirtURI: DefaultLibvirtURI,
 		Distro:     distro.Ref{Distro: distro.Default, Tag: distro.Default.DefaultTag},
 		VCPUs:      DefaultVCPUs,
@@ -155,21 +155,21 @@ func defaults() *Config {
 	}
 }
 
-// DefaultConfigFile is where the configuration file lives when no other
+// defaultConfigFile is where the configuration file lives when no other
 // location is given.
-func DefaultConfigFile() string {
-	return filepath.Join(userConfigDir(), "agent-vm", "config.toml")
+func defaultConfigFile(env Environ) string {
+	return filepath.Join(userConfigDir(env), "agent-vm", "config.toml")
 }
 
 func configFilePath(env Environ, flags, fromEnv Overrides) (string, error) {
-	path := DefaultConfigFile()
+	path := defaultConfigFile(env)
 	if fromEnv.ConfigFile != "" {
 		path = fromEnv.ConfigFile
 	}
 	if flags.ConfigFile != "" {
 		path = flags.ConfigFile
 	}
-	return expandPath(path)
+	return expandPath(env, path)
 }
 
 // environOverrides reads the documented AGENT_VM_* variables. Unset variables
@@ -194,9 +194,9 @@ func environOverrides(env Environ) Overrides {
 
 // apply layers one source over the config. Values are parsed here, so a bad
 // value is attributed to the source that set it.
-func apply(cfg *Config, o Overrides) error {
+func apply(env Environ, cfg *Config, o Overrides) error {
 	if o.StateDir != "" {
-		path, err := expandPath(o.StateDir)
+		path, err := expandPath(env, o.StateDir)
 		if err != nil {
 			return err
 		}
@@ -252,7 +252,7 @@ func apply(cfg *Config, o Overrides) error {
 	if len(o.SSHKeys) > 0 {
 		keys := make([]string, 0, len(o.SSHKeys))
 		for _, k := range o.SSHKeys {
-			path, err := expandPath(k)
+			path, err := expandPath(env, k)
 			if err != nil {
 				return err
 			}
@@ -272,39 +272,46 @@ func (c *Config) ImagesDir() string { return filepath.Join(c.StateDir, "images")
 // VMsDir is where per-VM state directories live.
 func (c *Config) VMsDir() string { return filepath.Join(c.StateDir, "vms") }
 
-func userDataDir() string {
-	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+// The XDG directories and the home directory are read through the injected
+// Environ rather than from the process environment, so that a test resolving
+// configuration cannot pick up the config file of whoever is running it.
+func userDataDir(env Environ) string {
+	if dir := env("XDG_DATA_HOME"); dir != "" {
 		return dir
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := homeDir(env)
+	if home == "" {
 		return ".local/share"
 	}
 	return filepath.Join(home, ".local", "share")
 }
 
-func userConfigDir() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+func userConfigDir(env Environ) string {
+	if dir := env("XDG_CONFIG_HOME"); dir != "" {
 		return dir
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := homeDir(env)
+	if home == "" {
 		return ".config"
 	}
 	return filepath.Join(home, ".config")
 }
 
+// homeDir is os.UserHomeDir against the injected environment. This tool is
+// Linux-only, where that function reads exactly this variable.
+func homeDir(env Environ) string { return env("HOME") }
+
 // expandPath resolves a leading "~" and makes the path absolute. It does not
 // resolve symlinks — containment checks against the state directory do that,
 // at the point of use (internal/state).
-func expandPath(path string) (string, error) {
+func expandPath(env Environ, path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", &ValidationError{Field: "path", Value: path, Err: fmt.Errorf("cannot resolve ~: %w", err)}
+		home := homeDir(env)
+		if home == "" {
+			return "", &ValidationError{Field: "path", Value: path, Err: fmt.Errorf("cannot resolve ~: $HOME is not set")}
 		}
 		path = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
 	}
