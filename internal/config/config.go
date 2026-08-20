@@ -47,13 +47,30 @@ const (
 // capacity planning: the host, not this tool, decides what it can actually
 // serve (docs/architecture.md, "Constraints And Risks").
 const (
-	MinVCPUs  = 1
-	MaxVCPUs  = 255
-	MinMemory = 256 * MiB
-	MaxMemory = 1024 * GiB
-	MinDisk   = 1 * GiB
-	MaxDisk   = 8 * TiB
+	MinVCPUs = 1
+	MaxVCPUs = 255
+	// MemoryFloor and MemoryCeiling bound every memory value the operator can
+	// give, both Memory and MaxMemory. They are deliberately not named
+	// Min/MaxMemory: MaxMemory is a per-VM ceiling an operator chooses, and a
+	// constant one character away from it would be too easy to reach for by
+	// mistake.
+	MemoryFloor   = 256 * MiB
+	MemoryCeiling = 1024 * GiB
+	MinDisk       = 1 * GiB
+	MaxDisk       = 8 * TiB
 )
+
+// VirtioMemBlock is the granularity virtio-mem plugs memory in. QEMU derives
+// the device's block size from the host page size — 2 MiB wherever transparent
+// huge pages are 2 MiB, which is every supported host with 4 KiB pages — and
+// refuses a device whose size is not a multiple of it. Growth room is checked
+// against this up front so the refusal is a usage error here rather than a
+// QEMU error halfway through virt-install.
+//
+// A host with 64 KiB pages (some aarch64 kernels) uses a 512 MiB block and
+// will still reject a size this accepts; that failure carries QEMU's own
+// message, which names the block size it wanted.
+const VirtioMemBlock = 2 * MiB
 
 // Config is the resolved, validated configuration for one run.
 type Config struct {
@@ -62,9 +79,13 @@ type Config struct {
 	StateDir   string
 	LibvirtURI string
 
-	Distro     distro.Ref
-	VCPUs      int
-	Memory     Size
+	Distro distro.Ref
+	VCPUs  int
+	Memory Size
+	// MaxMemory is the ceiling the guest's RAM may be grown to at runtime,
+	// through a virtio-mem device sized to the difference from Memory. Zero —
+	// the default — means no such device and a fixed-size guest.
+	MaxMemory  Size
 	Disk       Size
 	Network    NetworkMode
 	Bridge     string
@@ -87,6 +108,7 @@ type Overrides struct {
 	Distro     string
 	VCPUs      string
 	Memory     string
+	MaxMemory  string
 	Disk       string
 	Network    string
 	Bridge     string
@@ -182,6 +204,7 @@ func environOverrides(env Environ) Overrides {
 		Distro:     env("AGENT_VM_DISTRO"),
 		VCPUs:      env("AGENT_VM_VCPUS"),
 		Memory:     env("AGENT_VM_MEMORY"),
+		MaxMemory:  env("AGENT_VM_MAX_MEMORY"),
 		Disk:       env("AGENT_VM_DISK"),
 		Network:    env("AGENT_VM_NETWORK"),
 		Bridge:     env("AGENT_VM_BRIDGE"),
@@ -225,6 +248,13 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 			return &ValidationError{Field: "memory", Value: o.Memory, Err: err}
 		}
 		cfg.Memory = size
+	}
+	if o.MaxMemory != "" {
+		size, err := ParseSize(o.MaxMemory)
+		if err != nil {
+			return &ValidationError{Field: "max_memory", Value: o.MaxMemory, Err: err}
+		}
+		cfg.MaxMemory = size
 	}
 	if o.Disk != "" {
 		size, err := ParseSize(o.Disk)

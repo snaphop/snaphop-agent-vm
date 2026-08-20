@@ -132,6 +132,28 @@ func TestLoad_RejectsUnsupportedDistro(t *testing.T) {
 	}
 }
 
+func TestLoad_MaxMemoryIsUnsetByDefault(t *testing.T) {
+	cfg, err := Load(noEnv, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Zero is what keeps a VM's domain identical to what it was before growable
+	// memory existed, so the default has to stay zero.
+	if cfg.MaxMemory != 0 {
+		t.Errorf("MaxMemory = %s, want it unset", cfg.MaxMemory)
+	}
+}
+
+func TestLoad_AcceptsAMaxMemoryAboveTheBootMemory(t *testing.T) {
+	cfg, err := Load(noEnv, Overrides{Memory: "4G", MaxMemory: "16G"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MaxMemory != 16*GiB {
+		t.Errorf("MaxMemory = %s, want 16G", cfg.MaxMemory)
+	}
+}
+
 func TestLoad_RejectsResourcesOutsideBounds(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -143,6 +165,11 @@ func TestLoad_RejectsResourcesOutsideBounds(t *testing.T) {
 		{"vcpus not a number", Overrides{VCPUs: "many"}, "vcpus"},
 		{"memory below floor", Overrides{Memory: "16M"}, "memory"},
 		{"memory not a size", Overrides{Memory: "lots"}, "memory"},
+		{"max memory below the boot memory", Overrides{Memory: "4G", MaxMemory: "2G"}, "max_memory"},
+		{"max memory equal to the boot memory", Overrides{Memory: "4G", MaxMemory: "4G"}, "max_memory"},
+		{"max memory above the ceiling", Overrides{MaxMemory: "2048G"}, "max_memory"},
+		{"max memory not a size", Overrides{MaxMemory: "plenty"}, "max_memory"},
+		{"growth room is not a whole virtio-mem block", Overrides{Memory: "4G", MaxMemory: "4097M"}, "max_memory"},
 		{"disk below floor", Overrides{Disk: "100M"}, "disk"},
 		{"unknown unit", Overrides{Disk: "50X"}, "disk"},
 	}

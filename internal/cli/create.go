@@ -54,6 +54,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; built automatically if not cached")
 	vcpus := flags.String("vcpus", "", "virtual CPUs")
 	memory := flags.String("memory", "", "guest RAM, for example 512M or 4G")
+	maxMemory := flags.String("max-memory", "", "ceiling the guest's RAM can be grown to at runtime, via virtio-mem; unset means a fixed-size guest")
 	disk := flags.String("disk", "", "virtual root disk size (a thin overlay)")
 	networkMode := flags.String("network", "", "network mode: nat or bridge")
 	bridge := flags.String("bridge", "", "host bridge to attach to; required with --network bridge")
@@ -87,13 +88,14 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	cfg, err := app.ConfigWith(config.Overrides{
-		Distro:  *distroRef,
-		VCPUs:   *vcpus,
-		Memory:  *memory,
-		Disk:    *disk,
-		Network: *networkMode,
-		Bridge:  *bridge,
-		SSHKeys: sshKeys,
+		Distro:    *distroRef,
+		VCPUs:     *vcpus,
+		Memory:    *memory,
+		MaxMemory: *maxMemory,
+		Disk:      *disk,
+		Network:   *networkMode,
+		Bridge:    *bridge,
+		SSHKeys:   sshKeys,
 	})
 	if err != nil {
 		return err
@@ -416,7 +418,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		SourceDigest: req.manifest.SourceDigest,
 		Path:         store.BaseDiskPath(req.manifest.Distro, req.manifest.Tag),
 	}
-	vm.Resources = state.VMResources{VCPUs: cfg.VCPUs, Memory: cfg.Memory, Disk: cfg.Disk}
+	vm.Resources = state.VMResources{VCPUs: cfg.VCPUs, Memory: cfg.Memory, MaxMemory: cfg.MaxMemory, Disk: cfg.Disk}
 	// Only the attachment the mode actually uses is recorded. A bridged VM is
 	// never on the NAT network and a NAT VM is never on the configured bridge,
 	// and recording the unused one — both are configured whether or not they
@@ -466,6 +468,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		LibvirtURI:     cfg.LibvirtURI,
 		VCPUs:          cfg.VCPUs,
 		Memory:         cfg.Memory,
+		MaxMemory:      cfg.MaxMemory,
 		OverlayPath:    vm.Paths.Overlay,
 		KernelPath:     store.KernelPath(req.manifest.Distro, req.manifest.Tag),
 		InitrdPath:     store.InitrdPath(req.manifest.Distro, req.manifest.Tag),
@@ -574,8 +577,7 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	a.out.Printf("Created %s\n", vm.Name)
 	rows := [][]string{
 		{"  distro", vm.Distro},
-		{"  resources", fmt.Sprintf("%d vCPU, %s RAM, %s disk",
-			vm.Resources.VCPUs, vm.Resources.Memory.Human(), vm.Resources.Disk.Human())},
+		{"  resources", describeResources(vm.Resources)},
 		{"  network", string(vm.Network.Mode)},
 	}
 	if address != "" {
@@ -664,6 +666,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		LibvirtURI:  cfg.LibvirtURI,
 		VCPUs:       cfg.VCPUs,
 		Memory:      cfg.Memory,
+		MaxMemory:   cfg.MaxMemory,
 		OverlayPath: vmDir + "/" + state.OverlayFile,
 		KernelPath:  layout.KernelPath(ref.Distro.Name, ref.Tag),
 		InitrdPath:  layout.InitrdPath(ref.Distro.Name, ref.Tag),

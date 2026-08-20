@@ -16,7 +16,7 @@ detect=off,name=generic
 --disk
 path=/home/operator/.local/share/agent-vm/vms/agent-01/root.qcow2,format=qcow2,bus=virtio
 --boot
-kernel=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/vmlinuz,initrd=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/initrd,kernel_args=root=/dev/vda1 console=ttyS0 rw
+kernel=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/vmlinuz,initrd=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/initrd,kernel_args=root=/dev/vda1 console=ttyS0 rw memhp_default_state=online_movable
 --network
 network=agent-vm,model=virtio
 --cloud-init

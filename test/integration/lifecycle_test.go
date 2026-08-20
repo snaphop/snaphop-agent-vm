@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +75,16 @@ const (
 
 	lifecycleVM = testVMPrefix + "lifecycle"
 	rollbackVM  = testVMPrefix + "rollback"
+	growMemVM   = testVMPrefix + "growmem"
+
+	// The growable-memory test boots small and grows by a whole GiB, which is
+	// far enough above the noise in a guest's MemTotal to be unambiguous while
+	// staying within what any host running this suite can spare.
+	bootMemory    = "2G"
+	memoryCeiling = "6G"
+	plugSize      = "2G"
+	giB           = int64(1) << 30
+	minimumGrowth = 3 * (giB / 2) // 1.5 GiB of the 2 GiB plugged in
 
 	// A create builds the base image if the cache misses, which dominates this
 	// budget; the boot itself takes seconds.
@@ -725,7 +737,14 @@ func containsArg(argv []string, fragment string) bool {
 func (h *harness) ssh(t *testing.T, command ...string) string {
 	t.Helper()
 
-	args := append([]string{"ssh", lifecycleVM, "--"}, command...)
+	return h.sshTo(t, lifecycleVM, command...)
+}
+
+// sshTo is ssh against a named VM, for the tests that drive a VM of their own.
+func (h *harness) sshTo(t *testing.T, name string, command ...string) string {
+	t.Helper()
+
+	args := append([]string{"ssh", name, "--"}, command...)
 	return strings.TrimSpace(h.mustRun(t, commandTimeout, args...).stdout)
 }
 
@@ -735,7 +754,14 @@ func (h *harness) ssh(t *testing.T, command ...string) string {
 func (h *harness) sshWhenReachable(t *testing.T, command ...string) string {
 	t.Helper()
 
-	args := append([]string{"ssh", lifecycleVM, "--"}, command...)
+	return h.sshToWhenReachable(t, lifecycleVM, command...)
+}
+
+// sshToWhenReachable is sshWhenReachable against a named VM.
+func (h *harness) sshToWhenReachable(t *testing.T, name string, command ...string) string {
+	t.Helper()
+
+	args := append([]string{"ssh", name, "--"}, command...)
 	deadline := time.Now().Add(2 * time.Minute)
 	var last result
 	for time.Now().Before(deadline) {
@@ -816,4 +842,146 @@ func findVM(statuses []vmStatus, name string) (vmStatus, bool) {
 		}
 	}
 	return vmStatus{}, false
+}
+
+// TestVMGrowableMemory covers the other half of the memory contract: a VM
+// created with --max-memory gets a virtio-mem device, and the memory that
+// device plugs in actually becomes RAM the guest can use.
+//
+//	go test -tags integration ./test/integration/... -run TestVMGrowableMemory -v \
+//	    -lifecycle-state-dir ~/.cache/agent-vm-test
+//
+// The growth itself is `virsh update-memory-device`, not an agent-vm
+// subcommand: this tool defines the device and stops there, so what is being
+// verified is that the domain it defines is one an operator can actually grow.
+func TestVMGrowableMemory(t *testing.T) {
+	h := newHarness(t)
+	h.removeLeftoverVM(t, growMemVM)
+	t.Cleanup(func() { h.removeLeftoverVM(t, growMemVM) })
+
+	args := append([]string{"--output", "json", "create", growMemVM,
+		"--distro", *lifecycleDistro,
+		"--ssh-key", h.publicKey,
+		"--memory", bootMemory,
+		"--max-memory", memoryCeiling,
+		"--vcpus", "2",
+	}, networkArgs(t)...)
+	created := decode[state.VM](t, h.mustRun(t, createTimeout, args...), "create")
+
+	if created.Resources.MaxMemory.String() != memoryCeiling {
+		t.Errorf("vm.json resources.maxMemory = %s, want %s", created.Resources.MaxMemory, memoryCeiling)
+	}
+	if !containsArg(created.CreatedBy.VirtInstallArgv, "model=virtio-mem") {
+		t.Fatalf("virt-install was never asked for a memory device: %v", created.CreatedBy.VirtInstallArgv)
+	}
+
+	// libvirt's own view of the domain, not ours: the device has to have
+	// survived virt-install and been defined on the running domain.
+	domainXML := h.virsh(t, "dumpxml", growMemVM)
+	for _, want := range []string{"model='virtio-mem'", "<maxMemory", "<requested"} {
+		if !strings.Contains(domainXML, want) {
+			t.Fatalf("the defined domain has no %s:\n%s", want, domainXML)
+		}
+	}
+
+	// A guest that does not online hotplugged blocks will show the memory as
+	// offline no matter how well the host side works, and that is decided by
+	// the command line its base image was built with.
+	cmdline := h.sshToWhenReachable(t, growMemVM, "cat", "/proc/cmdline")
+	if !strings.Contains(cmdline, "memhp_default_state=online_movable") {
+		t.Skipf("the cached %s base image predates memhp_default_state=online_movable, so this guest\n"+
+			"cannot online hotplugged memory. Rebuild it and re-run:\n"+
+			"  agent-vm image build --force %s\nguest cmdline: %s",
+			*lifecycleDistro, *lifecycleDistro, cmdline)
+	}
+
+	before := h.guestMemTotal(t, growMemVM)
+	// The guest boots with bootMemory minus what firmware and the kernel keep,
+	// so this is a sanity check on the starting point rather than an exact
+	// figure: it must be in the neighbourhood of 2 GiB and nowhere near the
+	// 6 GiB ceiling, or the device was plugged in at boot instead of starting
+	// empty.
+	if before > 3*giB {
+		t.Fatalf("the guest booted with %d bytes of RAM, more than the %s it asked for; "+
+			"the memory device did not start empty", before, bootMemory)
+	}
+
+	h.virsh(t, "update-memory-device", growMemVM, "--requested-size", plugSize, "--live")
+
+	// Plugging is asynchronous: libvirt records the request, the guest onlines
+	// the blocks as they arrive.
+	deadline := time.Now().Add(2 * time.Minute)
+	var after int64
+	for time.Now().Before(deadline) {
+		after = h.guestMemTotal(t, growMemVM)
+		if after-before >= minimumGrowth {
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Logf("guest MemTotal: %d MiB before, %d MiB after plugging in %s",
+		before/(1<<20), after/(1<<20), plugSize)
+	if growth := after - before; growth < minimumGrowth {
+		t.Errorf("the guest gained %d bytes of RAM after %s was plugged in, want at least %d\n"+
+			"domain XML now:\n%s", growth, plugSize, minimumGrowth, h.virsh(t, "dumpxml", growMemVM))
+	}
+
+	// Shrinking is the same command with a smaller size. Only the request is
+	// asserted: a guest is entitled to refuse to give a block back, so the
+	// figure it reports afterwards is not something the tool can promise.
+	h.virsh(t, "update-memory-device", growMemVM, "--requested-size", "0", "--live")
+	if xml := h.virsh(t, "dumpxml", growMemVM); !zeroRequested.MatchString(xml) {
+		t.Errorf("after a shrink the device still requests memory:\n%s", xml)
+	}
+
+	// --yes is a global flag, so it precedes the subcommand.
+	if res := h.run(t, commandTimeout, "--yes", "destroy", growMemVM); res.code != 0 {
+		t.Errorf("destroy exited %d: %s", res.code, res.stderr)
+	}
+}
+
+// zeroRequested matches a memory device asking for nothing, whatever unit
+// libvirt chose to write the figure in.
+var zeroRequested = regexp.MustCompile(`<requested[^>]*>0</requested>`)
+
+// guestMemTotal reads MemTotal from the guest's own /proc/meminfo, in bytes.
+// The guest's view is the one that matters: memory the host has plugged in but
+// the guest never onlined is not memory an agent inside the VM can use.
+func (h *harness) guestMemTotal(t *testing.T, name string) int64 {
+	t.Helper()
+
+	// The whole file, parsed here: `agent-vm ssh` hands the remote command to
+	// ssh, which reassembles it for the guest's shell, so a `sh -c 'grep …'`
+	// would arrive with its script split across arguments.
+	//
+	//	MemTotal:       2035484 kB
+	meminfo := h.sshToWhenReachable(t, name, "cat", "/proc/meminfo")
+	for _, line := range strings.Split(meminfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "MemTotal:" {
+			continue
+		}
+		kib, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			t.Fatalf("parsing MemTotal from %q: %v", line, err)
+		}
+		return kib * 1024
+	}
+
+	t.Fatalf("the guest's /proc/meminfo has no MemTotal line:\n%s", meminfo)
+	return 0
+}
+
+// virsh runs one virsh command against the test connection and returns its
+// stdout. The suite talks to libvirt directly here because the question is
+// what libvirt was told, independently of what this tool says it did.
+func (h *harness) virsh(t *testing.T, args ...string) string {
+	t.Helper()
+
+	full := append([]string{"--connect", *lifecycleURI}, args...)
+	out, err := exec.Command("virsh", full...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("virsh %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
 }

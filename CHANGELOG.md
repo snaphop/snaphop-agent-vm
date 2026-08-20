@@ -17,6 +17,30 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `create --max-memory <size>` gives a VM memory it can grow into. `--memory`
+  stays what the guest boots with; `--max-memory` is the ceiling it may reach
+  while it runs, and the difference between the two becomes a `virtio-mem`
+  device that starts with nothing plugged in. A VM created with
+  `--memory 4G --max-memory 16G` boots with exactly 4 GiB and can be grown
+  afterwards without a reboot:
+
+  ```console
+  $ virsh update-memory-device agent-01 --requested-size 8G --live
+  ```
+
+  Shrinking is the same command with a smaller size, though a guest may refuse
+  to hand a block back. The ceiling is also settable as `max_memory` under
+  `[defaults]` in the configuration file and as `AGENT_VM_MAX_MEMORY`, it is
+  recorded in `vm.json` as `resources.maxMemory`, and `list` and `info` show it
+  next to the boot memory. Growth room must be a multiple of 2 MiB, and
+  `--max-memory` must exceed `--memory`; both are checked before anything on
+  the host changes.
+
+  **A VM created without `--max-memory` is defined exactly as before** — no
+  `maxMemory`, no guest NUMA topology, no memory device — so nothing changes
+  for anyone not asking for this.
+
+
 - Building a base image now shows its progress. On a terminal it is one line,
   redrawn in place, with a bar, the step number, what the step is doing, and the
   elapsed time — so a build that spends minutes inside `podman build` or
@@ -569,6 +593,14 @@ migration or rebuild step a user has to take.
   could not release instead of discarding the failure. A stuck lock is host
   state an operator has to clear before the next run, so it is no longer
   silent.
+
+- Base images now boot with `memhp_default_state=online_movable` on the kernel
+  command line, so memory added to a running guest becomes usable RAM instead
+  of offline blocks nobody brought online. It has no effect on a VM without a
+  `--max-memory` ceiling, since nothing is ever added to one. Each base image
+  records the command line it was built with, so an image cached before this
+  change keeps the old one — **run `agent-vm image build --force <distro>` to
+  rebuild an image you want to grow VMs from.**
 
 ### Removed
 

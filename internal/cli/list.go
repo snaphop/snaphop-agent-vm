@@ -137,7 +137,33 @@ func (a *App) uriFor(vm *state.VM) string {
 }
 
 func resourceSummary(vm *state.VM) string {
-	return fmt.Sprintf("%dv/%s/%s", vm.Resources.VCPUs, vm.Resources.Memory.Human(), vm.Resources.Disk.Human())
+	memory := vm.Resources.Memory.Human()
+	if max := vm.Resources.MaxMemory; max > vm.Resources.Memory {
+		// A range, because that is what the guest's RAM is once it has a
+		// virtio-mem device: somewhere between the two, depending on how much
+		// has been plugged in.
+		memory += "-" + max.Human()
+	}
+	return fmt.Sprintf("%dv/%s/%s", vm.Resources.VCPUs, memory, vm.Resources.Disk.Human())
+}
+
+// memoryDetail names the ceiling a virtio-mem device can grow the guest to,
+// so that `info` explains a guest whose RAM does not match what it was created
+// with rather than leaving it looking wrong.
+func memoryDetail(r state.VMResources) string {
+	if r.MaxMemory > r.Memory {
+		return fmt.Sprintf("%s, growable to %s", r.Memory.Human(), r.MaxMemory.Human())
+	}
+	return r.Memory.Human()
+}
+
+// describeResources is the long form, for a report with room to spell it out.
+func describeResources(r state.VMResources) string {
+	memory := r.Memory.Human() + " RAM"
+	if r.MaxMemory > r.Memory {
+		memory += fmt.Sprintf(" (growable to %s)", r.MaxMemory.Human())
+	}
+	return fmt.Sprintf("%d vCPU, %s, %s disk", r.VCPUs, memory, r.Disk.Human())
 }
 
 // networkSummary names the mode and, in bridged mode, the bridge — because

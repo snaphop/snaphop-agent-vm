@@ -94,7 +94,7 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 		[]string{"base digest", vm.BaseImage.SourceDigest},
 		[]string{"base disk", vm.BaseImage.Path},
 		[]string{"vcpus", fmt.Sprint(vm.Resources.VCPUs)},
-		[]string{"memory", vm.Resources.Memory.Human()},
+		[]string{"memory", memoryDetail(vm.Resources)},
 		[]string{"network", networkSummary(vm)},
 		[]string{"mac", vm.Network.MAC},
 		[]string{"guest user", vm.Guest.User},

@@ -49,6 +49,36 @@ func ValidateVMName(name string) error {
 
 // validate checks the fully resolved configuration. It runs before any host
 // state changes, so a rejected configuration leaves nothing behind.
+// validateMaxMemory checks the virtio-mem ceiling. Zero means the feature is
+// off, which is the default and always valid.
+func (c *Config) validateMaxMemory() error {
+	if c.MaxMemory == 0 {
+		return nil
+	}
+	if c.MaxMemory < MemoryFloor || c.MaxMemory > MemoryCeiling {
+		return &ValidationError{
+			Field: "max_memory", Value: c.MaxMemory.String(),
+			Err: fmt.Errorf("must be between %s and %s", MemoryFloor, MemoryCeiling),
+		}
+	}
+	if c.MaxMemory <= c.Memory {
+		return &ValidationError{
+			Field: "max_memory", Value: c.MaxMemory.String(),
+			Err:    fmt.Errorf("must be greater than memory (%s)", c.Memory),
+			Remedy: "max_memory is the ceiling the guest can grow to; leave it unset for a fixed-size guest.",
+		}
+	}
+	if growth := c.MaxMemory - c.Memory; growth%VirtioMemBlock != 0 {
+		return &ValidationError{
+			Field: "max_memory", Value: c.MaxMemory.String(),
+			Err: fmt.Errorf("leaves %s of growth room, which is not a multiple of the %s virtio-mem block size",
+				growth, VirtioMemBlock),
+			Remedy: fmt.Sprintf("Pick a max_memory that exceeds memory (%s) by a multiple of %s.", c.Memory, VirtioMemBlock),
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	if c.StateDir == "" {
 		return &ValidationError{Field: "state_dir", Value: "", Err: fmt.Errorf("must not be empty")}
@@ -62,11 +92,14 @@ func (c *Config) validate() error {
 			Err: fmt.Errorf("must be between %d and %d", MinVCPUs, MaxVCPUs),
 		}
 	}
-	if c.Memory < MinMemory || c.Memory > MaxMemory {
+	if c.Memory < MemoryFloor || c.Memory > MemoryCeiling {
 		return &ValidationError{
 			Field: "memory", Value: c.Memory.String(),
-			Err: fmt.Errorf("must be between %s and %s", MinMemory, MaxMemory),
+			Err: fmt.Errorf("must be between %s and %s", MemoryFloor, MemoryCeiling),
 		}
+	}
+	if err := c.validateMaxMemory(); err != nil {
+		return err
 	}
 	if c.Disk < MinDisk || c.Disk > MaxDisk {
 		return &ValidationError{

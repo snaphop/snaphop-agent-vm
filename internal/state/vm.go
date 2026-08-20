@@ -51,7 +51,13 @@ type BaseImageRef struct {
 type VMResources struct {
 	VCPUs  int         `json:"vcpus"`
 	Memory config.Size `json:"memory"`
-	Disk   config.Size `json:"disk"`
+	// MaxMemory is the ceiling the guest's virtio-mem device can grow it to,
+	// and is absent for the fixed-size guests that have no such device. It is
+	// omitted rather than written as zero so that a reader can tell "no
+	// hotplug" from "hotplug up to nothing", and so that vm.json files written
+	// before this field existed stay valid without a schema bump.
+	MaxMemory config.Size `json:"maxMemory,omitempty"`
+	Disk      config.Size `json:"disk"`
 }
 
 // VMNetwork records how the guest is attached. The mode is recorded so that

@@ -54,7 +54,17 @@ const ModulesDir = "/usr/lib/modules"
 //   - console=ttyS0 is what makes the serial console — and therefore
 //     console.log, the primary artifact for diagnosing a VM that never became
 //     reachable — actually contain the boot.
-const KernelCmdline = "root=/dev/vda1 console=ttyS0 rw"
+//   - memhp_default_state=online_movable brings hotplugged memory blocks
+//     online as they arrive, which is what makes a virtio-mem device (see
+//     --max-memory) show up as usable RAM instead of offline blocks nobody
+//     onlined. It costs a guest without such a device nothing, since no memory
+//     is ever hotplugged into one.
+//
+// Changing this string changes what newly built base images record. Images
+// already in the cache keep the command line they were built with — a VM boots
+// the cmdline from its own image's manifest — so growing memory on a VM
+// created from an older image needs that image rebuilt.
+const KernelCmdline = "root=/dev/vda1 console=ttyS0 rw memhp_default_state=online_movable"
 
 // SourceRef is the OCI reference for a tag of this family. It is a starting
 // point only: a build resolves it to a digest and pins that (SECURITY.md,
