@@ -599,7 +599,7 @@ migration or rebuild step a user has to take.
   of offline blocks nobody brought online. It has no effect on a VM without a
   `--max-memory` ceiling, since nothing is ever added to one. Each base image
   records the command line it was built with, so an image cached before this
-  change keeps the old one — **run `agent-vm image build --force <distro>` to
+  change keeps the old one — **run `agent-vm image build <distro> --force` to
   rebuild an image you want to grow VMs from.**
 
 ### Removed
@@ -608,6 +608,14 @@ migration or rebuild step a user has to take.
   now that the repository is a real project; it became `docs/host-setup.md`.
 
 ### Fixed
+
+- `agent-vm image build <distro> --force` and `agent-vm image rm <distro>
+  --force` work again. Both commands stopped reading their own flags at the
+  distro name, so a `--force` written after it — the spelling this changelog and
+  `docs/cli.md` have always used — exited 2 with "flag provided but not
+  defined" instead of running. Flags on either side of the distro are now
+  accepted, matching every other subcommand; a second distro argument is still
+  refused.
 
 - `agent-vm doctor` no longer skips the **host firewall forwarding** check on a
   host that has a default bridge configured but creates NAT VMs. The check

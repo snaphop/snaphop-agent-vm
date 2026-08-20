@@ -98,10 +98,16 @@ func commands() map[string]*command {
 	return byName
 }
 
-// parseNamed parses a command that takes exactly one VM name plus flags. Go's
-// flag package stops at the first non-flag argument, so flags written after the
+// parseNamed parses a command that takes exactly one name plus flags — a VM
+// name for most commands, a distro reference for the image ones. Go's flag
+// package stops at the first non-flag argument, so flags written after the
 // name — the way docs/cli.md spells these commands — need a second pass over
 // what is left.
+//
+// Every subcommand with both a name and flags of its own must go through here.
+// Parsing directly leaves `agent-vm <verb> <name> --flag` failing with "flag
+// provided but not defined", which is the documented spelling and the one
+// operators reach for.
 func parseNamed(flags *flag.FlagSet, args []string, usage string) (string, error) {
 	if err := flags.Parse(args); err != nil {
 		return "", &ExitError{Code: ExitUsage, Err: err}
