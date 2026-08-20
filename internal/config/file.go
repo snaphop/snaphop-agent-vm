@@ -18,11 +18,12 @@ type fileConfig struct {
 	LibvirtURI string `toml:"libvirt_uri"`
 
 	Defaults struct {
-		Distro  string `toml:"distro"`
-		VCPUs   int    `toml:"vcpus"`
-		Memory  string `toml:"memory"`
-		Disk    string `toml:"disk"`
-		Network string `toml:"network"`
+		Distro    string `toml:"distro"`
+		VCPUs     int    `toml:"vcpus"`
+		Memory    string `toml:"memory"`
+		MaxMemory string `toml:"max_memory"`
+		Disk      string `toml:"disk"`
+		Network   string `toml:"network"`
 	} `toml:"defaults"`
 
 	Network struct {
@@ -69,6 +70,7 @@ func loadFile(path string) (Overrides, bool, error) {
 		LibvirtURI: file.LibvirtURI,
 		Distro:     file.Defaults.Distro,
 		Memory:     file.Defaults.Memory,
+		MaxMemory:  file.Defaults.MaxMemory,
 		Disk:       file.Defaults.Disk,
 		Network:    file.Defaults.Network,
 		Bridge:     file.Network.Bridge.Interface,

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // createdVM runs a real create against a fake host, so the tests below read
@@ -176,5 +178,28 @@ func TestList_JSONOutputCarriesTheStoredRecordPlusLiveState(t *testing.T) {
 func TestList_RejectsAnArgument(t *testing.T) {
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "list", "agent-01"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+}
+
+func TestResourceRendering_NamesTheCeilingOnlyWhenThereIsOne(t *testing.T) {
+	fixed := state.VMResources{VCPUs: 2, Memory: 4 * config.GiB, Disk: 50 * config.GiB}
+	growable := fixed
+	growable.MaxMemory = 16 * config.GiB
+
+	for _, tc := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"list, fixed", resourceSummary(&state.VM{Resources: fixed}), "2v/4.0G/50.0G"},
+		{"list, growable", resourceSummary(&state.VM{Resources: growable}), "2v/4.0G-16.0G/50.0G"},
+		{"info, fixed", memoryDetail(fixed), "4.0G"},
+		{"info, growable", memoryDetail(growable), "4.0G, growable to 16.0G"},
+		{"create, fixed", describeResources(fixed), "2 vCPU, 4.0G RAM, 50.0G disk"},
+		{"create, growable", describeResources(growable), "2 vCPU, 4.0G RAM (growable to 16.0G), 50.0G disk"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
 	}
 }

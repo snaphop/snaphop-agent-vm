@@ -51,6 +51,7 @@ libvirt_uri = "qemu:///system"
 distro  = "ubuntu"
 vcpus   = 2
 memory  = "4G"
+# max_memory = "16G"   # optional: ceiling the guest can be grown to at runtime
 disk    = "50G"
 network = "nat"
 
@@ -75,6 +76,7 @@ ssh_keys = ["~/.ssh/id_ed25519.pub"]
 | `AGENT_VM_DISTRO` | `create --distro` |
 | `AGENT_VM_VCPUS` | `create --vcpus` |
 | `AGENT_VM_MEMORY` | `create --memory` |
+| `AGENT_VM_MAX_MEMORY` | `create --max-memory` |
 | `AGENT_VM_DISK` | `create --disk` |
 | `AGENT_VM_NETWORK` | `create --network` |
 | `AGENT_VM_BRIDGE` | `create --bridge` |
@@ -574,7 +576,8 @@ and must not already exist.
 |---|---|---|
 | `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. |
 | `--vcpus <n>` | `2` | Virtual CPUs. |
-| `--memory <size>` | `4G` | Guest RAM (`512M`, `4G`, `8G`). |
+| `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`). |
+| `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
 | `--disk <size>` | `50G` | Virtual root disk size (thin overlay). |
 | `--network <nat\|bridge>` | `nat` | Network mode. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
@@ -594,6 +597,45 @@ removes the domain, the overlay, the generated user-data, and the state director
 it created, and reports both the original failure and any cleanup problem.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
 files after verifying they are inside the state directory.
+
+#### Growable Memory
+
+`--memory` is what the guest boots with; `--max-memory` is how large it may
+become without a reboot. Giving both attaches a
+[`virtio-mem`](https://www.qemu.org/docs/master/system/devices/virtio-mem.html)
+device sized to the difference, which starts with nothing plugged in — a VM
+created with `--memory 4G --max-memory 16G` boots with exactly 4 GiB and can be
+grown to 16 GiB later.
+
+```console
+$ agent-vm create agent-01 --memory 4G --max-memory 16G
+$ virsh --connect qemu:///system update-memory-device agent-01 --requested-size 8G --live
+```
+
+The guest then has 12 GiB: its 4 GiB of boot memory plus the 8 GiB requested
+from the device. Shrinking works the same way — lower `--requested-size` — but
+the guest is free to refuse to give a block back, so the size after a shrink is
+a request, not a guarantee. `agent-vm` does not resize a running VM itself;
+`virsh update-memory-device` is the supported way to do it.
+
+Constraints, all of which are checked before anything on the host changes:
+
+- `--max-memory` must be greater than `--memory`, and both are bounded by the
+  same limits (`256M` to `1024G`).
+- The growth room — the difference between the two — must be a multiple of
+  2 MiB, the block size the device is defined with. libvirt requires a block
+  size to be stated, so this is a fixed 2 MiB rather than something QEMU picks
+  per host; a host with 64 KiB pages (some aarch64 kernels) needs a 512 MiB
+  block and will reject the device with QEMU's own message naming the size it
+  wanted.
+- The guest kernel must bring hotplugged blocks online. Base images built by
+  this tool boot with `memhp_default_state=online_movable`, which does that;
+  a VM created from a base image cached before that command line existed will
+  see the memory as offline blocks until the image is rebuilt with
+  `agent-vm image build --force <distro>`.
+
+A VM created without `--max-memory` gets exactly the domain it always did: no
+`maxMemory`, no guest NUMA topology, and no memory device.
 
 The one deliberate exception is the guest-boot wait: a `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
@@ -840,6 +882,7 @@ any command; the table below is the summary.
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
+| `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
 | `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
@@ -956,7 +999,7 @@ answer that goes stale.
 | `name`, `createdAt`, `libvirtUri` | Identity, creation time (UTC), and the connection the domain was defined on. |
 | `distro` | The `<distro>:<tag>` reference as it was requested. |
 | `baseImage` | The image the overlay is backed by, **by digest as well as by name** — a tag can be rebuilt, a digest cannot. `path` is the backing file. |
-| `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. |
+| `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. `maxMemory` is present only for a VM created with `--max-memory`, and is the ceiling its `virtio-mem` device can grow it to. |
 | `network` | `mode` is `nat` or `bridge`; `name` is the libvirt network in NAT mode, `bridge` the host interface in bridge mode, and `mac` is what libvirt allocated. Recorded so exposure stays auditable after the fact. |
 | `guest.user` | The account to SSH in as. |
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized. Key material is never recorded. |

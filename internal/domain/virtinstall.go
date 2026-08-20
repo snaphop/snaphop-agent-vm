@@ -32,6 +32,13 @@ type CreateOptions struct {
 	VCPUs  int
 	Memory config.Size
 
+	// MaxMemory, when greater than Memory, gives the guest a virtio-mem device
+	// covering the difference so its RAM can be grown at runtime without a
+	// reboot. Zero leaves the domain exactly as it was before this existed: a
+	// fixed-size guest with no maxMemory, no guest NUMA node, and no memory
+	// device.
+	MaxMemory config.Size
+
 	// OverlayPath is the VM's copy-on-write root disk. The base image it backs
 	// onto is recorded in the overlay itself, not passed here.
 	OverlayPath string
@@ -67,6 +74,15 @@ type CreateOptions struct {
 // device that matters is specified explicitly below anyway.
 const osinfo = "detect=off,name=generic"
 
+// cpuModel is what every guest gets. The guest is short-lived and never
+// migrated, so it may as well see the host CPU and its virtualization-friendly
+// features.
+const cpuModel = "host-passthrough"
+
+// memorySlots is the <maxMemory slots=> count declared when memory hotplug is
+// enabled.
+const memorySlots = 16
+
 // VirtInstallArgs builds the argument vector that defines and starts one VM.
 //
 // virt-install always boots a guest that has cloud-init data, because the seed
@@ -86,11 +102,9 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 	args := []string{
 		"--connect", opts.LibvirtURI,
 		"--name", opts.Name,
-		"--memory", strconv.FormatInt(opts.Memory.MiBValue(), 10),
+		"--memory", opts.memoryArg(),
 		"--vcpus", strconv.Itoa(opts.VCPUs),
-		// The guest is short-lived and never migrated, so it may as well see
-		// the host CPU and its virtualization-friendly features.
-		"--cpu", "host-passthrough",
+		"--cpu", opts.cpuArg(),
 		"--virt-type", "kvm",
 		"--osinfo", osinfo,
 		// --import: there is no installation. The root disk already contains a
@@ -118,7 +132,86 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 		// waits on a console nobody is attached to.
 		"--noautoconsole",
 	}
+	if opts.hotplugsMemory() {
+		args = append(args, "--memdev", opts.memdevArg())
+	}
 	return append(args, opts.ExtraArgs...), nil
+}
+
+// hotplugsMemory reports whether this VM gets a virtio-mem device. The device
+// exists only to cover growth room, so an unset or equal MaxMemory means no
+// device rather than a zero-sized one, which QEMU would reject.
+func (o CreateOptions) hotplugsMemory() bool {
+	return o.MaxMemory > o.Memory
+}
+
+// memoryArg renders --memory. Without hotplug it is the bare figure it has
+// always been; with it, maxMemory declares the ceiling libvirt will let the
+// domain reach.
+func (o CreateOptions) memoryArg() string {
+	mib := strconv.FormatInt(o.Memory.MiBValue(), 10)
+	if !o.hotplugsMemory() {
+		return mib
+	}
+	// libvirt wants a slot count alongside maxMemory. One virtio-mem device
+	// needs one, and the spare slots cost nothing while leaving room for an
+	// operator to attach another by hand with `virsh attach-device`.
+	return strings.Join([]string{
+		mib,
+		"maxMemory=" + strconv.FormatInt(o.MaxMemory.MiBValue(), 10),
+		"maxMemory.slots=" + strconv.Itoa(memorySlots),
+	}, ",")
+}
+
+// cpuArg renders --cpu. A memory device has to be attached to a guest NUMA
+// node, and a guest has no NUMA topology unless one is asked for, so enabling
+// hotplug means declaring a single cell that owns every vCPU and all of the
+// boot memory. libvirt rejects a topology whose cells do not add up to the
+// vCPU count, so the cpus range is derived from VCPUs rather than fixed.
+func (o CreateOptions) cpuArg() string {
+	if !o.hotplugsMemory() {
+		return cpuModel
+	}
+	cpus := "0"
+	if o.VCPUs > 1 {
+		cpus = "0-" + strconv.Itoa(o.VCPUs-1)
+	}
+	return strings.Join([]string{
+		cpuModel,
+		"numa.cell0.id=0",
+		"numa.cell0.cpus=" + cpus,
+		"numa.cell0.memory=" + strconv.FormatInt(o.Memory.MiBValue(), 10),
+		"numa.cell0.unit=MiB",
+	}, ",")
+}
+
+// memdevArg renders the virtio-mem device. Its size is the growth room, not
+// the ceiling: the boot memory is already accounted for by the NUMA cell, and
+// libvirt adds the device's size on top of it.
+//
+// target.block is stated rather than left to QEMU's default because libvirt
+// refuses to define a virtio-mem device without one ("block size must be a
+// power of two"). It is the granularity memory is plugged in at, and it is why
+// the growth room has to be a multiple of config.VirtioMemBlock.
+//
+// The two target sizes are in different units, which is virt-install's
+// convention and not a mistake here: target.size is scaled like every other
+// memory figure it takes (MiB), while target.block is written through to the
+// XML as-is, where libvirt reads a bare figure as KiB.
+//
+// target.requested=0 means the device starts with nothing plugged in, so the
+// guest boots with exactly the memory it was asked for. Growing it afterwards
+// is `virsh update-memory-device`, an operator action this tool does not take
+// on its own.
+func (o CreateOptions) memdevArg() string {
+	growth := o.MaxMemory - o.Memory
+	return strings.Join([]string{
+		"model=virtio-mem",
+		"target.node=0",
+		"target.block=" + strconv.FormatInt(int64(config.VirtioMemBlock/config.KiB), 10),
+		"target.size=" + strconv.FormatInt(growth.MiBValue(), 10),
+		"target.requested=0",
+	}, ",")
 }
 
 // networkArg renders the --network value. The two modes differ in exposure,
@@ -147,6 +240,15 @@ func (o CreateOptions) validate() error {
 	}
 	if o.Memory.MiBValue() < 1 {
 		return fmt.Errorf("virt-install takes memory in MiB, and %s rounds to zero", o.Memory)
+	}
+	if o.MaxMemory != 0 && o.MaxMemory < o.Memory {
+		return fmt.Errorf("the memory ceiling %s is below the guest's memory %s", o.MaxMemory, o.Memory)
+	}
+	if o.hotplugsMemory() {
+		if growth := o.MaxMemory - o.Memory; growth%config.VirtioMemBlock != 0 {
+			return fmt.Errorf("virtio-mem plugs memory in %s blocks, and the growth room %s is not a multiple of one",
+				config.VirtioMemBlock, growth)
+		}
 	}
 
 	// Every one of these becomes a suboption in a comma-separated argument.

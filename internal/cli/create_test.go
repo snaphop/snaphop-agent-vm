@@ -607,6 +607,66 @@ func TestCreate_PassesVirtInstallArgumentsThrough(t *testing.T) {
 	}
 }
 
+func TestCreate_MaxMemoryReachesVirtInstallAndTheVMRecord(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir,
+		append(createArgs(keyPath), "--memory", "4G", "--max-memory", "16G")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	argv := strings.Join(fake.Argvs(), "\n")
+	for _, want := range []string{
+		"--memory 4096,maxMemory=16384,maxMemory.slots=16",
+		"--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=12288,target.requested=0",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("virt-install was not asked for %q:\n%s", want, fake)
+		}
+	}
+
+	// The ceiling has to be recorded, because it is the only thing that says
+	// how far `virsh update-memory-device` may grow this VM.
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Resources.MaxMemory != 16*config.GiB {
+		t.Errorf("recorded maxMemory = %s, want 16G", vm.Resources.MaxMemory)
+	}
+}
+
+func TestCreate_RejectsAMaxMemoryBelowTheBootMemory(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, _, _ := cliRun(t, fake, stateDir,
+		append(createArgs(keyPath), "--memory", "4G", "--max-memory", "2G")...)
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d for a ceiling under the boot memory", code, ExitUsage)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install ") {
+			t.Errorf("nothing should have been defined: %v", argv)
+		}
+	}
+}
+
+func TestCreate_WithoutMaxMemoryRecordsNoCeiling(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if vm := loadVM(t, stateDir, "agent-01"); vm.Resources.MaxMemory != 0 {
+		t.Errorf("recorded maxMemory = %s, want none", vm.Resources.MaxMemory)
+	}
+	if strings.Contains(strings.Join(fake.Argvs(), "\n"), "--memdev") {
+		t.Errorf("a VM without a ceiling must get no memory device:\n%s", fake)
+	}
+}
+
 func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)

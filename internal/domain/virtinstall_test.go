@@ -50,6 +50,119 @@ func TestVirtInstallArgs_Bridge(t *testing.T) {
 	golden.Assert(t, "virt-install-bridge.argv", []byte(strings.Join(args, "\n")+"\n"))
 }
 
+// virtioMemOptions is a NAT VM that may grow from 4 GiB to 16 GiB.
+func virtioMemOptions() CreateOptions {
+	opts := natOptions()
+	opts.MaxMemory = 16 * config.GiB
+	return opts
+}
+
+func TestVirtInstallArgs_VirtioMem(t *testing.T) {
+	args, err := VirtInstallArgs(virtioMemOptions())
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	golden.Assert(t, "virt-install-virtio-mem.argv", []byte(strings.Join(args, "\n")+"\n"))
+}
+
+func TestVirtInstallArgs_SizesTheMemoryDeviceToTheGrowthRoom(t *testing.T) {
+	args, err := VirtInstallArgs(virtioMemOptions())
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+
+	// 12 GiB, not 16: the 4 GiB the guest boots with is the NUMA cell's, and
+	// libvirt adds the device on top of it. Asking for 16 here would give the
+	// guest a 20 GiB ceiling.
+	if value := flagValue(args, "--memdev"); value != "model=virtio-mem,target.node=0,target.block=2048,target.size=12288,target.requested=0" {
+		t.Errorf("--memdev = %q, want a 12288 MiB device that starts unplugged", value)
+	}
+	if value := flagValue(args, "--memory"); value != "4096,maxMemory=16384,maxMemory.slots=16" {
+		t.Errorf("--memory = %q, want the ceiling declared alongside the boot memory", value)
+	}
+}
+
+func TestVirtInstallArgs_GivesTheMemoryDeviceANUMANodeCoveringEveryVCPU(t *testing.T) {
+	// libvirt refuses a domain whose NUMA cells do not account for every vCPU,
+	// and a memory device has to name a node that exists.
+	for _, tc := range []struct {
+		vcpus    int
+		wantCPUs string
+	}{
+		{vcpus: 1, wantCPUs: "numa.cell0.cpus=0"},
+		{vcpus: 2, wantCPUs: "numa.cell0.cpus=0-1"},
+		{vcpus: 16, wantCPUs: "numa.cell0.cpus=0-15"},
+	} {
+		opts := virtioMemOptions()
+		opts.VCPUs = tc.vcpus
+		args, err := VirtInstallArgs(opts)
+		if err != nil {
+			t.Fatalf("VirtInstallArgs with %d vCPUs: %v", tc.vcpus, err)
+		}
+		cpu := flagValue(args, "--cpu")
+		if !strings.Contains(cpu, tc.wantCPUs) {
+			t.Errorf("--cpu = %q with %d vCPUs, want it to contain %q", cpu, tc.vcpus, tc.wantCPUs)
+		}
+		if !strings.Contains(cpu, "numa.cell0.memory=4096,numa.cell0.unit=MiB") {
+			t.Errorf("--cpu = %q, want the cell to own the boot memory", cpu)
+		}
+	}
+}
+
+func TestVirtInstallArgs_WithoutMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
+	args, err := VirtInstallArgs(natOptions())
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	// The default topology is a public contract, so leaving --max-memory unset
+	// must produce the domain it always did: no device, no NUMA topology, and
+	// a bare --memory figure.
+	if contains(args, "--memdev") {
+		t.Errorf("a VM without --max-memory must get no memory device: %v", args)
+	}
+	if value := flagValue(args, "--memory"); value != "4096" {
+		t.Errorf("--memory = %q, want the bare figure", value)
+	}
+	if value := flagValue(args, "--cpu"); value != "host-passthrough" {
+		t.Errorf("--cpu = %q, want no NUMA topology", value)
+	}
+}
+
+func TestVirtInstallArgs_RejectsAMemoryCeilingBelowTheGuestsMemory(t *testing.T) {
+	opts := natOptions()
+	opts.MaxMemory = 2 * config.GiB
+
+	if _, err := VirtInstallArgs(opts); err == nil {
+		t.Fatal("want a refusal: a ceiling under the boot memory is not a ceiling")
+	}
+}
+
+func TestVirtInstallArgs_RejectsGrowthRoomThatIsNotAWholeVirtioMemBlock(t *testing.T) {
+	opts := natOptions()
+	// 3 MiB of growth room: QEMU would reject the device for not being a
+	// multiple of its 2 MiB block size.
+	opts.MaxMemory = opts.Memory + 3*config.MiB
+
+	if _, err := VirtInstallArgs(opts); err == nil {
+		t.Fatal("want a refusal: virtio-mem plugs memory in whole blocks")
+	}
+}
+
+func TestVirtInstallArgs_EqualMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
+	opts := natOptions()
+	opts.MaxMemory = opts.Memory
+
+	args, err := VirtInstallArgs(opts)
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	// A device with no growth room would be a zero-sized one, which QEMU
+	// refuses, so the ceiling is treated as "no hotplug" instead.
+	if contains(args, "--memdev") {
+		t.Errorf("a ceiling equal to the boot memory leaves no room to grow: %v", args)
+	}
+}
+
 func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
 	nat, err := VirtInstallArgs(natOptions())
 	if err != nil {
