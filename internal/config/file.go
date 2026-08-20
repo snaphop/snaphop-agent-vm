@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
@@ -82,38 +81,3 @@ func loadFile(path string) (Overrides, bool, error) {
 	}
 	return o, true, nil
 }
-
-// WriteExample writes a commented starter configuration file. It never
-// overwrites an existing file.
-func WriteExample(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("%s already exists", path)
-	}
-	return os.WriteFile(path, []byte(exampleConfig), 0o644)
-}
-
-const exampleConfig = `# agent-vm configuration. Every value is optional; the
-# defaults in docs/cli.md apply when a key is absent.
-
-# state_dir   = "~/.local/share/agent-vm"
-# libvirt_uri = "qemu:///system"
-
-[defaults]
-# distro  = "ubuntu"
-# vcpus   = 2
-# memory  = "4G"
-# disk    = "50G"
-# network = "nat"
-
-[network.nat]
-# name = "agent-vm-nat"
-
-[network.bridge]
-# Bridged networking puts the guest on your LAN. It is never the default and
-# always needs an explicit --network bridge.
-# interface = "br0"
-
-[guest]
-# user     = "agent"
-# ssh_keys = ["~/.ssh/id_ed25519.pub"]   # public keys only
-`

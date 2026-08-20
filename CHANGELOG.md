@@ -15,95 +15,6 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
-### Changed
-
-- The Fedora and Arch base images now install `growpart`
-  (`cloud-utils-growpart` / `cloud-guest-utils`), so cloud-init grows the root
-  partition to the VM's disk size at first boot the way it already did on
-  Ubuntu. Without it a guest was limited to the base filesystem plus 1 GiB of
-  slack; with the larger `/etc/skel` this release ships, first boot filled that
-  filesystem and the VM came up without SSH.
-
-- The Fedora base image now installs `libatomic`, which the official Node
-  binaries `mise` downloads are linked against and Fedora's base image does not
-  carry. Without it the image build fails at the Node install.
-
-- Base images now install the **Go toolchain and `golangci-lint` with mise**
-  (`mise use -g go@latest golangci-lint@latest`), replacing the go.dev tarball
-  unpacked into `/usr/local/go` and the `golangci-lint` installer script. `go`,
-  `gofmt`, and `golangci-lint` each keep a `/usr/local/bin` symlink, so a
-  non-interactive `ssh <vm> go build` works exactly as before, and they are now
-  per account — installed into `/etc/skel` like the JDK, so an account can run
-  `mise use -g go@1.25` without `sudo`. **Rust is unchanged**: it stays on
-  `rustup`, installed once into the shared `/usr/local/rustup` with
-  `RUSTUP_HOME` in `/etc/environment` and `rustup update` needing `sudo`. mise
-  is not used for it, because mise's `rust` is `rustup` underneath and re-reads
-  `RUSTUP_HOME`/`CARGO_HOME` from the environment of whoever runs `cargo`: on a
-  shared installation it re-runs `rustup-init` as each account and fails, and
-  per account it costs roughly 1.5 GiB of toolchain per account. Existing base
-  images are unaffected — rebuild an image (`agent-vm image build --force`) to
-  pick this up.
-
-- Base images now install **Node.js with mise** (`mise use -g node@latest`)
-  instead of from the distro's package manager, and on Ubuntu the NodeSource
-  APT repository and GPG key are gone — no build adds a third-party repository
-  any more. `node`, `npm`, and `npx` are versioned the way the JDK and the
-  agents are: installed into `/etc/skel` during the build so every account
-  inherits them, with a `/usr/local/bin` symlink each so a non-interactive
-  `ssh <vm> node script.js` still finds them. An account can move to another
-  release with `mise use -g node@<version>` without `sudo`, where a packaged
-  `/usr/bin/node` needed root. The build still fails outright if the Node.js it
-  ends up with is older than 22.19. Existing base images are unaffected —
-  rebuild an image (`agent-vm image build --force`) to pick this up.
-
-- Base images now install the `claude`, `opencode`, and `pi` CLIs with **mise**
-  (`mise use -g claude opencode pi`) instead of a global `npm install -g`. The
-  registry names resolve to each vendor's own native release, so the three no
-  longer run on Node — and `npm` is no longer held to the 11 line, because
-  nothing left in the image depends on an npm postinstall script. The commands
-  work exactly as before, including over a non-interactive
-  `ssh <vm> claude -p '…'`: each has a symlink in `/usr/local/bin` pointing at
-  the `mise` binary, which resolves the version from the calling account's own
-  configuration. What changes inside a guest: the agents are per account,
-  installed into `/etc/skel` during the build the same way the JDK is, so an
-  account can move one to another release with `mise use -g claude@<version>`
-  without `sudo` — where a global npm prefix previously needed root. Node.js is
-  still installed (`wrangler`, Playwright, and any JavaScript work in the guest
-  need it), and `codex` and `agy` are unchanged, still from their vendors'
-  installers. Existing base images are unaffected — rebuild an image
-  (`agent-vm image build --force`) to pick this up.
-
-- `wrangler` and `playwright` are now installed with **mise** as well
-  (`mise use -g npm:wrangler npm:playwright`) rather than `npm install -g`.
-  They are the only npm packages left in the image — npm is the only place
-  either is published — and, like the agents, each has a `/usr/local/bin`
-  symlink to the `mise` binary so `ssh <vm> wrangler deploy` keeps working
-  without a login shell. Playwright's browsers still live in
-  `/opt/ms-playwright`, shared by every account rather than copied per user.
-
-- Base images now install the JDK and Maven with **mise** instead of SDKMAN.
-  `java` and `mvn` work exactly as before — the newest Temurin JDK and Maven,
-  installed during the build so a network-isolated guest needs no download, put
-  on the path of a login shell by `/etc/profile.d/agent-vm-mise.sh`. What
-  changes inside a guest: the `sdk` command is gone and `mise` replaces it, so
-  switching versions is `mise use java@21` rather than `sdk install java 21`;
-  the toolchain lives in `~/.local/share/mise` instead of `~/.sdkman`; and
-  because mise's shims are ordinary executables rather than a shell function, a
-  script that needs `mvn` non-interactively can put `~/.local/share/mise/shims`
-  on `PATH` instead of sourcing anything. Existing base images are unaffected —
-  rebuild an image (`agent-vm image build --force`) to pick this up.
-
-### Fixed
-
-- `agent-vm doctor` no longer skips the **host firewall forwarding** check on a
-  host that has a default bridge configured but creates NAT VMs. The check
-  keyed on `[network.bridge] interface` being set at all rather than on the
-  network mode, so following the advice in `docs/host-setup.md` to configure a
-  default bridge silently turned off the one check that catches a `ufw` host
-  dropping guest traffic — the failure where a VM boots, answers SSH, resolves
-  DNS, and hangs on every outbound connection. It now skips only in bridged
-  mode, where guest traffic genuinely never reaches the host's forward hook.
-
 ### Added
 
 - Building a base image now shows its progress. On a terminal it is one line,
@@ -118,11 +29,15 @@ migration or rebuild step a user has to take.
   image that needs no build reports nothing. `create` reports a base image it
   has to build the same way.
 
-- Base images now carry `wrangler`, Cloudflare's CLI, installed from npm on
-  the Node runtime the coding agents already need. It ships with no
-  credentials — `wrangler login` is an OAuth flow and an API credential is
-  per-VM — and `WRANGLER_SEND_METRICS=false` is set in `/etc/environment`, so a
-  guest reports no anonymous usage metrics unless its operator unsets it.
+- Base images now carry `wrangler`, Cloudflare's CLI, installed with `mise`
+  from npm (`mise use -g npm:wrangler`) on the Node runtime the image installs
+  for it and Playwright — npm is the only place Cloudflare publishes it, and it
+  and Playwright are the only npm packages in the image. Like the agents, it has
+  a `/usr/local/bin` symlink to the `mise` binary, so `ssh <vm> wrangler deploy`
+  works without a login shell. It ships with no credentials — `wrangler login`
+  is an OAuth flow and an API credential is per-VM — and
+  `WRANGLER_SEND_METRICS=false` is set in `/etc/environment`, so a guest reports
+  no anonymous usage metrics unless its operator unsets it.
   **Run `agent-vm image build <distro> --force` to pick this up.**
 
 - Base images now carry a Rust toolchain: `rustup` with the stable toolchain,
@@ -132,7 +47,13 @@ migration or rebuild step a user has to take.
   at all — so `rustup update` needs `sudo`, while `cargo install` still writes
   into the account's own `~/.cargo`. The entry points are in `/usr/local/bin`,
   so they work in a non-interactive `ssh <vm> cargo build` and not only in a
-  login shell. **Run `agent-vm image build <distro> --force` to pick this
+  login shell. `RUSTUP_HOME` is set in `/etc/environment` so the proxies find
+  the shared toolchain from a non-interactive command too. Rust is deliberately
+  not managed by `mise` the way Go and the JDK are: mise's `rust` is `rustup`
+  underneath and re-reads `RUSTUP_HOME`/`CARGO_HOME` from the environment of
+  whoever runs `cargo`, so a shared installation makes it re-run `rustup-init`
+  as each account and fail, and a per-account one costs roughly 1.5 GiB per
+  account. **Run `agent-vm image build <distro> --force` to pick this
   up** — existing cached images have no Rust.
 
 - `claude` in a VM now starts with Remote Control enabled in every session. Base
@@ -214,14 +135,30 @@ migration or rebuild step a user has to take.
   its own instance per network, and the full package's system-wide resolver
   would contend with it.
 
-- Base images now carry a Go toolchain and `golangci-lint`, which is installed
-  from its own installer on all three families — Ubuntu does not package it, and
-  elsewhere the version differs per family.
+- Base images now carry a Go toolchain and `golangci-lint`, installed with
+  `mise` (`mise use -g go@latest golangci-lint@latest`) rather than from a
+  distribution package. Every family packages a different and often years-old
+  Go, and a guest whose Go is older than the `go` directive of the repository an
+  agent was handed cannot build it at all; all three families now carry the same
+  release, and Ubuntu does not package `golangci-lint` at all. `go`, `gofmt`,
+  and `golangci-lint` each have a `/usr/local/bin` symlink to the `mise` binary,
+  so a non-interactive `ssh <vm> go build` works without a login shell, and they
+  are installed into `/etc/skel` like the JDK, so an account can move to another
+  release with `mise use -g go@1.25` without `sudo`. `~/go/bin` and
+  `~/.cargo/bin` are added to the path of a login shell.
 
-- SDKMAN in a base image now comes with the newest Temurin JDK it offers and
-  with Maven already installed, so `java` and `mvn` work in a guest without
-  downloading anything. As before they are on the path of a login shell only;
-  use `ssh <vm> bash -lc '…'` from a script.
+- Base images now carry a JDK and Maven, installed with `mise`
+  (`mise use -g java@temurin maven@latest`), so `java` and `mvn` work in a guest
+  without downloading anything — which a network-isolated guest could not do
+  anyway. The newest Temurin JDK mise offers and the current Maven are installed
+  during the build; neither version is pinned. The JDK is requested as
+  `java@temurin` rather than `java@latest`, which would be an Oracle build of
+  OpenJDK. Both are reached through mise's shims, which
+  `/etc/profile.d/agent-vm-mise.sh` puts on the path of a login shell only, so
+  from a script use `ssh <vm> bash -lc 'mvn -version'` — or put
+  `~/.local/share/mise/shims` on `PATH` in the script itself, since the shims
+  are ordinary executables and there is nothing to source. Switching versions is
+  `mise use java@21`, per account and without `sudo`.
 
 - Every interactive account in a guest now gets an `ed25519` SSH key pair at
   `~/.ssh/id_ed25519`, generated on first boot if that path does not already
@@ -240,170 +177,8 @@ migration or rebuild step a user has to take.
   the seed does not create, was renamed from `agent-vm-docker-group.service` to
   `agent-vm-user-setup.service` and now does both jobs above.
 
-### Changed
-
-- The Go toolchain in a base image now comes from the current go.dev release
-  instead of the distribution's package. Every family packaged a different and
-  often years-old Go, and a guest whose Go is older than the `go` directive of
-  the repository an agent was handed cannot build it at all; all three families
-  now carry the same release. `go` and `gofmt` are in `/usr/local/bin` as
-  before, and `~/go/bin` and `~/.cargo/bin` are added to the path of a login
-  shell. Existing cached images keep their packaged Go until rebuilt with
-  `agent-vm image build <distro> --force`.
-
-- `codex` in a base image now comes from OpenAI's own installer
-  (`https://chatgpt.com/codex/install.sh`) instead of the `@openai/codex` npm
-  package. `codex remote-control` only runs against the standalone package that
-  installer produces — it starts its app-server from a fixed path under the
-  account's `CODEX_HOME` and refuses to run when that directory is missing,
-  which is what an npm install leaves behind. The package is installed once
-  into `/usr/local/lib/codex` and shared by every account (it is around
-  300 MiB), with the command in `/usr/local/bin` as before, and each account
-  gets a symlink to it under `~/.codex` at first boot so credentials and
-  configuration stay per-account. **Run `agent-vm image build <distro> --force`
-  to pick this up** — existing cached images still have the npm build.
-
-- Base images are no longer built purely from their distribution's own
-  repositories. The coding agents are not packaged by any distro, so a build now
-  reaches npm and one vendor install script, and on Ubuntu it also adds the
-  NodeSource repository and GPG key — Ubuntu 24.04 ships Node.js 18 and the
-  agents need 22.19 or newer. Fedora and Arch use their own Node.js. A build
-  fails outright if the Node.js it ends up with is older than 22.19, rather than
-  producing an image whose agents silently cannot start, and holds `npm` to the
-  11 line because npm 12 skips the postinstall scripts two of the agents need. Building a base image
-  already required network access to a registry; it now also requires reaching
-  these sources.
-
-- The state directory now also contains `networks/`, holding the network XML
-  passed to `virsh net-define` as a record, and `locks/`. Both are documented in
-  `docs/cli.md`.
-
-- The NAT network is defined on `192.168.171.0/24` rather than colliding with
-  libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
-  bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
-
-- `create --no-start` is now rejected with exit `2` and an explanation, instead
-  of being listed as a working flag. `virt-install` always boots a guest that
-  has cloud-init data — the generated seed is attached to that first boot only
-  and is absent from the domain it leaves defined — so a VM stopped before
-  cloud-init finished would never receive its SSH key and could not be reached
-  afterwards. Create the VM and stop it instead:
-  `agent-vm create <name> && agent-vm stop <name>`. Documented in
-  `docs/cli.md`.
-
-- A cached base image directory also holds the `Containerfile` it was built
-  from, as a record of the recipe that produced it. Documented in
-  `docs/cli.md`.
-
-- `--dry-run` now guarantees that nothing changes, including the state
-  directory itself: it is not created, and commands that would delete or write
-  print what they would do instead. `image build` prints its whole pipeline
-  with `<placeholders>` for the values that only exist once a build has run,
-  rather than executing the read-only half of a pipeline whose earlier steps
-  were skipped.
-
-- Replaced the repository's generic project-template documentation with
-  project-specific instructions: `AGENTS.md` now describes the real layout,
-  commands, contracts, and prohibited actions; `SECURITY.md` states the trust
-  boundaries that apply when an untrusted agent runs inside a VM; and
-  `CONTRIBUTING.md` and `CODE_REVIEW.md` reflect the actual verification steps.
-
-- Repository layout now follows Go conventions (`cmd/`, `internal/`,
-  `templates/`, `test/`) in place of the placeholder `src/` and `tests/`
-  directories.
-
-- Reworked the design to drive existing tools rather than reimplement them
-  (ADR-0009): domains are defined with `virt-install` and managed with `virsh`
-  instead of through libvirt Go bindings and a hand-maintained domain XML template;
-  base images are built with `podman` plus `virt-make-fs`/`virt-copy-out`/
-  `virt-sysprep`; cloud-init seeds are built by `virt-install`; and `ssh` and
-  `virsh console` are exec'd directly. The build is now pure Go with no cgo, and
-  the required host tools and their minimum versions are documented and checked by
-  `agent-vm doctor`.
-
-- `create`, `destroy`, `image build`, and `image rm` now report a lock they
-  could not release instead of discarding the failure. A stuck lock is host
-  state an operator has to clear before the next run, so it is no longer
-  silent.
-
-### Removed
-
-- The template setup checklist (`docs/project-setup.md`), which no longer applies
-  now that the repository is a real project; it became `docs/host-setup.md`.
-
-### Fixed
-
-- `ping` works for the guest's own user again. In a guest the command failed
-  with `socket: Operation not permitted ... missing cap_net_raw+p capability`
-  for anything but root, which looks exactly like a VM with no network even
-  though its lease, route, and TCP traffic were all fine. The capability distro
-  packaging puts on `/usr/bin/ping` is an extended attribute, and it does not
-  survive the `podman export` tar that `virt-make-fs` turns into the disk;
-  Ubuntu and Fedora then leave `net.ipv4.ping_group_range` at the kernel's
-  empty default, so the fallback to an ICMP socket was closed too. Base images
-  now ship a sysctl drop-in that opens that range. **Run
-  `agent-vm image build <distro> --force` to pick this up** — existing cached
-  images still produce guests with the old behavior.
-
-- `agent-vm create --github-ssh-key` no longer fails with `cat:
-  .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
-  booted. The guest generates that key from a first-boot unit that runs after
-  cloud-init's final stage, which is later than the point where SSH starts
-  answering, so the read raced the guest. It is now retried for up to
-  `--wait-for-ssh` and, if the key never appears, the error names the
-  `agent-vm-user-setup.service` unit to look at.
-
-- Arch guests boot again. The image ships no `/etc/machine-id`, which systemd
-  reads as a first boot, and Arch enables `systemd-firstboot.service` — which,
-  with a serial console attached, prompted for a timezone and waited forever.
-  Boot stopped there, so cloud-init never ran and the guest never got a network;
-  from the outside `agent-vm create --distro arch` simply timed out waiting for
-  an address. The unit is now masked, and the build fails if the mask is
-  missing. Every VM still gets its own machine ID, which systemd initializes
-  from the SMBIOS UUID independently of that unit. Rebuild a cached arch image
-  with `agent-vm image build --force arch`.
-
-- Fedora guests are named after the VM again, instead of all being named
-  `fedora`. cloud-init's Fedora distro class prefers the FQDN over the hostname,
-  and since a disposable VM has no domain, it fell back to the system FQDN —
-  systemd's compiled-in fallback, the literal string `fedora` — and applied that
-  to every guest. The image now turns that preference off. Ubuntu and Arch were
-  never affected.
-
-- Fedora guests boot again. `container-selinux`, which arrived with the
-  virtualization stack podman and libvirt pull in, installs
-  `selinux-policy-targeted` and its `/etc/selinux/config` set to enforcing. The
-  root filesystem is built from a flattened container export and carries no
-  SELinux labels at all, so systemd tried to relabel an unlabeled filesystem on
-  first boot, failed, and froze PID 1 about three seconds in — before
-  networking. From the outside this looked like `agent-vm create --distro
-  fedora` timing out waiting for an address, with nothing to say init had died.
-  The image now sets SELinux to disabled and the build fails if it is not, so
-  this cannot ship again unnoticed. Rebuild a cached fedora image with
-  `agent-vm image build --force fedora`.
-
-- A bridged VM's `vm.json` no longer claims it is on the NAT network. The record
-  named the libvirt network `agent-vm-nat` alongside the bridge for every
-  bridged VM, even though the guest was attached only to the host bridge — the
-  field is there so a guest's network exposure is auditable after the fact, and
-  it was describing an isolation the guest did not have. The two attachments are
-  now mutually exclusive in the record: bridged VMs carry `network.bridge` and
-  no `network.name`, NAT VMs carry `network.name` and no `network.bridge` (a
-  configured `AGENT_VM_BRIDGE` was previously recorded on NAT VMs too). No
-  rebuild is needed; existing records are corrected the next time a VM is
-  created.
-
-- The base image's one-shot account unit never ran. It was wanted by
-  `multi-user.target` and ordered after `cloud-final.service`, which cloud-init
-  itself orders *after* that target — an ordering cycle, which systemd breaks by
-  deleting a job. The unit sat enabled and inactive for the life of every VM,
-  with nothing in the journal to say so, so accounts the seed did not create
-  never reached the `docker` group. It is now pulled in by `cloud-final.service`
-  directly. Rebuild base images (`agent-vm image build <distro> --force`) to
-  pick this up.
-
-- Base images now also carry `gh` and `tea` for GitHub and Gitea, Playwright
-  with a headless `chromium`, and SDKMAN for installing JDKs in the guest.
+- Base images now also carry `gh` and `tea` for GitHub and Gitea, and Playwright
+  with a headless `chromium`.
 
   `gh` comes from each distribution's repository. `tea` does not — only Arch
   packages it, and on Ubuntu the name `tea` belongs to an unrelated text editor,
@@ -417,24 +192,26 @@ migration or rebuild step a user has to take.
   `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` so that
   non-interactive commands like `ssh <vm> node script.js` find them too.
 
-  SDKMAN is installed per account rather than shared, because installing a JDK
-  writes into its directory. No JDK is preinstalled: run `sdk install java` in
-  the guest. `sdk` is a shell function, so it exists in an interactive login
-  shell only.
-
   A build now runs each of these once — including launching headless Chromium —
   and fails if any of them cannot work. Base images are correspondingly larger.
 
   Existing cached base images are unaffected and still boot. They will not have
-  these tools until rebuilt with `agent-vm image build --force`.
+  these tools until rebuilt with `agent-vm image build <distro> --force`.
 
 - Base images now ship five coding agents — `claude`, `codex`, `opencode`, `pi`,
   and `agy` — so a new VM is usable by an agent the moment it becomes reachable,
-  instead of starting with an install. Four come from npm and bring a Node.js 24
-  runtime with them; `agy` is installed from its vendor's script into
-  `/usr/local/bin`, so every account on the VM finds it. Versions are not pinned:
+  instead of starting with an install. All five are vendor-built native
+  binaries. `claude`, `opencode`, and `pi` are installed with `mise`
+  (`mise use -g claude opencode pi`), into `/etc/skel` so each account inherits
+  its own copy and can move one to another release with
+  `mise use -g claude@<version>` without `sudo`; each also has a
+  `/usr/local/bin` symlink to the `mise` binary, which resolves the version from
+  the calling account's own configuration, so a non-interactive
+  `ssh <vm> claude -p '…'` finds the command. `codex` and `agy` come from their
+  vendors' own installer scripts into `/usr/local/bin`, where every account on
+  the VM finds them. Versions are not pinned:
   a guest gets whatever was current when its base image was built, and
-  `agent-vm image build --force` is how you get newer ones.
+  `agent-vm image build <distro> --force` is how you get newer ones.
 
   Each agent is configured in its **most permissive mode**, so it works
   unattended rather than blocking on an approval prompt nobody is there to
@@ -455,7 +232,7 @@ migration or rebuild step a user has to take.
   rather than a surprise inside a VM days later.
 
   Existing cached base images are unaffected and still boot. They will not have
-  the agents until rebuilt with `agent-vm image build --force`.
+  the agents until rebuilt with `agent-vm image build <distro> --force`.
 
 - `agent-vm completion <bash|zsh|fish>` prints a tab-completion script for the
   shell you name, so `agent-vm ` and Tab offers command names, a command's own
@@ -695,6 +472,189 @@ migration or rebuild step a user has to take.
   data can still be saved. A VM whose domain has already vanished from libvirt
   can still have its leftover state removed.
 
+### Changed
+
+- The Fedora and Arch base images now install `growpart`
+  (`cloud-utils-growpart` / `cloud-guest-utils`), so cloud-init grows the root
+  partition to the VM's disk size at first boot the way it already did on
+  Ubuntu. Without it a guest was limited to the base filesystem plus 1 GiB of
+  slack; with the larger `/etc/skel` this release ships, first boot filled that
+  filesystem and the VM came up without SSH.
+
+- The Fedora base image now installs `libatomic`, which the official Node
+  binaries `mise` downloads are linked against and Fedora's base image does not
+  carry. Without it the image build fails at the Node install.
+
+- Base images now install **Node.js with mise** (`mise use -g node@latest`)
+  rather than from a distro package or a third-party APT repository — no build
+  adds an external repository or GPG key, and Ubuntu 24.04's packaged Node.js 18
+  is past end of life. `node`, `npm`, and `npx` are versioned the way the JDK
+  and the agents are: installed into `/etc/skel` during the build so every account
+  inherits them, with a `/usr/local/bin` symlink each so a non-interactive
+  `ssh <vm> node script.js` still finds them. An account can move to another
+  release with `mise use -g node@<version>` without `sudo`, where a packaged
+  `/usr/bin/node` needed root. The build still fails outright if the Node.js it
+  ends up with is older than 22.19. Existing base images are unaffected —
+  rebuild an image (`agent-vm image build <distro> --force`) to pick this up.
+
+- `codex` in a base image comes from OpenAI's own installer
+  (`https://chatgpt.com/codex/install.sh`) rather than from npm or `mise`.
+  `codex remote-control` only runs against the standalone package that
+  installer produces — it starts its app-server from a fixed path under the
+  account's `CODEX_HOME` and refuses to run when that directory is missing,
+  which is what an npm install leaves behind. The package is installed once
+  into `/usr/local/lib/codex` and shared by every account (it is around
+  300 MiB), with the command in `/usr/local/bin` as before, and each account
+  gets a symlink to it under `~/.codex` at first boot so credentials and
+  configuration stay per-account. **Run `agent-vm image build <distro> --force`
+  to pick this up** — existing cached images still have the npm build.
+
+- Base images are no longer built purely from their distribution's own
+  repositories. The coding agents, the language toolchains, `tea`, and
+  Playwright are not packaged by any distro, so a build now also reaches `mise`
+  and its backends, `rustup`, and two vendor install scripts. A build fails
+  outright if the Node.js it ends up with is older than 22.19, rather than
+  producing an image whose agents silently cannot start. Building a base image
+  already required network access to a registry; it now also requires reaching
+  these sources.
+
+- The state directory now also contains `networks/`, holding the network XML
+  passed to `virsh net-define` as a record, and `locks/`. Both are documented in
+  `docs/cli.md`.
+
+- The NAT network is defined on `192.168.171.0/24` rather than colliding with
+  libvirt's own `default` network on `192.168.122.0/24`, and it does not name a
+  bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
+
+- `create --no-start` is now rejected with exit `2` and an explanation, instead
+  of being listed as a working flag. `virt-install` always boots a guest that
+  has cloud-init data — the generated seed is attached to that first boot only
+  and is absent from the domain it leaves defined — so a VM stopped before
+  cloud-init finished would never receive its SSH key and could not be reached
+  afterwards. Create the VM and stop it instead:
+  `agent-vm create <name> && agent-vm stop <name>`. Documented in
+  `docs/cli.md`.
+
+- A cached base image directory also holds the `Containerfile` it was built
+  from, as a record of the recipe that produced it. Documented in
+  `docs/cli.md`.
+
+- `--dry-run` now guarantees that nothing changes, including the state
+  directory itself: it is not created, and commands that would delete or write
+  print what they would do instead. `image build` prints its whole pipeline
+  with `<placeholders>` for the values that only exist once a build has run,
+  rather than executing the read-only half of a pipeline whose earlier steps
+  were skipped.
+
+- Replaced the repository's generic project-template documentation with
+  project-specific instructions: `AGENTS.md` now describes the real layout,
+  commands, contracts, and prohibited actions; `SECURITY.md` states the trust
+  boundaries that apply when an untrusted agent runs inside a VM; and
+  `CONTRIBUTING.md` and `CODE_REVIEW.md` reflect the actual verification steps.
+
+- Repository layout now follows Go conventions (`cmd/`, `internal/`,
+  `templates/`, `test/`) in place of the placeholder `src/` and `tests/`
+  directories.
+
+- Reworked the design to drive existing tools rather than reimplement them
+  (ADR-0009): domains are defined with `virt-install` and managed with `virsh`
+  instead of through libvirt Go bindings and a hand-maintained domain XML template;
+  base images are built with `podman` plus `virt-make-fs`/`virt-copy-out`/
+  `virt-sysprep`; cloud-init seeds are built by `virt-install`; and `ssh` and
+  `virsh console` are exec'd directly. The build is now pure Go with no cgo, and
+  the required host tools and their minimum versions are documented and checked by
+  `agent-vm doctor`.
+
+- `create`, `destroy`, `image build`, and `image rm` now report a lock they
+  could not release instead of discarding the failure. A stuck lock is host
+  state an operator has to clear before the next run, so it is no longer
+  silent.
+
+### Removed
+
+- The template setup checklist (`docs/project-setup.md`), which no longer applies
+  now that the repository is a real project; it became `docs/host-setup.md`.
+
+### Fixed
+
+- `agent-vm doctor` no longer skips the **host firewall forwarding** check on a
+  host that has a default bridge configured but creates NAT VMs. The check
+  keyed on `[network.bridge] interface` being set at all rather than on the
+  network mode, so following the advice in `docs/host-setup.md` to configure a
+  default bridge silently turned off the one check that catches a `ufw` host
+  dropping guest traffic — the failure where a VM boots, answers SSH, resolves
+  DNS, and hangs on every outbound connection. It now skips only in bridged
+  mode, where guest traffic genuinely never reaches the host's forward hook.
+
+- `ping` works for the guest's own user again. In a guest the command failed
+  with `socket: Operation not permitted ... missing cap_net_raw+p capability`
+  for anything but root, which looks exactly like a VM with no network even
+  though its lease, route, and TCP traffic were all fine. The capability distro
+  packaging puts on `/usr/bin/ping` is an extended attribute, and it does not
+  survive the `podman export` tar that `virt-make-fs` turns into the disk;
+  Ubuntu and Fedora then leave `net.ipv4.ping_group_range` at the kernel's
+  empty default, so the fallback to an ICMP socket was closed too. Base images
+  now ship a sysctl drop-in that opens that range. **Run
+  `agent-vm image build <distro> --force` to pick this up** — existing cached
+  images still produce guests with the old behavior.
+
+- `agent-vm create --github-ssh-key` no longer fails with `cat:
+  .ssh/id_ed25519.pub: No such file or directory` on a VM that has only just
+  booted. The guest generates that key from a first-boot unit that runs after
+  cloud-init's final stage, which is later than the point where SSH starts
+  answering, so the read raced the guest. It is now retried for up to
+  `--wait-for-ssh` and, if the key never appears, the error names the
+  `agent-vm-user-setup.service` unit to look at.
+
+- Arch guests boot again. The image ships no `/etc/machine-id`, which systemd
+  reads as a first boot, and Arch enables `systemd-firstboot.service` — which,
+  with a serial console attached, prompted for a timezone and waited forever.
+  Boot stopped there, so cloud-init never ran and the guest never got a network;
+  from the outside `agent-vm create --distro arch` simply timed out waiting for
+  an address. The unit is now masked, and the build fails if the mask is
+  missing. Every VM still gets its own machine ID, which systemd initializes
+  from the SMBIOS UUID independently of that unit. Rebuild a cached arch image
+  with `agent-vm image build --force arch`.
+
+- Fedora guests are named after the VM again, instead of all being named
+  `fedora`. cloud-init's Fedora distro class prefers the FQDN over the hostname,
+  and since a disposable VM has no domain, it fell back to the system FQDN —
+  systemd's compiled-in fallback, the literal string `fedora` — and applied that
+  to every guest. The image now turns that preference off. Ubuntu and Arch were
+  never affected.
+
+- Fedora guests boot again. `container-selinux`, which arrived with the
+  virtualization stack podman and libvirt pull in, installs
+  `selinux-policy-targeted` and its `/etc/selinux/config` set to enforcing. The
+  root filesystem is built from a flattened container export and carries no
+  SELinux labels at all, so systemd tried to relabel an unlabeled filesystem on
+  first boot, failed, and froze PID 1 about three seconds in — before
+  networking. From the outside this looked like `agent-vm create --distro
+  fedora` timing out waiting for an address, with nothing to say init had died.
+  The image now sets SELinux to disabled and the build fails if it is not, so
+  this cannot ship again unnoticed. Rebuild a cached fedora image with
+  `agent-vm image build --force fedora`.
+
+- A bridged VM's `vm.json` no longer claims it is on the NAT network. The record
+  named the libvirt network `agent-vm-nat` alongside the bridge for every
+  bridged VM, even though the guest was attached only to the host bridge — the
+  field is there so a guest's network exposure is auditable after the fact, and
+  it was describing an isolation the guest did not have. The two attachments are
+  now mutually exclusive in the record: bridged VMs carry `network.bridge` and
+  no `network.name`, NAT VMs carry `network.name` and no `network.bridge` (a
+  configured `AGENT_VM_BRIDGE` was previously recorded on NAT VMs too). No
+  rebuild is needed; existing records are corrected the next time a VM is
+  created.
+
+- The base image's one-shot account unit never ran. It was wanted by
+  `multi-user.target` and ordered after `cloud-final.service`, which cloud-init
+  itself orders *after* that target — an ordering cycle, which systemd breaks by
+  deleting a job. The unit sat enabled and inactive for the life of every VM,
+  with nothing in the journal to say so, so accounts the seed did not create
+  never reached the `docker` group. It is now pulled in by `cloud-final.service`
+  directly. Rebuild base images (`agent-vm image build <distro> --force`) to
+  pick this up.
+
 - A VM only reached the network's metadata service, and took four minutes to
   become reachable over SSH, on every boot after its first. Ubuntu's own
   cloud-init configuration lists `Ec2` and every other network datasource, and
@@ -715,8 +675,8 @@ migration or rebuild step a user has to take.
   as silently as it was lost the first time.
 
   This affected Ubuntu, the default family. Existing base images still carry the
-  old file name; rebuild them with `agent-vm image build --force` to pick up the
-  fix.
+  old file name; rebuild them with `agent-vm image build <distro> --force` to
+  pick up the fix.
 
 - Ubuntu guests can install packages again. Every Ubuntu base image produced a
   guest whose apt sources named a suite called `UNAVAILABLE`, so `apt update`

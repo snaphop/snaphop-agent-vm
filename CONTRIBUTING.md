@@ -55,6 +55,8 @@ gofmt -l .                 # must print nothing
 go vet ./...
 golangci-lint run
 go test ./...
+# or all four at once:
+make check
 
 # Only on a KVM-capable host you are willing to have VMs created on:
 go test -tags integration ./test/integration/...
@@ -63,9 +65,12 @@ git commit -m "feat(scope): what changed"
 git push --set-upstream origin feat/short-description
 ```
 
-The first four commands are the minimum verification before handing work off. CI
-runs the same ones. **Merging does not publish or deploy anything** — tagged
-releases build and attach binaries, and that workflow is the only publishing path.
+The first four commands are the minimum verification before handing work off, and
+`scripts/check.sh` (or `make check`) runs all four in one go. CI is intended to
+run the same script; the workflows are not written yet, so running it locally is
+currently the only thing that enforces it. **Merging does not publish or deploy
+anything** — tagged releases build and attach binaries, and that workflow is the
+only publishing path.
 
 ### About The Integration Suite
 

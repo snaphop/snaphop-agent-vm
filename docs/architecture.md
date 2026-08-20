@@ -219,8 +219,11 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   the operator gets a real terminal, not a proxied one.
 - **Public interface:** the `virt-install` argument vector — direct kernel boot via
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,
-  `--network`, `--memory`, `--vcpus`, `--graphics none`, serial console with a log
-  file, `--rng`, and the guest agent channel. This is what golden tests pin.
+  `--network`, `--memory`, `--vcpus`, `--cpu host-passthrough` (which is what
+  gives a guest the host's virtualization features, so it can run VMs of its
+  own), `--graphics none`, serial console with a log file, `--rng`,
+  `--memballoon virtio`, and the guest agent channel. This is what golden tests
+  pin.
 - **Key dependencies:** `virt-install` (4.0+), `virsh`, libvirt (9.0+), QEMU (8.0+).
   Architecture differences (machine type, firmware) are `virt-install`'s job, not
   ours — a significant reason for ADR-0009.
@@ -450,8 +453,10 @@ The build artifact is a single static Go binary per OS/architecture; there is no
 container image, no server, and nothing to deploy. Installation is copying the
 binary onto a KVM-capable host.
 
-- Pull requests run format, vet, lint, and unit tests. Integration tests run only
-  on a KVM-capable runner and are not required for merge.
+- Pull requests run `scripts/check.sh` — format, vet, lint, and unit tests.
+  Integration tests run only on a KVM-capable runner and are not required for
+  merge. This is the intended contract: the CI workflows are not written yet, so
+  today the script is run locally.
 - **Merging does not publish or deploy anything.** Tagged releases build and
   attach binaries; that workflow is the only publishing path.
 - Rollback is running the previous binary. Because base images are versioned by
