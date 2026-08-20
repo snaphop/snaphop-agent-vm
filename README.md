@@ -218,12 +218,22 @@ and would have to be per-VM and explicit, per [`SECURITY.md`](./SECURITY.md).
 A VM is an isolation boundary, not a guarantee. Do not run something in one of
 these VMs that you would not run on a machine you are willing to lose.
 
+## Building And Installing
+
+```bash
+make build                 # go build ./...
+make install               # build the static binaries and install this host's
+                           # into ~/.local/bin (override with PREFIX or BINDIR)
+```
+
+`make release` builds the static binaries for every architecture into `dist/`;
+installing on another host is copying the right one onto it.
+
 ## Development
 
 ```bash
-go build ./...
-go test ./...
-golangci-lint run
+make check                 # gofmt, go vet, golangci-lint, go test — the
+                           # pre-handoff bar (scripts/check.sh)
 ```
 
 Unit tests need no KVM host: tools are faked at the process boundary, and

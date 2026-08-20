@@ -52,7 +52,8 @@ Trust levels, most to least trusted:
 
 Out of the tool's control, and stated plainly rather than papered over: QEMU/KVM
 guest-escape vulnerabilities, host kernel bugs, and what the operator chooses to
-do with `--network bridge` or an explicit host-path share.
+do with `--network bridge`. Host path sharing is not implemented at all; the
+rules below govern it in advance, so that adding it cannot happen by accident.
 
 ## Hard Security Boundaries
 
@@ -240,6 +241,5 @@ Out of scope: vulnerabilities in libvirt, QEMU/KVM, the Linux kernel, `virt-inst
 libguestfs, `podman`, or container images (report those upstream — though if *our*
 invocation of one of them is what creates the exposure, that is in scope);
 guest-to-host escapes attributable to the hypervisor rather than to our
-configuration; the documented consequences of
-opt-in features such as bridged networking or an explicit host-path share; social
-engineering; and purely volumetric denial-of-service reports.
+configuration; the documented consequences of opt-in features such as bridged
+networking; social engineering; and purely volumetric denial-of-service reports.

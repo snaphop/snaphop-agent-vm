@@ -96,6 +96,7 @@ path documented.
 │   └── integration/        # KVM-requiring tests (build tag `integration`)
 ├── scripts/                # repeatable development and operational helpers
 ├── docs/                   # architecture, CLI contract, runbooks, ADRs
+├── Makefile                # thin wrapper around scripts/, plus `make install`
 ├── .github/                # contribution metadata (pull request template). The
 │                           # CI workflows described in §5 are not written yet.
 ├── AGENTS.md               # canonical agent instructions
@@ -183,7 +184,11 @@ work is possible once a base image is cached.
 Prefer repository scripts over ad hoc commands so local work and CI stay
 aligned. `scripts/check.sh` runs the full pre-handoff verification and
 `scripts/build-release.sh` builds the release binaries; where a script does not
-exist yet, create it rather than substituting an ad hoc invocation for it.
+exist yet, create it rather than substituting an ad hoc invocation for it. The
+`Makefile` is a convenience wrapper around those scripts — `make check`, `make
+release`, `make build`, `make test`, `make clean` — and adds the one step with no
+script of its own, `make install`, which installs this host's binary into
+`$(BINDIR)` (default `~/.local/bin`). The scripts stay the source of truth.
 
 | Task | Command |
 |---|---|
@@ -194,9 +199,10 @@ exist yet, create it rather than substituting an ad hoc invocation for it.
 | Run all tests | `go test ./...` |
 | Run one test | `go test ./internal/domain -run TestVirtInstallArgs_NAT` |
 | Lint | `golangci-lint run` |
-| Format | `gofmt -w .` (CI enforces `gofmt -l .` being empty) |
+| Format | `gofmt -w .` (`gofmt -l .` must be empty) |
 | Typecheck | `go vet ./...` (the compiler is the type checker) |
-| Package/container build | `scripts/build-release.sh` (static binary per arch) |
+| Package/container build | `scripts/build-release.sh` or `make release` (static binary per arch) |
+| Install on this host | `make install` (into `~/.local/bin` by default) |
 | Regenerate golden files | `go test ./... -update-golden` |
 | Live/integration test | `go test -tags integration ./test/integration/...` |
 
@@ -284,10 +290,12 @@ floor; x86_64 and aarch64 hosts are supported, and architecture differences
 images built by an earlier release must stay bootable, and a breaking manifest
 change requires a `schemaVersion` bump plus a documented rebuild path.
 
-CI and release behavior: pull requests run format, vet, lint, and unit tests.
-Integration tests run only on a KVM-capable runner and are not required for
-merge. **Merging does not deploy or publish anything.** Tagged releases build
-and attach static binaries; that workflow is the only publishing path.
+CI and release behavior — the intended contract; the workflows themselves are
+not written yet (§2). Pull requests run `scripts/check.sh`: format, vet, lint,
+and unit tests. Integration tests run only on a KVM-capable runner and are not
+required for merge. **Merging does not deploy or publish anything.** Tagged
+releases build and attach static binaries; that workflow is the only publishing
+path.
 
 Require an ADR in [`docs/decisions/`](./docs/decisions/) for decisions that are
 hard to reverse, affect multiple components, or change the security/deployment
