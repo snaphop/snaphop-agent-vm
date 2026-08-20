@@ -89,6 +89,12 @@ var guestHostnameCommand = []string{"uname", "-n"}
 type harness struct {
 	binary   string
 	stateDir string
+	// configFile is an empty configuration file, passed to every invocation so
+	// that the operator's own ~/.config/agent-vm/config.toml cannot decide what
+	// these tests exercise. In NAT mode networkArgs deliberately passes no
+	// --network, so a config setting bridge mode would silently test the other
+	// mode and then fail the assertion that vm.json records NAT.
+	configFile string
 	// publicKey is the key authorized in the guest. Its private half sits
 	// beside it, which is how `agent-vm ssh` finds it.
 	publicKey string
@@ -112,17 +118,17 @@ func newHarness(t *testing.T) *harness {
 
 	stateDir := *lifecycleStateDir
 	if stateDir == "" {
-		stateDir = filepath.Join(t.TempDir(), "agent-vm-test-state")
-	} else {
-		if err := os.MkdirAll(stateDir, 0o755); err != nil {
-			t.Fatalf("creating the state directory: %v", err)
-		}
+		stateDir = filepath.Join(testTempDir(t), "agent-vm-test-state")
+	}
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("creating the state directory: %v", err)
 	}
 
 	h := &harness{
-		binary:    buildBinary(t),
-		stateDir:  stateDir,
-		publicKey: generateKeyPair(t),
+		binary:     buildBinary(t),
+		stateDir:   stateDir,
+		configFile: emptyConfigFile(t),
+		publicKey:  generateKeyPair(t),
 	}
 
 	// doctor is the host readiness check the tool itself relies on, so a host
@@ -133,6 +139,58 @@ func newHarness(t *testing.T) *harness {
 			res.code, res.stdout, res.stderr)
 	}
 	return h
+}
+
+// testTempDir is t.TempDir() with the whole path made searchable. Under
+// qemu:///system the QEMU process runs as libvirt's own account, which has to
+// search every directory between / and a VM's disk, and t.TempDir() creates
+// its directories 0700. Without this the tool's own state-directory-access
+// check fails, doctor exits 3, and every lifecycle test skips — leaving a run
+// that reports PASS having booted nothing.
+//
+// 0711 grants search without read, the same narrow grant docs/host-setup.md
+// recommends via setfacl: the hypervisor can traverse to the disk and still
+// cannot list what else is in there.
+func testTempDir(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	// Both levels matter: t.TempDir() returns a numbered subdirectory of a
+	// directory it also created 0700, and the outer one blocks the path first.
+	for _, path := range []string{filepath.Dir(dir), dir} {
+		if err := os.Chmod(path, 0o711); err != nil {
+			t.Fatalf("making %s searchable by the hypervisor: %v", path, err)
+		}
+	}
+	return dir
+}
+
+// emptyConfigFile writes a configuration file with nothing in it, so that
+// --config resolves to defaults rather than to the operator's own file.
+func emptyConfigFile(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "empty-config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("writing the empty config file: %v", err)
+	}
+	return path
+}
+
+// withoutAgentVMVars drops the AGENT_VM_* variables from an environment.
+// They sit above the configuration file in the precedence order (docs/cli.md),
+// so pinning --config alone would still leave an exported AGENT_VM_NETWORK
+// deciding what a test exercises. Everything else is passed through: the binary
+// needs PATH to find virsh, and HOME to find the ssh key.
+func withoutAgentVMVars(environ []string) []string {
+	kept := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		if strings.HasPrefix(entry, "AGENT_VM_") {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // buildBinary builds agent-vm once per test binary run.
@@ -188,11 +246,16 @@ func (h *harness) run(t *testing.T, timeout time.Duration, args ...string) resul
 	full := append([]string{
 		"--state-dir", h.stateDir,
 		"--libvirt-uri", *lifecycleURI,
+		// Every source of configuration this tool reads is pinned here, so that
+		// what these tests exercise is the documented default rather than
+		// whatever the machine running them happens to be configured for.
+		"--config", h.configFile,
 		// Destructive commands must not stop at a prompt in a test.
 		"--yes",
 	}, args...)
 
 	cmd := exec.CommandContext(ctx, h.binary, full...)
+	cmd.Env = withoutAgentVMVars(os.Environ())
 	stdout := new(strings.Builder)
 	stderr := new(strings.Builder)
 	cmd.Stdout = stdout
