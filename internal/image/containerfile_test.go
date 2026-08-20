@@ -281,7 +281,29 @@ var miseAgents = []string{"claude", "opencode", "pi"}
 
 // miseShims are every command installed with mise that a guest has to be able
 // to run without a login shell, in the order the recipes link them.
-var miseShims = []string{"claude", "opencode", "pi", "wrangler", "playwright"}
+var miseShims = []string{
+	"node", "npm", "npx",
+	"go", "gofmt", "golangci-lint",
+	"claude", "opencode", "pi", "wrangler", "playwright",
+}
+
+// shimLoopCommands returns the command names the recipe's `for command in ...;
+// do` loop links into /usr/local/bin. The loop is written across several lines,
+// so the names are read out of it rather than matched as one string.
+func shimLoopCommands(recipe string) ([]string, bool) {
+	const marker = "for command in "
+	start := strings.Index(recipe, marker)
+	if start < 0 {
+		return nil, false
+	}
+	rest := recipe[start+len(marker):]
+	end := strings.Index(rest, "; do")
+	if end < 0 {
+		return nil, false
+	}
+	list := strings.NewReplacer("\\", " ", "\n", " ").Replace(rest[:end])
+	return strings.Fields(list), true
+}
 
 // TestContainerfiles_InstallTheCodingAgents guards the guest contract that a VM
 // comes up with claude, codex, opencode, pi and agy already installed.
@@ -304,18 +326,26 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 
 		// Node is no longer what the agents run on -- all five are native
 		// binaries -- but wrangler and Playwright are still npm installs,
-		// and a guest handed a JavaScript repository needs a runtime.
-		if !strings.Contains(recipe, "nodejs") {
-			t.Errorf("%s does not install Node.js; wrangler and Playwright cannot be installed without it", d.Containerfile)
+		// and a guest handed a JavaScript repository needs a runtime. It is
+		// mise's node, like every other toolchain here, rather than a distro
+		// package or a third-party repository.
+		if !strings.Contains(recipe, "mise use --global --yes node@latest") {
+			t.Errorf("%s does not install Node.js with mise; wrangler and Playwright cannot be installed without it", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "mise use --global --yes "+strings.Join(miseAgents, " ")) {
 			t.Errorf("%s does not install %v with mise; guests built from it will be missing an agent docs/cli.md promises", d.Containerfile, miseAgents)
 		}
 		// A mise install reaches a login shell through the shims, but
-		// `ssh <vm> claude -p ...` runs no login shell, so each agent also
+		// `ssh <vm> claude -p ...` runs no login shell, so each command also
 		// needs a symlink to mise on the default PATH.
-		if !strings.Contains(recipe, "for command in "+strings.Join(miseShims, " ")+"; do") {
-			t.Errorf("%s does not link %v into /usr/local/bin; a non-interactive `ssh <vm> claude -p ...` would not find them", d.Containerfile, miseShims)
+		linked, ok := shimLoopCommands(recipe)
+		if !ok {
+			t.Errorf("%s has no `for command in ...; do` loop linking mise shims into /usr/local/bin", d.Containerfile)
+		}
+		for _, command := range miseShims {
+			if !slices.Contains(linked, command) {
+				t.Errorf("%s does not link %q into /usr/local/bin; a non-interactive `ssh <vm> %s ...` would not find it", d.Containerfile, command, command)
+			}
 		}
 
 		// codex is installed from OpenAI's installer rather than npm, and
@@ -477,15 +507,15 @@ func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
 	}
 }
 
-// TestContainerfiles_InstallTheGoAndRustToolchains guards the two toolchains
-// that do not come from the family's packages.
+// TestContainerfiles_InstallTheGoAndRustToolchains guards the toolchains that
+// do not come from the family's packages.
 //
 // Every family packages some Go, and the versions are years apart -- an image
 // whose Go is older than the `go` directive of the repository an agent is
-// given cannot build it at all -- so Go comes from go.dev and Rust from rustup
-// on all three, which is what keeps the images on one release. Both have to be
-// reachable without a profile script: the `ssh <vm> go build` an agent runs is
-// not a login shell.
+// given cannot build it at all -- so Go and golangci-lint come from mise and
+// Rust from rustup on all three, which is what keeps the images on one
+// release. Each has to be reachable without a profile script: the
+// `ssh <vm> go build` an agent runs is not a login shell.
 func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
@@ -494,25 +524,27 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 		}
 		recipe := readTemplate(t, "distro/"+d.Containerfile)
 
-		if !strings.Contains(recipe, "https://go.dev/dl/${version}.linux-${goarch}.tar.gz") {
-			t.Errorf("%s does not install Go from go.dev; a family's package would put a different release in each image", d.Containerfile)
+		if !strings.Contains(recipe, "mise use --global --yes go@latest golangci-lint@latest") {
+			t.Errorf("%s does not install Go and golangci-lint with mise; a family's packages would put a different release in each image", d.Containerfile)
 		}
-		// An image is built for x86_64 and aarch64 hosts alike, and the
-		// release tarball is named for the architecture.
-		for _, goarch := range []string{"goarch=amd64", "goarch=arm64"} {
-			if !strings.Contains(recipe, goarch) {
-				t.Errorf("%s does not map an architecture to %q, so the Go download would 404 there", d.Containerfile, goarch)
-			}
+		// Rust stays on rustup rather than mise: mise's rust is rustup
+		// underneath and re-reads RUSTUP_HOME and CARGO_HOME from the
+		// environment of whoever runs cargo, so a shared installation makes it
+		// re-run rustup-init as each account, which cannot write there. Per
+		// account it works, at roughly 1.5 GiB of toolchain per account.
+		if strings.Contains(recipe, "rust@latest") {
+			t.Errorf("%s installs Rust with mise; every account would carry its own 1.5 GiB toolchain, or fail on a shared one", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/") {
-			t.Errorf("%s does not link the Go entry points into /usr/local/bin; `ssh <vm> go build` never sources a profile script", d.Containerfile)
-		}
-
 		if !strings.Contains(recipe, "https://sh.rustup.rs") {
 			t.Errorf("%s does not install Rust through rustup", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "RUSTUP_HOME=/usr/local/rustup") {
+		if !strings.Contains(recipe, "export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo") {
 			t.Errorf("%s does not install Rust into a shared /usr/local/rustup; every account would download its own toolchain at first use", d.Containerfile)
+		}
+		// A root-owned toolchain nobody else can read is the same thing as no
+		// shared toolchain at all.
+		if !strings.Contains(recipe, "chmod -R a+rX /usr/local/rustup /usr/local/cargo") {
+			t.Errorf("%s does not make the shared Rust installation readable; every account but root would be unable to run cargo", d.Containerfile)
 		}
 		// The rustup proxies resolve their toolchain through RUSTUP_HOME, so a
 		// shared installation is only usable if every account sees that
@@ -531,12 +563,6 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 			t.Errorf("%s does not install the toolchain PATH script; binaries from `go install` and `cargo install` would not be on the path", d.Containerfile)
 		}
 
-		// golangci-lint is not packaged by Ubuntu at all, and where it is
-		// packaged the version differs per family.
-		if !strings.Contains(recipe, "golangci-lint/HEAD/install.sh") {
-			t.Errorf("%s does not install golangci-lint from its own installer", d.Containerfile)
-		}
-
 		// A toolchain that unpacked but cannot run looks exactly like a
 		// working one until someone types the command inside a VM.
 		for _, check := range []string{
@@ -553,6 +579,38 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 		// place, and only sourcing /etc/environment proves it is not.
 		if !strings.Contains(recipe, "set -a; . /etc/environment; set +a;") {
 			t.Errorf("%s does not smoke-test cargo through /etc/environment, which is the only thing that proves the shared RUSTUP_HOME reaches a guest", d.Containerfile)
+		}
+	}
+}
+
+// TestContainerfiles_CanGrowTheRootFilesystem guards the one thing that makes
+// the VM's disk size real inside the guest.
+//
+// The base filesystem is built to the size of the image plus a little slack, so
+// a guest that cannot grow its root partition has that slack and nothing more.
+// First boot then copies /etc/skel -- the JDK, Node, the agents, and the Rust
+// toolchain -- into a new account, runs out of space, and takes cloud-final and
+// sshd down with it: a VM that boots and never accepts SSH. Ubuntu's cloud-init
+// pulls growpart in as a dependency; Fedora's and Arch's do not.
+func TestContainerfiles_CanGrowTheRootFilesystem(t *testing.T) {
+	growpart := map[string]string{
+		"fedora": "cloud-utils-growpart",
+		"arch":   "cloud-guest-utils",
+		"ubuntu": "cloud-init",
+	}
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		pkg, ok := growpart[name]
+		if !ok {
+			t.Fatalf("no growpart package recorded for the %s image; a guest that cannot grow its root filesystem fills it on first boot", name)
+		}
+		if !strings.Contains(recipe, pkg) {
+			t.Errorf("%s does not install %s, so cloud-init cannot grow the root partition and first boot fills the filesystem", d.Containerfile, pkg)
 		}
 	}
 }
