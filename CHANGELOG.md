@@ -17,6 +17,45 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- The Fedora and Arch base images now install `growpart`
+  (`cloud-utils-growpart` / `cloud-guest-utils`), so cloud-init grows the root
+  partition to the VM's disk size at first boot the way it already did on
+  Ubuntu. Without it a guest was limited to the base filesystem plus 1 GiB of
+  slack; with the larger `/etc/skel` this release ships, first boot filled that
+  filesystem and the VM came up without SSH.
+
+- The Fedora base image now installs `libatomic`, which the official Node
+  binaries `mise` downloads are linked against and Fedora's base image does not
+  carry. Without it the image build fails at the Node install.
+
+- Base images now install the **Go toolchain and `golangci-lint` with mise**
+  (`mise use -g go@latest golangci-lint@latest`), replacing the go.dev tarball
+  unpacked into `/usr/local/go` and the `golangci-lint` installer script. `go`,
+  `gofmt`, and `golangci-lint` each keep a `/usr/local/bin` symlink, so a
+  non-interactive `ssh <vm> go build` works exactly as before, and they are now
+  per account — installed into `/etc/skel` like the JDK, so an account can run
+  `mise use -g go@1.25` without `sudo`. **Rust is unchanged**: it stays on
+  `rustup`, installed once into the shared `/usr/local/rustup` with
+  `RUSTUP_HOME` in `/etc/environment` and `rustup update` needing `sudo`. mise
+  is not used for it, because mise's `rust` is `rustup` underneath and re-reads
+  `RUSTUP_HOME`/`CARGO_HOME` from the environment of whoever runs `cargo`: on a
+  shared installation it re-runs `rustup-init` as each account and fails, and
+  per account it costs roughly 1.5 GiB of toolchain per account. Existing base
+  images are unaffected — rebuild an image (`agent-vm image build --force`) to
+  pick this up.
+
+- Base images now install **Node.js with mise** (`mise use -g node@latest`)
+  instead of from the distro's package manager, and on Ubuntu the NodeSource
+  APT repository and GPG key are gone — no build adds a third-party repository
+  any more. `node`, `npm`, and `npx` are versioned the way the JDK and the
+  agents are: installed into `/etc/skel` during the build so every account
+  inherits them, with a `/usr/local/bin` symlink each so a non-interactive
+  `ssh <vm> node script.js` still finds them. An account can move to another
+  release with `mise use -g node@<version>` without `sudo`, where a packaged
+  `/usr/bin/node` needed root. The build still fails outright if the Node.js it
+  ends up with is older than 22.19. Existing base images are unaffected —
+  rebuild an image (`agent-vm image build --force`) to pick this up.
+
 - Base images now install the `claude`, `opencode`, and `pi` CLIs with **mise**
   (`mise use -g claude opencode pi`) instead of a global `npm install -g`. The
   registry names resolve to each vendor's own native release, so the three no

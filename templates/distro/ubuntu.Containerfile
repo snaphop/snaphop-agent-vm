@@ -106,49 +106,57 @@ RUN chmod 0755 /usr/local/bin/agent-vm-menu
 COPY tmux-menu-profile.sh /etc/profile.d/zz-agent-vm-tmux-menu.sh
 RUN chmod 0644 /etc/profile.d/zz-agent-vm-tmux-menu.sh
 
-# Node.js: what wrangler and Playwright run on, and what a guest handed a
-# JavaScript repository builds with.
-#
-# It comes from NodeSource rather than Ubuntu's own repository, the only
-# third-party repository in any of these recipes. Ubuntu 24.04 ships Node 18,
-# which is past end of life and below the floor asserted below, so there is no
-# version of this that stays inside the distro. The key is fetched and dearmoured explicitly
-# instead of piping NodeSource's setup script into a shell, so the repository
-# and the key it is trusted under are both visible here.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gnupg \
- && install -d -m 0755 /usr/share/keyrings \
- && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
- && printf '%s\n' \
-      'deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main' \
-      > /etc/apt/sources.list.d/nodesource.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends nodejs \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
-
-# 22.19 or newer is the floor this image promises: wrangler and Playwright both
-# want a current release, and a guest handed a JavaScript repository is likelier
-# to need a new Node than an old one. A guest that cannot run what it was given
-# is indistinguishable from a broken image until someone SSHes in hours later,
-# so a too-old Node fails the build here instead of shipping.
-RUN set -eu; \
-    major="$(node -p 'process.versions.node.split(".")[0]')"; \
-    minor="$(node -p 'process.versions.node.split(".")[1]')"; \
-    if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 19 ]; }; then \
-      echo "node $(node -v) is too old: this image requires >= 22.19" >&2; \
-      exit 1; \
-    fi
-
-# mise, the tool-version manager the coding agents and the JVM toolchain below
-# are installed with.
+# mise, the tool-version manager the Node.js runtime, the coding agents and the
+# JVM toolchain below are all installed with.
 #
 # The binary goes in /usr/local/bin so that `mise` is on the default PATH for
 # every account, including the non-interactive `ssh <vm> mise install` an agent
 # may run. What it installs is per account -- see below.
 RUN set -eu; \
     curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
+
+# Node.js: what wrangler and Playwright run on, and what a guest handed a
+# JavaScript repository builds with.
+#
+# node and npm come from mise rather than from a distro package or a
+# third-party repository, so they are versioned the way every other toolchain
+# in this image is: an account that needs another release runs
+# `mise use -g node@<version>` for itself, where a root-owned
+# /usr/lib/node_modules would have needed sudo. It also decouples the image
+# from whatever Node its distro happened to freeze -- Ubuntu 24.04 still ships
+# Node 18, past end of life -- so all three recipes get the same runtime by the
+# same route.
+#
+# Like everything else mise installs here this goes into /etc/skel, the copy
+# every account created later inherits, rather than being downloaded per
+# account inside a guest that may have no network at all.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes node@latest; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
+# 22.19 or newer is the floor this image promises: wrangler and Playwright both
+# want a current release, and a guest handed a JavaScript repository is likelier
+# to need a new Node than an old one. A guest that cannot run what it was given
+# is indistinguishable from a broken image until someone SSHes in hours later,
+# so a too-old Node fails the build here instead of shipping. It runs the Node
+# just installed into /etc/skel -- `mise where` is what turns a version mise
+# resolved into a path -- because that is the only Node in the image now; there
+# is no packaged one behind it.
+RUN set -eu; \
+    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
+           MISE_CONFIG_DIR=/etc/skel/.config/mise \
+           MISE_STATE_DIR=/etc/skel/.local/state/mise; \
+    export PATH="$(mise where node)/bin:$PATH"; \
+    major="$(node -p 'process.versions.node.split(".")[0]')"; \
+    minor="$(node -p 'process.versions.node.split(".")[1]')"; \
+    if [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "$minor" -lt 19 ]; }; then \
+      echo "node $(node -v) is too old: this image requires >= 22.19" >&2; \
+      exit 1; \
+    fi
 
 # The coding agents every guest comes up with.
 #
@@ -210,6 +218,39 @@ RUN set -eu; \
       mise use --global --yes java@temurin maven@latest; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
+# The Go toolchain and golangci-lint, both from mise.
+#
+# Every family packages some Go, and the versions are years apart: an image
+# built on Ubuntu's golang-go and one built on Arch's go are not the same
+# toolchain, and a guest whose Go is older than the `go` directive of the
+# repository it was handed cannot build that repository at all. Ubuntu does not
+# package golangci-lint at all, and where it is packaged the version differs per
+# family. mise keeps all three images on the same releases by the same route as
+# the JDK above, and an account that needs another one runs
+# `mise use -g go@1.25` for itself rather than asking an operator to unpack a
+# tarball into /usr/local. Neither is pinned, for the same reason the JDK is
+# not: reproducibility comes from the digest the manifest records for the
+# source image (ADR-0006), and a pin here would be a release behind before the
+# image was rebuilt.
+#
+# Rust is not here. mise's `rust` is rustup underneath and re-reads
+# RUSTUP_HOME and CARGO_HOME from the environment of whoever runs cargo, so a
+# toolchain shared out of /usr/local makes mise decide rust is missing and
+# re-run rustup-init as that account, which cannot write there. Per account it
+# works, at roughly 1.5 GiB of toolchain per account; the image keeps the one
+# shared rustup installation below instead.
+#
+# Both go into /etc/skel, the copy every account created later inherits, so
+# nothing is downloaded per account inside a guest that may have no network at
+# all.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes go@latest golangci-lint@latest; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
 # wrangler and Playwright, the two npm packages left in the image.
 #
 # Neither is packaged by any family and both are published only to npm, so they
@@ -219,11 +260,12 @@ RUN set -eu; \
 # copy below and the build can run `playwright install chromium` a few steps
 # later. What each is for, and the environment each needs, is further down.
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
-    MISE_CONFIG_DIR=/etc/skel/.config/mise \
-    MISE_STATE_DIR=/etc/skel/.local/state/mise \
-    MISE_CACHE_DIR=/tmp/mise-cache \
-      mise use --global --yes npm:wrangler npm:playwright; \
+    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
+           MISE_CONFIG_DIR=/etc/skel/.config/mise \
+           MISE_STATE_DIR=/etc/skel/.local/state/mise \
+           MISE_CACHE_DIR=/tmp/mise-cache; \
+    export PATH="$(mise where node)/bin:$PATH"; \
+    mise use --global --yes npm:wrangler npm:playwright; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
 # root is created before /etc/skel exists in this form and never inherits from
@@ -245,11 +287,14 @@ RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 # called by and resolves the version from the calling account's own mise
 # configuration -- so a single symlink in /usr/local/bin serves every account
 # without pointing into any account's home. That is what keeps
-# `ssh <vm> claude -p ...` and `ssh <vm> wrangler deploy` working: an ssh
-# command runs no login shell, so it never sources the profile script above
-# that puts the per-account shim directory on PATH.
+# `ssh <vm> node script.js`, `ssh <vm> claude -p ...` and
+# `ssh <vm> wrangler deploy` working: an ssh command runs no login shell, so it
+# never sources the profile script above that puts the per-account shim
+# directory on PATH. node and npm are in the list because mise is the only
+# place they come from now -- there is no packaged /usr/bin/node behind them.
 RUN set -eu; \
-    for command in claude opencode pi wrangler playwright; do \
+    for command in node npm npx go gofmt golangci-lint claude opencode pi \
+                   wrangler playwright; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -431,48 +476,21 @@ RUN set -eu; \
     bash -lc 'mvn -version' >/dev/null 2>&1 \
       || { echo "no Maven on the path of a login shell; the mise maven install did not take" >&2; exit 1; }
 
-# The Go and Rust toolchains, both from upstream rather than from the family's
-# own packages.
-#
-# Every family packages some Go, and the versions are years apart: an image
-# built on Ubuntu's golang-go and one built on Arch's go are not the same
-# toolchain, and a guest whose Go is older than the `go` directive of the
-# repository it was handed cannot build that repository at all. Upstream Go
-# and rustup keep all three images on the same release -- the same reasoning as
-# tea above. Neither is pinned, for the same reason mise's JDK is not:
-# reproducibility comes from the digest the manifest records (ADR-0006), and a
-# pin here would be a release behind before the image was rebuilt.
-#
-# Both install into /usr/local with their entry points symlinked into
-# /usr/local/bin, which is on the default PATH, so a non-interactive
-# `ssh <vm> go build` finds them without sourcing a profile script.
-RUN set -eu; \
-    case "$(uname -m)" in \
-      x86_64) goarch=amd64 ;; \
-      aarch64) goarch=arm64 ;; \
-      *) echo "no Go release is published for $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    version="$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"; \
-    case "${version}" in \
-      go[0-9]*) ;; \
-      *) echo "https://go.dev/VERSION named no release (got '${version}'); its format must have changed" >&2; exit 1 ;; \
-    esac; \
-    echo "installing ${version} for linux-${goarch}"; \
-    curl -fsSL "https://go.dev/dl/${version}.linux-${goarch}.tar.gz" -o /tmp/go.tar.gz; \
-    tar -C /usr/local -xzf /tmp/go.tar.gz; \
-    rm -f /tmp/go.tar.gz; \
-    ln -sf /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/
-
 # Rust through rustup, installed once into /usr/local and shared by every
 # account.
 #
 # rustup installs per account under ~/.rustup by default, which would leave
 # each account on the VM downloading its own toolchain at first use, possibly
-# inside a guest with no network at all. A shared installation costs two
-# things and is worth them: RUSTUP_HOME has to be visible to every account
-# (below), and `rustup update` needs sudo because the directory is root-owned.
-# Crates a user installs are unaffected -- CARGO_HOME is deliberately left
-# unset, so `cargo install` writes into that account's own ~/.cargo.
+# inside a guest with no network at all -- and going through mise, which is
+# rustup underneath, would do the same thing at 1.5 GiB per account. A shared
+# installation costs two things and is worth them: RUSTUP_HOME has to be
+# visible to every account (below), and `rustup update` needs sudo because the
+# directory is root-owned. Crates a user installs are unaffected -- CARGO_HOME
+# is deliberately left unset, so `cargo install` writes into that account's own
+# ~/.cargo.
+#
+# The version is unpinned like every other one here: reproducibility comes from
+# the digest the manifest records for the source image (ADR-0006).
 RUN set -eu; \
     export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; \
     curl -fsSL https://sh.rustup.rs \
@@ -492,16 +510,6 @@ RUN printf 'RUSTUP_HOME=/usr/local/rustup\n' >> /etc/environment
 # user installs later. The toolchains themselves need no PATH entry.
 COPY toolchains.sh /etc/profile.d/agent-vm-toolchains.sh
 RUN chmod 0644 /etc/profile.d/agent-vm-toolchains.sh
-
-# golangci-lint, from its own installer on all three families.
-#
-# Ubuntu does not package it at all, and where it is packaged the version
-# differs per family, so the upstream installer is what keeps every image on
-# the same one -- the same reasoning as tea above. It needs a Go toolchain to
-# analyze anything, which is why it follows the one installed above.
-RUN set -eu; \
-    curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-      | sh -s -- -b /usr/local/bin
 
 # Run each of these once, and fail the build if any of them cannot start.
 #

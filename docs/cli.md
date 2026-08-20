@@ -254,7 +254,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Cloud CLIs | `wrangler` (Cloudflare), managed by `mise` |
 | Browser automation | `playwright`, managed by `mise`, with a headless `chromium` |
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
-| Go toolchain | `go` and `gofmt` from go.dev, plus `golangci-lint` |
+| Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
 | Virtualization | `qemu-kvm`, `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
 
@@ -367,18 +367,32 @@ for an agent. Those write to that account's own mise directory, so they need no
 
 Neither comes from the distribution. Every family packages some Go and the
 versions are years apart, so a guest whose Go is older than the `go` directive
-of the repository an agent was given cannot build it at all; Go is installed
-from the current go.dev release, and Rust through `rustup`, so all three
-families carry the same toolchain. Neither version is pinned — they are
-whatever was current when the image was built.
+of the repository an agent was given cannot build it at all. Go and
+`golangci-lint` are installed with `mise`
+(`mise use -g go@latest golangci-lint@latest`), so all three families carry the
+same toolchain and an account can move to another release with
+`mise use -g go@1.25` without `sudo`. Rust comes from `rustup`. No version is
+pinned — they are whatever was current when the image was built.
 
-Go lives in `/usr/local/go` and Rust in `/usr/local/rustup`, with `go`, `gofmt`,
-and the rustup proxies (`cargo`, `rustc`, `rustup`, `rustfmt`, `clippy`)
-symlinked into `/usr/local/bin`. That directory is on the default path, so
-unlike the JVM toolchain these work in a non-interactive `ssh <vm> cargo build`
-and not only in a login shell. `RUSTUP_HOME` is set in `/etc/environment` for the same
-reason `PLAYWRIGHT_BROWSERS_PATH` is: the rustup proxies find their toolchain
-through it, and a non-interactive command reads that file but no profile script.
+`go`, `gofmt`, and `golangci-lint` each have a symlink in `/usr/local/bin`
+pointing at the `mise` binary, the same arrangement the agents use, and the
+rustup proxies (`cargo`, `rustc`, `rustup`, `rustfmt`, `clippy`) are symlinked
+into the same directory. That directory is on the default path, so unlike the
+JVM toolchain these work in a non-interactive `ssh <vm> cargo build` and not
+only in a login shell.
+
+Rust is shared rather than per account: it is installed once into
+`/usr/local/rustup` with `CARGO_HOME=/usr/local/cargo`, so no account downloads
+its own toolchain at first use, and `rustup update` needs `sudo`. It is
+deliberately not managed by `mise` — `mise`'s `rust` is `rustup` underneath and
+re-reads `RUSTUP_HOME`/`CARGO_HOME` from the environment of whoever runs
+`cargo`, so a shared installation makes it re-run `rustup-init` as each account
+and fail, and a per-account one costs roughly 1.5 GiB per account.
+`RUSTUP_HOME` is set in `/etc/environment` for the same reason
+`PLAYWRIGHT_BROWSERS_PATH` is: the rustup proxies find their toolchain through
+it, and a non-interactive command reads that file but no profile script.
+`CARGO_HOME` is left unset, so `cargo install` writes into the account's own
+`~/.cargo`.
 
 The Rust installation is shared, so `rustup update` and `rustup toolchain
 install` need `sudo`. What a user installs is not shared: `CARGO_HOME` is
@@ -394,13 +408,17 @@ tool once, runs `go`, `gofmt`, `golangci-lint`, `rustc`, `cargo`, `rustup`,
 library installs perfectly and exits the moment it is launched.
 
 Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, mise,
-Go, and Rust are the software in a base image that does not come from the
-distro's own repository, and on Ubuntu it is also the only third-party repository and GPG
-key a build adds: Ubuntu 24.04 ships Node.js 18, below the 22.19 floor this
-image asserts, so Node.js comes from NodeSource there. Fedora and Arch ship a new enough
-Node.js of their own. `wrangler` and `playwright` are the only npm packages
-left in the image, and both are installed through `mise`'s npm backend rather
-than with `npm install -g`.
+Node.js, Go, Rust, and `golangci-lint` are the software in a base image that
+does not come from the distro's own repository. All of them arrive through
+`mise` except Rust, which is `rustup`. Node.js is installed with `mise`
+(`mise use -g node@latest`) on all three distros rather than from a distro
+package or a third-party repository — no build adds an APT repository or GPG
+key any more — so `node`, `npm`, and `npx` are versioned the way the JDK is and
+an account can move to another release with `mise use -g node@<version>`
+without `sudo`. Each of the three has a `/usr/local/bin` symlink so a
+non-interactive `ssh <vm> node script.js` finds it. `wrangler` and `playwright`
+are the only npm packages left in the image, and both are installed through
+`mise`'s npm backend rather than with `npm install -g`.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of
