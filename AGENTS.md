@@ -41,7 +41,9 @@ of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 documented contract. What remains is hardening: the integration
 suite in `test/integration/` now covers the image build **and** the VM
 lifecycle — create, boot, SSH, stop/start/restart, destroy, rollback after a
-failed create, and the refusal to destroy a domain this tool did not create —
+failed create, the refusal to destroy a domain this tool did not create, and
+growable memory (a VM created with `--max-memory` is booted, grown with `virsh
+update-memory-device`, and checked from inside the guest) —
 and the whole suite has been run to completion against a real KVM host
 (libvirt 12.6.0, QEMU 11.1.0, `virt-install` 5.1.0), booting all three
 supported distros. The lifecycle suite now takes a
