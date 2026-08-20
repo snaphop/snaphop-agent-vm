@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-// noEnv is an environment in which no AGENT_VM_* variable is set.
+// noEnv is an environment in which nothing is set: no AGENT_VM_* variable, and
+// no HOME or XDG_* directory either. Configuration resolution reads the
+// environment only through an Environ, so a test using this cannot pick up the
+// configuration file of whoever is running it.
 func noEnv(string) string { return "" }
 
 // envMap turns a map into an Environ, so tests never mutate the real
@@ -206,13 +209,77 @@ func TestLoad_RejectsUnknownNetworkMode(t *testing.T) {
 	}
 }
 
-func TestLoad_ExpandsTildeInPaths(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home directory: %v", err)
-	}
+// A test that resolves configuration must not read the config file of the
+// account running it: the operator's own file sets a network mode, a bridge and
+// resource sizes, so leaking it makes results depend on whose machine the suite
+// runs on. Every environment and home-directory lookup therefore goes through
+// the injected Environ rather than the process environment. Both lookups that
+// locate the file are covered, because either one leaking is enough.
+func TestLoad_IgnoresTheProcessEnvironment(t *testing.T) {
+	// A configuration that would be impossible to miss if it were read.
+	const contents = `[defaults]
+network = "bridge"
+vcpus = 64
 
-	cfg, err := Load(noEnv, Overrides{StateDir: "~/agent-vm-state"})
+[network.bridge]
+interface = "br-leaked"
+`
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		// XDG_CONFIG_HOME unset, so the file is located through $HOME.
+		{name: "via HOME", env: map[string]string{"XDG_CONFIG_HOME": ""}},
+		{name: "via XDG_CONFIG_HOME"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			configHome := filepath.Join(home, ".config")
+			dir := filepath.Join(configHome, "agent-vm")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatalf("creating config dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(contents), 0o600); err != nil {
+				t.Fatalf("writing config: %v", err)
+			}
+
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", configHome)
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			// Confirm the fixture is where the process environment says it is,
+			// so a passing test cannot mean "the file was never there".
+			if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".config", "agent-vm", "config.toml")); err != nil {
+				t.Fatalf("fixture not in place: %v", err)
+			}
+
+			cfg, err := Load(noEnv, Overrides{})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.ConfigFile != "" {
+				t.Errorf("read %s from the process environment; Environ is the only source", cfg.ConfigFile)
+			}
+			if cfg.Network != NetworkNAT {
+				t.Errorf("Network = %q, want %q — bridged mode is never implicit", cfg.Network, NetworkNAT)
+			}
+			if cfg.Bridge != "" {
+				t.Errorf("Bridge = %q, want empty", cfg.Bridge)
+			}
+			if cfg.VCPUs != DefaultVCPUs {
+				t.Errorf("VCPUs = %d, want the default %d", cfg.VCPUs, DefaultVCPUs)
+			}
+		})
+	}
+}
+
+func TestLoad_ExpandsTildeInPaths(t *testing.T) {
+	home := t.TempDir()
+
+	cfg, err := Load(envMap(map[string]string{"HOME": home}), Overrides{StateDir: "~/agent-vm-state"})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
