@@ -17,6 +17,12 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Base images now carry `cf`, Cloudflare's newer CLI, installed with `mise` from npm
+  (`mise use -g npm:cf`) on the same Node runtime as `wrangler` and Playwright,
+  with a `/usr/local/bin` symlink so `ssh <vm> cf ...` works without a login
+  shell. It ships with no credentials. Existing base images do not gain it —
+  rebuild with `agent-vm image build <distro> --force`.
+
 - Docker in a VM can now build for a foreign architecture. `docker build
   --platform linux/arm64 .` works on an x86_64 host, and `--platform
   linux/amd64` on an aarch64 one, with no setup inside the guest. Every base

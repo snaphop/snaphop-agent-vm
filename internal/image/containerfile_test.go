@@ -284,7 +284,7 @@ var miseAgents = []string{"claude", "opencode", "pi"}
 var miseShims = []string{
 	"node", "npm", "npx",
 	"go", "gofmt", "golangci-lint",
-	"claude", "opencode", "pi", "wrangler", "playwright",
+	"claude", "opencode", "pi", "wrangler", "playwright", "cf",
 }
 
 // shimLoopCommands returns the command names the recipe's `for command in ...;
@@ -775,10 +775,10 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 			t.Errorf("%s does not install tea from Gitea's release server; only Arch packages it, and on Ubuntu the name belongs to an unrelated text editor", d.Containerfile)
 		}
 
-		// Playwright and wrangler are published only to npm, so they are the
-		// one place mise's npm backend is still used.
-		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright") {
-			t.Errorf("%s does not install wrangler and Playwright with mise", d.Containerfile)
+		// Playwright, wrangler and cf are published only to npm, so they are
+		// the one place mise's npm backend is still used.
+		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright npm:cf") {
+			t.Errorf("%s does not install wrangler, Playwright and cf with mise", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
 			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
@@ -1035,7 +1035,7 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank") {
 			t.Errorf("%s does not launch Chromium during the build; a missing shared library would only surface inside a VM", d.Containerfile)
 		}
-		for _, check := range []string{"gh --version", "tea --version", "wrangler --version", "playwright --version", "mise --version"} {
+		for _, check := range []string{"gh --version", "tea --version", "wrangler --version", "cf --version", "playwright --version", "mise --version"} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
 			}
