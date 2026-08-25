@@ -571,6 +571,46 @@ RUN dnf -y install \
 # Docker starts at boot so an agent finds a working daemon without asking.
 RUN systemctl --root=/ enable docker.service containerd.service
 
+# Cross-architecture container builds: docker build --platform linux/arm64.
+#
+# The usual recipe for this is `docker run --privileged --rm tonistiigi/binfmt
+# --install arm64` inside the running machine. That is the wrong shape for a
+# base image: it needs the daemon up and a registry reachable, so it costs a
+# pull on a VM that may have no route out, and the registration it makes lives
+# in the kernel of that one boot only. The distro's own qemu-user-static
+# packages ship the same interpreters with binfmt_misc rules under
+# /usr/lib/binfmt.d, which systemd-binfmt.service re-registers on every boot,
+# so an agent finds cross-building already working.
+#
+# The F (fix-binary) flag in those rules is the load-bearing part: it makes
+# the kernel hold the interpreter open, so it still resolves inside a
+# container's mount namespace, where the qemu binary does not exist. Without
+# it, `docker build --platform linux/arm64` dies with "exec format error" as
+# soon as the first RUN in the foreign-architecture stage starts.
+#
+# Both directions are installed rather than aarch64 alone: on an aarch64 host
+# the emulation that is actually missing is x86_64. Each package omits the
+# rule for the architecture it is built for, since that one needs no
+# emulation, which is why the check below looks only for the foreign one.
+
+RUN dnf -y install \
+      qemu-user-static-aarch64 \
+      qemu-user-static-x86 \
+ && dnf clean all
+
+RUN set -eu; \
+    case "$(uname -m)" in \
+      aarch64|arm64) foreign=x86_64 ;; \
+      *) foreign=aarch64 ;; \
+    esac; \
+    conf=; \
+    for candidate in "/usr/lib/binfmt.d/qemu-$foreign.conf" "/usr/lib/binfmt.d/qemu-$foreign-static.conf"; do \
+      if [ -f "$candidate" ]; then conf=$candidate; fi; \
+    done; \
+    [ -n "$conf" ] || { echo "qemu-user-static is installed but no binfmt_misc rule for $foreign landed in /usr/lib/binfmt.d; cross-architecture container builds would have no interpreter" >&2; exit 1; }; \
+    grep -q ':[A-Za-z]*F[A-Za-z]*$' "$conf" || { echo "$conf does not carry the F (fix-binary) flag; docker build --platform would fail inside the container with exec format error" >&2; exit 1; }; \
+    [ -L /usr/lib/systemd/system/sysinit.target.wants/systemd-binfmt.service ] || { echo "systemd-binfmt.service is not wanted by sysinit.target; the rules would never be registered at boot" >&2; exit 1; }
+
 # Per-account setup that can only happen once the accounts exist.
 #
 # It cannot be done here — the accounts do not exist until first boot. The

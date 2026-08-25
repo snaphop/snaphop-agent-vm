@@ -250,7 +250,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Fetching and transferring | `curl`, `wget`, `rsync`, `ssh`, `ca-certificates` |
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
-| Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot |
+| Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot, able to build for `linux/arm64` as well as the host's own architecture |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` (Cloudflare), managed by `mise` |
@@ -264,6 +264,18 @@ Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
 three. Everything except the coding agents, `tea`, `wrangler`, Playwright's
 browsers, mise, Go, and Rust comes from the distro's own repository.
+
+Docker can build for a foreign architecture out of the box: `docker build
+--platform linux/arm64 .` works on an x86_64 host, and `--platform
+linux/amd64` works on an aarch64 one. The base image installs the distro's
+`qemu-user-static` packages, whose `binfmt_misc` rules systemd registers at
+every boot with the fix-binary flag, so the emulator is reachable from inside
+a build container. Running `docker run --privileged --rm tonistiigi/binfmt
+--install arm64` in the guest is therefore unnecessary; it needs a registry
+round trip and its registration lasts only until the VM reboots. Multi-platform
+manifests in a single build (`docker buildx build --platform
+linux/amd64,linux/arm64`) still need a `docker-container` builder, which
+`docker buildx create --use --bootstrap` sets up by pulling BuildKit.
 
 #### Coding agents
 

@@ -17,6 +17,18 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Docker in a VM can now build for a foreign architecture. `docker build
+  --platform linux/arm64 .` works on an x86_64 host, and `--platform
+  linux/amd64` on an aarch64 one, with no setup inside the guest. Every base
+  image installs the distro's `qemu-user-static` packages, and systemd
+  registers their `binfmt_misc` rules on every boot with the fix-binary flag
+  that makes the emulator reachable from inside a build container. This
+  replaces the usual `docker run --privileged --rm tonistiigi/binfmt --install
+  arm64`, which needs a registry round trip and is lost on reboot. Existing
+  base images do not gain this — rebuild with `agent-vm image build
+  <distro> --force` to pick it up. Building a single multi-platform manifest still
+  needs `docker buildx create --use --bootstrap` first.
+
 - `create --opencode-config <path>` installs your own `opencode.json` in the
   VM, replacing the permissive default the base image ships. The file is
   written to `/etc/skel/.config/opencode/opencode.json` and
