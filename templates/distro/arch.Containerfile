@@ -239,21 +239,22 @@ RUN set -eu; \
       mise use --global --yes go@latest golangci-lint@latest; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
-# wrangler and Playwright, the two npm packages left in the image.
+# wrangler, Playwright, and cf: the npm packages left in the image.
 #
-# Neither is packaged by any family and both are published only to npm, so they
-# come from mise's npm backend -- `npm:` names rather than the registry names
-# the agents use, because npm is the only place they exist. They are installed
-# here, with everything else mise manages, so that root inherits them in the
-# copy below and the build can run `playwright install chromium` a few steps
-# later. What each is for, and the environment each needs, is further down.
+# None of them is packaged by any family and all are published only to npm, so
+# they come from mise's npm backend -- `npm:` names rather than the registry
+# names the agents use, because npm is the only place they exist. They are
+# installed here, with everything else mise manages, so that root inherits
+# them in the copy below and the build can run `playwright install chromium` a
+# few steps later. What each is for, and the environment each needs, is
+# further down.
 RUN set -eu; \
     export MISE_DATA_DIR=/etc/skel/.local/share/mise \
            MISE_CONFIG_DIR=/etc/skel/.config/mise \
            MISE_STATE_DIR=/etc/skel/.local/state/mise \
            MISE_CACHE_DIR=/tmp/mise-cache; \
     export PATH="$(mise where node)/bin:$PATH"; \
-    mise use --global --yes npm:wrangler npm:playwright; \
+    mise use --global --yes npm:wrangler npm:playwright npm:cf; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
 # root is created before /etc/skel exists in this form and never inherits from
@@ -282,7 +283,7 @@ RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 # place they come from now -- there is no packaged /usr/bin/node behind them.
 RUN set -eu; \
     for command in node npm npx go gofmt golangci-lint claude opencode pi \
-                   wrangler playwright; do \
+                   wrangler playwright cf; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -459,6 +460,7 @@ RUN set -eu; \
     gh --version >/dev/null || { echo "gh installed but cannot run" >&2; exit 1; }; \
     tea --version >/dev/null || { echo "tea installed but cannot run" >&2; exit 1; }; \
     wrangler --version >/dev/null || { echo "wrangler installed but cannot run" >&2; exit 1; }; \
+    cf --version >/dev/null || { echo "cf installed but cannot run" >&2; exit 1; }; \
     playwright --version >/dev/null || { echo "playwright installed but cannot run" >&2; exit 1; }; \
     if ! chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>/tmp/chromium-smoke.log; then \
       echo "chromium installed but cannot start headless:" >&2; \

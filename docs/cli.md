@@ -253,7 +253,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot, able to build for `linux/arm64` as well as the host's own architecture |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
-| Cloud CLIs | `wrangler` (Cloudflare), managed by `mise` |
+| Cloud CLIs | `wrangler` and `cf` (both Cloudflare), managed by `mise` |
 | Browser automation | `playwright`, managed by `mise`, with a headless `chromium` |
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
@@ -262,7 +262,7 @@ instead of on every first boot, and a VM works the same way offline.
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
-three. Everything except the coding agents, `tea`, `wrangler`, Playwright's
+three. Everything except the coding agents, `tea`, `wrangler`, `cf`, Playwright's
 browsers, mise, Go, and Rust comes from the distro's own repository.
 
 Docker can build for a foreign architecture out of the box: `docker build
@@ -333,6 +333,10 @@ account attached to it. `WRANGLER_SEND_METRICS=false` is set in
 `/etc/environment`, because a disposable VM an agent drives is not a machine
 whose operator chose to opt into anonymous usage reporting; unset it in the
 guest if you want the default behaviour back.
+
+`cf`, Cloudflare's newer CLI, is installed the same way
+(`mise use -g npm:cf`), on the same Node runtime, for the same reason: npm is
+the only place Cloudflare publishes it. It ships with no credentials either.
 
 There is exactly one browser in the image: the Chromium build Playwright pins.
 Playwright will not drive a browser it did not install, so a distribution
@@ -415,13 +419,13 @@ deliberately left unset, so `cargo install` writes into that account's own
 `~/go/bin` are added to the path of a login shell by
 `/etc/profile.d/agent-vm-toolchains.sh`.
 
-A build runs `gh`, `tea`, `wrangler`, `playwright`, and `mise`, launches headless Chromium against
+A build runs `gh`, `tea`, `wrangler`, `cf`, `playwright`, and `mise`, launches headless Chromium against
 `about:blank`, runs `java` and `mvn` in a login shell, runs each virtualization
 tool once, runs `go`, `gofmt`, `golangci-lint`, `rustc`, `cargo`, `rustup`,
 `cargo fmt`, and `cargo clippy`, and fails if any of it does not work. Chromium is the reason that step exists: a browser missing one shared
 library installs perfectly and exits the moment it is launched.
 
-Beyond the coding agents, `tea`, `wrangler`, Playwright's browsers, mise,
+Beyond the coding agents, `tea`, `wrangler`, `cf`, Playwright's browsers, mise,
 Node.js, Go, Rust, and `golangci-lint` are the software in a base image that
 does not come from the distro's own repository. All of them arrive through
 `mise` except Rust, which is `rustup`. Node.js is installed with `mise`
@@ -430,9 +434,9 @@ package or a third-party repository — no build adds an APT repository or GPG
 key any more — so `node`, `npm`, and `npx` are versioned the way the JDK is and
 an account can move to another release with `mise use -g node@<version>`
 without `sudo`. Each of the three has a `/usr/local/bin` symlink so a
-non-interactive `ssh <vm> node script.js` finds it. `wrangler` and `playwright`
-are the only npm packages left in the image, and both are installed through
-`mise`'s npm backend rather than with `npm install -g`.
+non-interactive `ssh <vm> node script.js` finds it. `wrangler`, `playwright`,
+and `cf` are the only npm packages left in the image, and all three are
+installed through `mise`'s npm backend rather than with `npm install -g`.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of
