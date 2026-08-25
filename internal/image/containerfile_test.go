@@ -1106,3 +1106,60 @@ func TestContainerfiles_AllowUnprivilegedPing(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerfiles_InstallCrossArchitectureBinfmt guards the guest's ability
+// to run `docker build --platform linux/arm64` without any setup inside the VM.
+//
+// The registration cannot be done at runtime with `docker run --privileged
+// tonistiigi/binfmt`: that needs a registry round trip on a VM that may have no
+// route out, and the rules it installs live only until the next reboot. Every
+// family therefore installs its own qemu-user-static packages at build time,
+// and their /usr/lib/binfmt.d rules are re-registered by systemd-binfmt.service
+// on every boot.
+func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
+	// The package that carries the interpreters, per family. Fedora splits
+	// them per target architecture; Ubuntu and Arch ship one package for
+	// every target, and Arch keeps the binfmt_misc rules in a second one.
+	packages := map[string][]string{
+		distro.Ubuntu.Containerfile: {"qemu-user-static"},
+		distro.Fedora.Containerfile: {"qemu-user-static-aarch64", "qemu-user-static-x86"},
+		distro.Arch.Containerfile:   {"qemu-user-static", "qemu-user-static-binfmt"},
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		wanted, known := packages[d.Containerfile]
+		if !known {
+			t.Fatalf("%s has no expected package list here; a new family must state the qemu-user-static packages it installs", d.Containerfile)
+		}
+		for _, pkg := range wanted {
+			if !strings.Contains(recipe, pkg) {
+				t.Errorf("%s does not install %s; `docker build --platform linux/arm64` in a guest built from it would fail with exec format error", d.Containerfile, pkg)
+			}
+		}
+
+		// Installing the packages is not enough on its own. The rule has to
+		// carry the F (fix-binary) flag, or the interpreter is not reachable
+		// from inside a build container, and systemd-binfmt has to be wanted by
+		// sysinit.target, or nothing registers the rules at boot. Both are
+		// properties of the distro's packaging rather than of anything written
+		// here, so each Containerfile asserts them at build time instead of
+		// shipping an image whose cross-builds are quietly broken.
+		if !strings.Contains(recipe, `grep -q ':[A-Za-z]*F[A-Za-z]*$'`) {
+			t.Errorf("%s does not check that the installed binfmt_misc rule carries the F (fix-binary) flag", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "sysinit.target.wants/systemd-binfmt.service") {
+			t.Errorf("%s does not check that systemd-binfmt.service is wanted by sysinit.target; the rules would never be registered at boot", d.Containerfile)
+		}
+	}
+}
