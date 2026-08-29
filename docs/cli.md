@@ -376,7 +376,11 @@ through Playwright.
 
 The browsers live in `/opt/ms-playwright`, shared by every account rather than
 downloaded per user into `~/.cache` — which a network-isolated guest could not
-do at all. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
+do at all. That directory is world-writable with the sticky bit, the way `/tmp`
+is, because every `playwright install` after the build runs as an account that
+is not root and Playwright writes a `__dirlock` and a `.links` entry into it: a
+root-owned directory would fail those installs with `EACCES`. Any account may
+add a browser build; none may remove another account's. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
 profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 

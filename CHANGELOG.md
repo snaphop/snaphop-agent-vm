@@ -15,6 +15,20 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Fixed
+
+- `playwright install` in a guest no longer fails with `EACCES: permission
+  denied, mkdir '/opt/ms-playwright/__dirlock'` for every account but root. The
+  shared browser directory the image fills at build time was left owned by root
+  and unwritable by anyone else, so the command Playwright's own "browser not
+  found" error tells you to run — the one an agent needs after `mise` moves
+  `playwright` to a release pinning a newer browser build — could not run as the
+  guest user. It is now world-writable with the sticky bit, like `/tmp`: any
+  account may add a browser build, none may remove another's. Existing base
+  images keep the old permissions; rebuild with
+  `agent-vm image build <distro> --force`, or run
+  `sudo chmod 1777 /opt/ms-playwright /opt/ms-playwright/.links` in a guest.
+
 ### Added
 
 - Every base image now carries [Herdr](https://herdr.dev), a terminal workspace

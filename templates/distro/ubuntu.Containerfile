@@ -491,6 +491,24 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN printf 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright\n' >> /etc/environment
 
+# That directory has to be writable by every account, not only by the root that
+# filled it during the build.
+#
+# Playwright takes a lock at $PLAYWRIGHT_BROWSERS_PATH/__dirlock for any
+# install and records which package needs which build under .links, so a plain
+# `playwright install` fails as any other account with "EACCES: permission
+# denied, mkdir '/opt/ms-playwright/__dirlock'" -- and that command is exactly
+# what an agent runs after mise moves playwright to a release pinning a newer
+# browser build, because it is what Playwright's own "browser not found" error
+# tells it to run.
+#
+# The sticky bit makes this /tmp's arrangement: any account may add a browser
+# build, none may remove another's. A shared directory writable by every
+# account is defensible here for the reason the agents' permissive
+# configuration is -- the VM is the sandbox, single-tenant and disposable, and
+# the accounts inside it are not a security boundary (SECURITY.md).
+RUN install -d -m 1777 /opt/ms-playwright /opt/ms-playwright/.links
+
 # Expose that browser as `chromium`, so it is usable without going through
 # Playwright. See the script for why there is only one Chromium here.
 COPY chromium.sh /usr/local/bin/chromium

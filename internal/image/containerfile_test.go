@@ -1100,6 +1100,13 @@ func TestContainerfiles_ShareTheBrowsersThroughTheEnvironment(t *testing.T) {
 		if !strings.Contains(recipe, ">> /etc/environment") {
 			t.Errorf("%s does not put PLAYWRIGHT_BROWSERS_PATH in /etc/environment; a profile script would leave non-interactive commands looking in an empty ~/.cache", d.Containerfile)
 		}
+		// Root fills the directory during the build, and every install
+		// afterwards is run by an account that is not root: Playwright's
+		// __dirlock and .links are writes into it, so a root-owned 0755
+		// directory turns `playwright install` into EACCES for everyone.
+		if !strings.Contains(recipe, "install -d -m 1777 /opt/ms-playwright /opt/ms-playwright/.links") {
+			t.Errorf("%s leaves the shared browser directory writable only by root; `playwright install` fails with EACCES on __dirlock for every other account", d.Containerfile)
+		}
 	}
 }
 
