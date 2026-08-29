@@ -253,6 +253,46 @@ func TestTmuxMenu_AlwaysLeavesAWayOut(t *testing.T) {
 	}
 }
 
+// TestTmuxMenu_GeneratesNamesWithoutAWordList pins the fallback rather than the
+// word list: a generated name is what Enter at the menu gets you, so the menu
+// has to produce one on an image where /usr/share/dict/words is missing or
+// holds nothing matching the filter.
+func TestTmuxMenu_GeneratesNamesWithoutAWordList(t *testing.T) {
+	menu := readTemplate(t, "distro/tmux-menu.sh")
+
+	if !strings.Contains(menu, "/proc/sys/kernel/random/uuid") {
+		t.Error("the tmux menu has no UUID fallback for a generated session name; an image with no word list would name every session the same")
+	}
+	if !strings.Contains(menu, `printf 'session-%s' "$(date +%H%M%S)"`) {
+		t.Error("the tmux menu has no last-resort generated name, so a guest with neither a word list nor /proc would leave the name empty")
+	}
+}
+
+// TestContainerfiles_InstallAWordList backs the menu's preferred path. The
+// package name differs per family; without it every generated session name
+// falls back to a hex suffix, which is what the two-word names replaced.
+func TestContainerfiles_InstallAWordList(t *testing.T) {
+	wordList := map[string]string{
+		distro.Ubuntu.Containerfile: "wamerican",
+		distro.Fedora.Containerfile: "words",
+		distro.Arch.Containerfile:   "words",
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		pkg, ok := wordList[d.Containerfile]
+		if !ok {
+			t.Fatalf("%s has no word-list package here; a new family must state the one it installs", d.Containerfile)
+		}
+		if !strings.Contains(readTemplate(t, "distro/"+d.Containerfile), "\n      "+pkg+" \\\n") {
+			t.Errorf("%s does not install %q, so /usr/share/dict/words is absent and every generated tmux session name falls back to a hex suffix", d.Containerfile, pkg)
+		}
+	}
+}
+
 // TestTmuxConfig_IsShippedInTheBuildContext ties the COPY above to the file the
 // builder actually writes next to the Containerfile. A COPY of a file that is
 // not in the build context fails the build minutes in, after the package

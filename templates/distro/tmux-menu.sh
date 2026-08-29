@@ -20,40 +20,51 @@ show_menu() {
     echo "  q) exit to the shell"
 }
 
-# A generated name is short on purpose: it has to be typeable at the attach
-# prompt. /proc is where a UUID comes from because uuidgen is packaged
-# separately on Ubuntu and is not installed in these images.
+# A generated name is two short random words (e.g. "cooker-opines") so it is
+# memorable and typeable at the attach prompt. The UUID fallback reads /proc
+# because uuidgen is packaged separately on Ubuntu and is not in these images.
 generated_name() {
-    local uuid
-    if uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) && [ -n "$uuid" ]; then
-        printf 'agent-%s' "${uuid%%-*}"
+    local name="" uuid=""
+    if [ -f /usr/share/dict/words ]; then
+        name=$(grep -E '^[a-z]{4,6}$' /usr/share/dict/words 2>/dev/null | shuf -n 2 2>/dev/null | paste -sd- -)
+    fi
+    if [ -n "$name" ]; then
+        printf '%s' "$name"
+    elif uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) && [ -n "$uuid" ]; then
+        printf 'session-%s' "${uuid%%-*}"
     else
-        printf 'agent-%s' "$(date +%H%M%S)"
+        printf 'session-%s' "$(date +%H%M%S)"
     fi
 }
 
 new_session() {
-    local name
-    while :; do
-        # A failed read is end of input, not an empty name: returning keeps
-        # ^D from spinning this loop forever.
-        read -r -p "Session name (empty for a generated one): " name || return
-        if [ -z "$name" ]; then
-            name=$(generated_name)
-            break
-        elif [[ $name =~ ^[A-Za-z0-9_-]+$ ]]; then
-            break
-        fi
-        echo "Only letters, numbers, underscore and dash."
-    done
+    local name="${1:-}"
+    if [ -z "$name" ]; then
+        while :; do
+            # A failed read is end of input, not an empty name: returning keeps
+            # ^D from spinning this loop forever.
+            read -r -p "Session name (empty for a generated one): " name || return
+            if [ -z "$name" ]; then
+                name=$(generated_name)
+                break
+            elif [[ $name =~ ^[A-Za-z0-9_-]+$ ]]; then
+                break
+            fi
+            echo "Only letters, numbers, underscore and dash."
+        done
+    fi
 
     if tmux has-session -t "=$name" 2>/dev/null; then
         echo "Session $name already exists; attaching to it."
-        tmux attach-session -t "=$name"
-        return
+        tmux set-option -g detach-on-destroy on
+        tmux set-option -s exit-empty on
+        exec tmux attach-session -t "=$name"
     fi
     echo "Starting session $name."
-    tmux new-session -s "$name"
+    tmux new-session -d -s "$name" -e "TMUX_SESSION_NAME=$name"
+    tmux set-option -g detach-on-destroy on
+    tmux set-option -s exit-empty on
+    exec tmux attach-session -t "=$name"
 }
 
 # read_with_completion fills the global `input` from one keypress at a time,
@@ -136,22 +147,30 @@ attach_session() {
 
     # A number picks from the list above; anything else is a name, exact first
     # and then as a unique prefix, which is what TAB was completing.
+    local target=""
     if [[ $input =~ ^[0-9]+$ ]] && ((input >= 1 && input <= ${#sessions[@]})); then
-        tmux attach-session -t "=${sessions[input - 1]}"
-        return
-    fi
-    for session in "${sessions[@]}"; do
-        [[ $session == "$input"* ]] && matches+=("$session")
-        if [[ $session == "$input" ]]; then
-            tmux attach-session -t "=$session"
-            return
-        fi
-    done
-    if ((${#matches[@]} == 1)); then
-        tmux attach-session -t "=${matches[0]}"
+        target="${sessions[input - 1]}"
     else
-        echo "No session matches $input."
+        for session in "${sessions[@]}"; do
+            [[ $session == "$input"* ]] && matches+=("$session")
+            if [[ $session == "$input" ]]; then
+                target="$session"
+                break
+            fi
+        done
+        if [ -z "$target" ]; then
+            if ((${#matches[@]} == 1)); then
+                target="${matches[0]}"
+            else
+                echo "No session matches $input."
+                return
+            fi
+        fi
     fi
+
+    tmux set-option -g detach-on-destroy on
+    tmux set-option -s exit-empty on
+    exec tmux attach-session -t "=$target"
 }
 
 list_sessions() {
@@ -175,6 +194,9 @@ main() {
         # it. Printing the key here as well doubles it on a real login.
         echo
         case "$choice" in
+        # Enter is the fast path: a new session under a generated name, with no
+        # second prompt to answer.
+        "") new_session "$(generated_name)" ;;
         n | N) new_session ;;
         a | A) attach_session ;;
         l | L) list_sessions ;;

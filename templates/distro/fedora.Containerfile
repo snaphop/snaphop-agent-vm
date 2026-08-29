@@ -89,6 +89,7 @@ RUN dnf -y install \
       file \
       tree \
       man-db \
+      words \
  && dnf clean all
 
 # The tmux configuration every guest gets.
