@@ -79,6 +79,7 @@ RUN apt-get update \
       file \
       tree \
       man-db \
+      wamerican \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

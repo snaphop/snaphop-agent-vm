@@ -68,6 +68,7 @@ RUN pacman -Syu --noconfirm --needed \
       file \
       tree \
       man-db \
+      words \
  && pacman -Scc --noconfirm
 
 # The tmux configuration every guest gets.

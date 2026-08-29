@@ -15,6 +15,21 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Changed
+
+- The tmux session menu an interactive login lands on is quicker to get through
+  and no longer leaves you at a menu after a session ends. Pressing Enter at the
+  menu starts a session straight away under a generated name, with no second
+  prompt; generated names are now two short words (`cooker-opines`) instead of
+  `agent-<hex>`; every image now installs a word list (`wamerican` on Ubuntu,
+  `words` on Fedora and Arch) for them, and a guest without one falls back to
+  `session-<hex>`.
+  Attaching now replaces the menu process rather than running underneath it, and
+  sets `detach-on-destroy on` and `exit-empty on`, so detaching or ending the
+  last session closes the SSH connection instead of dropping back to the menu.
+  Each session also gets `TMUX_SESSION_NAME` in its environment. Existing base
+  images keep the old menu; rebuild with `agent-vm image build <distro> --force`.
+
 ### Fixed
 
 - `playwright install` in a guest no longer fails with `EACCES: permission
