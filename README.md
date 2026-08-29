@@ -173,7 +173,7 @@ make per-task VMs practical
 | Pull, build, and flatten OCI images | `podman` |
 | Root filesystem, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | Host bridge validation | `ip -json link` |
-| Guest shell, and the package update `agent-vm update` runs in a guest | `ssh` |
+| Guest shell, and the package and tooling updates `agent-vm update` runs in a guest | `ssh` |
 
 Two consequences worth knowing:
 

@@ -113,7 +113,7 @@ versions are enforced by `agent-vm doctor`.
 | Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-install --cloud-init user-data=…` |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
-| Guest package update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n` |
+| Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 
 Two rules keep this maintainable. **Machine-readable output only** — `--output=json`,
