@@ -104,7 +104,7 @@ var flagValues = map[string][]string{
 var valuelessFlags = map[string]bool{
 	"verbose": true, "quiet": true, "yes": true, "dry-run": true,
 	"version": true, "help": true, "force": true, "keep-disk": true,
-	"no-start": true,
+	"no-start": true, "all": true,
 }
 
 func distroCandidates(*App) []string { return distro.Names() }
@@ -169,6 +169,7 @@ func completionSpecs() map[string]*completionSpec {
 		"stop":       {flags: timeoutFlags, args: vmName},
 		"restart":    {flags: timeoutFlags, args: vmName},
 		"ssh":        {args: vmName},
+		"update":     {flags: []string{"all", "timeout"}, args: vmName},
 		"console":    {args: vmName},
 		"destroy":    {flags: []string{"keep-disk", "force", "timeout", "github-ssh-key"}, args: vmName},
 		"completion": {args: []argSource{func(*App) []string { return shellNames() }}},

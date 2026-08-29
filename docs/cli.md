@@ -824,6 +824,45 @@ A VM that is not running exits `5`, and one that is running but has no address
 yet exits `6` — `ssh` would otherwise report a connection failure that says
 nothing about which of the two happened.
 
+### `agent-vm update <name>... | --all`
+
+Brings a running guest's distribution packages up to date over SSH, by running
+the package-manager commands for the family the VM's base image was built from:
+`apt-get update`, then a non-interactive `apt-get dist-upgrade` and
+`apt-get --purge autoremove` on Ubuntu; `dnf --refresh upgrade` and
+`dnf autoremove` on Fedora; `pacman -Syu --noconfirm` on Arch. Each step runs
+under `sudo -n` as the guest user, which cloud-init grants passwordless sudo, and
+the guest's own output is streamed to stderr as it runs.
+
+Takes one or more VM names, or `--all` for every VM recorded in this state
+directory. The two spellings are mutually exclusive, and giving neither exits `2`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--all` | off | Update every running VM in this state directory instead of naming them. |
+| `--timeout <duration>` | `30m` | How long one VM's whole update may take. Exceeding it exits `6`. |
+
+Under `--all`, a VM that is not running is **skipped**, not started: reported as
+`skipped: not running` and left alone. A VM named explicitly that is not running
+exits `5`, and one that is running with no address yet exits `6` — the same
+distinction `ssh` makes. A VM whose libvirt domain has been undefined by hand
+exits `4`.
+
+Every target is attempted even after one fails, so a single guest with an
+unreachable mirror does not leave the rest of the fleet un-updated. Each failure
+is reported to stderr as it happens; one failure exits with that failure's own
+code, and several exit `1` naming the VMs that did not update. `--output json`
+returns one object per VM with `name`, `state`, `updated`, an optional `skipped`
+reason, and an optional `error`.
+
+This updates the software **inside** a guest's overlay only. Guests boot the
+kernel and initramfs from their base image on the host ([direct kernel
+boot](./decisions/0004-direct-kernel-boot.md)), so a kernel package upgraded
+here is not the kernel the VM boots next time: a newer guest kernel comes from
+`agent-vm image build <distro> --force` and a VM created from the rebuilt image.
+Nothing is rebooted, and no base image is modified — an update lives and dies
+with the VM it ran in.
+
 ### `agent-vm destroy <name>`
 
 Powers off the VM, undefines the domain, and deletes its state directory,
@@ -882,7 +921,7 @@ Completion covers command and subcommand names, each command's own flags, the
 global flags, the values of flags whose set of values is closed (`--output`,
 `--network`, `--platform`), the supported distro families for `image build`,
 and — read from the state directory — the recorded VM names for `info`, `start`,
-`stop`, `restart`, `ssh`, `console`, and `destroy`, and the cached images for
+`stop`, `restart`, `ssh`, `update`, `console`, and `destroy`, and the cached images for
 `image inspect`, `image rm`, and `--distro`. Where `agent-vm` offers nothing,
 the shell falls back to filenames, which is what `--config`, `--ssh-key`, and
 `--cloud-init` want. Nothing is offered after `--` in `agent-vm ssh <name> --`,
@@ -914,6 +953,7 @@ any command; the table below is the summary.
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
+| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> sudo -n …` per package-manager step (`apt-get`, `dnf`, or `pacman`, depending on the guest's family) |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |

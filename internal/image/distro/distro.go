@@ -32,12 +32,25 @@ type Distro struct {
 	// Everything a Containerfile can express belongs there rather than here.
 	Containerfile string
 
+	// PackageUpdate is what `agent-vm update` runs inside a guest of this
+	// family to bring its packages up to date, in order. Each step is an
+	// explicit argument vector run over ssh — no shell, so nothing here may
+	// rely on a pipeline, a redirection, or an expansion.
+	PackageUpdate []UpdateStep
+
 	// KernelPattern and InitrdPattern match the artifacts to extract from
 	// /boot after the build. They differ per family because each one names its
 	// initramfs differently, and there is no way to express "find the kernel"
 	// in a Containerfile.
 	KernelPattern string
 	InitrdPattern string
+}
+
+// UpdateStep is one command of a package update, with the name the operator
+// sees while it runs.
+type UpdateStep struct {
+	Name string
+	Argv []string
 }
 
 // ModulesDir is where every supported family keeps its kernel modules. The
@@ -83,6 +96,21 @@ var (
 		KernelPackage: "linux-image-virtual",
 		Initramfs:     "initramfs-tools",
 		Containerfile: "ubuntu.Containerfile",
+		PackageUpdate: []UpdateStep{
+			{Name: "refreshing package lists", Argv: []string{"apt-get", "update"}},
+			// A guest is unattended, so apt may never stop at a prompt: the
+			// frontend is non-interactive and a package whose config file the
+			// image changed keeps the version already installed.
+			{Name: "upgrading packages", Argv: []string{
+				"env", "DEBIAN_FRONTEND=noninteractive", "apt-get",
+				"-o", "Dpkg::Options::=--force-confdef",
+				"-o", "Dpkg::Options::=--force-confold",
+				"-y", "dist-upgrade",
+			}},
+			{Name: "removing packages nothing needs any more", Argv: []string{
+				"env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y", "--purge", "autoremove",
+			}},
+		},
 		KernelPattern: "vmlinuz-*",
 		InitrdPattern: "initrd.img-*",
 	}
@@ -93,6 +121,10 @@ var (
 		KernelPackage: "kernel-core",
 		Initramfs:     "dracut",
 		Containerfile: "fedora.Containerfile",
+		PackageUpdate: []UpdateStep{
+			{Name: "upgrading packages", Argv: []string{"dnf", "-y", "--refresh", "upgrade"}},
+			{Name: "removing packages nothing needs any more", Argv: []string{"dnf", "-y", "autoremove"}},
+		},
 		KernelPattern: "vmlinuz-*",
 		InitrdPattern: "initramfs-*.img",
 	}
@@ -103,6 +135,12 @@ var (
 		KernelPackage: "linux",
 		Initramfs:     "mkinitcpio",
 		Containerfile: "arch.Containerfile",
+		// pacman has no separate refresh step and no autoremove: -Syu does the
+		// whole upgrade, and removing orphans needs a pipeline we cannot run
+		// without a shell.
+		PackageUpdate: []UpdateStep{
+			{Name: "upgrading packages", Argv: []string{"pacman", "-Syu", "--noconfirm"}},
+		},
 		KernelPattern: "vmlinuz-linux",
 		InitrdPattern: "initramfs-linux.img",
 	}

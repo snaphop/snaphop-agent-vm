@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -56,6 +57,14 @@ type Command struct {
 	Stdin   io.Reader
 	Dir     string
 	Timeout time.Duration
+
+	// Output, when set, receives stdout and stderr as they are produced, in
+	// addition to the buffers Result carries. It exists for the invocations
+	// whose value is in watching them run: a package upgrade inside a guest
+	// takes minutes and reports what it is doing the whole time, and holding
+	// that until the command exits would leave the operator staring at
+	// nothing.
+	Output io.Writer
 
 	// DryRunStdout is returned in place of real output when a Mutate command
 	// is skipped under --dry-run, for the rare caller that must keep parsing.
@@ -132,6 +141,13 @@ func (e *Exec) Run(ctx context.Context, c Command) (*Result, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if c.Output != nil {
+		// os/exec fills these from two goroutines, so the shared writer is
+		// serialized rather than handed to both.
+		live := &syncWriter{w: c.Output}
+		cmd.Stdout = io.MultiWriter(&stdout, live)
+		cmd.Stderr = io.MultiWriter(&stderr, live)
+	}
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -253,6 +269,19 @@ func (d *DryRun) Become(c Command) error {
 
 // Planned returns the mutating commands that were printed rather than run.
 func (d *DryRun) Planned() []Command { return d.planned }
+
+// syncWriter serializes writes from the stdout and stderr copiers onto one
+// destination.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // excerpt bounds tool stderr so an error stays readable, keeping the tail —
 // where the actual diagnostic usually is.

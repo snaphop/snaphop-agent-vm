@@ -1,0 +1,237 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+)
+
+// sshArgvs returns the guest command of every ssh invocation, joined, so a test
+// can assert on what was run inside the guest rather than on the ssh options.
+func sshArgvs(fake *hostexec.Fake) []string {
+	guest := []string{}
+	for _, call := range fake.Calls() {
+		if call.Name != "ssh" {
+			continue
+		}
+		for i, arg := range call.Args {
+			if strings.Contains(arg, "@") {
+				guest = append(guest, strings.Join(call.Args[i+1:], " "))
+				break
+			}
+		}
+	}
+	return guest
+}
+
+func TestUpdate_RunsTheDistrosPackageUpdateInTheGuest(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	guest := sshArgvs(fake)
+	want := []string{
+		"sudo -n apt-get update",
+		"sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -y dist-upgrade",
+		"sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove",
+	}
+	for _, step := range want {
+		if !contains(guest, step) {
+			t.Errorf("the guest was never asked to run %q:\n%s", step, fake)
+		}
+	}
+	if !strings.Contains(stdout, "updated") {
+		t.Errorf("the outcome is not reported:\n%s", stdout)
+	}
+}
+
+func TestUpdate_RunsUnattendedSoItCannotStopAtAPrompt(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+
+	if code, _, stderr := cliRun(t, fake, stateDir, "update", "agent-01"); code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	for _, call := range fake.Calls() {
+		if call.Name != "ssh" {
+			continue
+		}
+		if !contains(call.Args, "BatchMode=yes") {
+			t.Errorf("an update must not be able to sit on an ssh prompt: %v", call.Argv())
+		}
+	}
+}
+
+func TestUpdate_ReportsAFailingStepAndStopsThatVM(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "ssh" && contains(c.Args, "update") {
+			return hostexec.FakeResponse{ExitCode: 100, Stderr: "Could not resolve 'archive.ubuntu.com'\n"}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	code, _, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+	if !strings.Contains(stderr, "archive.ubuntu.com") {
+		t.Errorf("the guest's own diagnosis should reach the operator:\n%s", stderr)
+	}
+	for _, step := range sshArgvs(fake) {
+		if strings.Contains(step, "dist-upgrade") {
+			t.Errorf("a failed refresh must not be followed by an upgrade: %q", step)
+		}
+	}
+}
+
+func TestUpdate_RefusesAVMThatIsNotRunning(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := stoppedHost(t, "agent-01")
+
+	code, _, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code != ExitConflict {
+		t.Errorf("exit code = %d, want %d", code, ExitConflict)
+	}
+	if !strings.Contains(stderr, "not running") {
+		t.Errorf("the refusal should say what state the VM is in:\n%s", stderr)
+	}
+	if len(sshArgvs(fake)) != 0 {
+		t.Errorf("a stopped VM must not be connected to:\n%s", fake)
+	}
+}
+
+func TestUpdate_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+
+	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "update", "someone-elses-vm")
+	if code != ExitNotFound {
+		t.Errorf("exit code = %d, want %d", code, ExitNotFound)
+	}
+}
+
+func TestUpdate_AllSkipsStoppedVMsInsteadOfStartingThem(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := stoppedHost(t, "agent-01")
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, "update", "--all")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "skipped: not running") {
+		t.Errorf("a skipped VM should be reported as skipped:\n%s", stdout)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, " start ") {
+			t.Errorf("--all must not start a stopped VM: %v", argv)
+		}
+	}
+}
+
+func TestUpdate_AllAttemptsEveryVMEvenAfterOneFails(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	if code, _, stderr := cliRun(t, createHost(t), stateDir, "create", "agent-02",
+		"--ssh-key", keyFile(t)); code != ExitOK {
+		t.Fatalf("creating the second VM failed with %d: %s", code, stderr)
+	}
+
+	fake := runningHost(t, "agent-01", "agent-02")
+	// The two guests answer on different addresses, so the ssh invocations of
+	// one can be failed without touching the other's.
+	fake.RespondPrefix("virsh --connect qemu:///system domifaddr agent-02",
+		hostexec.FakeResponse{Stdout: strings.ReplaceAll(readToolout(t, "virsh-domifaddr.txt"), "192.168.122.3", "192.168.122.4")})
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "ssh" && contains(c.Args, "agent@192.168.122.3") {
+			return hostexec.FakeResponse{ExitCode: 100, Stderr: "mirror unreachable\n"}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	code, stdout, _ := cliRun(t, fake, stateDir, "update", "--all")
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d", code, ExitFailure)
+	}
+	// The second VM is still updated, and both outcomes are reported.
+	if !contains(sshArgvs(fake), "sudo -n apt-get update") {
+		t.Errorf("the VM after the failing one was never updated:\n%s", fake)
+	}
+	for _, want := range []string{"agent-01", "failed", "agent-02", "updated"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the report is missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// keyFile writes a public key for a create that does not need its own state
+// directory.
+func keyFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "id_ed25519.pub")
+	if err := os.WriteFile(path, []byte(publicKey), 0o600); err != nil {
+		t.Fatalf("writing the key file: %v", err)
+	}
+	return path
+}
+
+func TestUpdate_JSONReportsEachVM(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+
+	code, stdout, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir,
+		"--output", "json", "update", "--all")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	var results []updateResult
+	if err := json.Unmarshal([]byte(stdout), &results); err != nil {
+		t.Fatalf("decoding the result: %v\n%s", err, stdout)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1: %s", len(results), stdout)
+	}
+	if results[0].Name != "agent-01" || !results[0].Updated || results[0].State != "running" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestUpdate_WithoutATargetIsAUsageError(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+
+	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "update")
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+
+	code, _, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir, "update", "agent-01", "--all")
+	if code != ExitUsage {
+		t.Errorf("naming a VM alongside --all: exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "--all takes no VM names") {
+		t.Errorf("the usage error should say why:\n%s", stderr)
+	}
+}
+
+func TestUpdate_DryRunPrintsTheGuestCommandsAndRunsNone(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, "--dry-run", "update", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "apt-get update") {
+		t.Errorf("the plan does not name the commands it would run:\n%s", stdout)
+	}
+	if len(sshArgvs(fake)) != 0 {
+		t.Errorf("a dry run must not touch the guest:\n%s", fake)
+	}
+}
