@@ -661,6 +661,19 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Installing an npm-backed tool with `mise` inside a guest works for the agent
+  account again. `mise`'s npm backend takes a lock under `/tmp/fslock`, a
+  directory owned by whichever account creates it first and not writable by any
+  other, so root creating it — during the image build, or during the root half
+  of `agent-vm update` — left the guest user's `mise use -g npm:wrangler` (and
+  the unelevated half of `agent-vm update`) failing with "failed to acquire
+  project lock: Permission denied" before it downloaded anything. Base images
+  no longer ship the build's copy of that directory and now recreate it at
+  every boot with `/tmp`'s own permissions, and `agent-vm update` gives root's
+  `mise` steps a `TMPDIR` of their own so VMs created from an existing image
+  can be updated without rebuilding. Rebuild a base image (`agent-vm image
+  build <distro> --force`) to pick up the boot-time rule.
+
 - `agent-vm image build <distro> --force` and `agent-vm image rm <distro>
   --force` work again. Both commands stopped reading their own flags at the
   distro name, so a `--force` written after it — the spelling this changelog and

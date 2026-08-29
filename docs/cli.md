@@ -841,7 +841,7 @@ Then the rest of what a guest carries, in this order:
 | Step | What it runs | As |
 |---|---|---|
 | `mise` itself | `mise self-update --yes`, which also refreshes its plugins | root |
-| root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` | root |
+| root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
 | the guest user's mise-managed tools | `mise upgrade --yes` | the guest user |
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` | root |
@@ -855,6 +855,10 @@ shared, root-owned installations, so each is updated once for the whole VM.
 
 Steps run as root go through `sudo -n` as the guest user, which cloud-init grants
 passwordless sudo, and the guest's own output is streamed to stderr as it runs.
+Root's `mise` steps are given their own `TMPDIR` because `mise`'s npm backend
+locks each install under `$TMPDIR/fslock`, a directory owned by whichever
+account creates it: left at the default, root's steps would take `/tmp/fslock`
+and the guest user's step after them would fail to acquire its lock.
 Before each tooling step the guest is asked whether it has the command at all; a
 VM built from an image that predates one — or from an image you built yourself —
 skips that step and reports it, rather than failing the update.
