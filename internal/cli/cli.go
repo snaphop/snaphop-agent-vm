@@ -85,6 +85,7 @@ func commands() map[string]*command {
 		stopCommand(),
 		restartCommand(),
 		sshCommand(),
+		updateCommand(),
 		consoleCommand(),
 		destroyCommand(),
 		completionCommand(),
@@ -126,6 +127,23 @@ func parseNamed(flags *flag.FlagSet, args []string, usage string) (string, error
 		}
 	}
 	return name, nil
+}
+
+// parseNames parses a command that takes any number of names plus flags,
+// with the same tolerance for flags written after a name that parseNamed has.
+func parseNames(flags *flag.FlagSet, args []string, usage string) ([]string, error) {
+	if err := flags.Parse(args); err != nil {
+		return nil, &ExitError{Code: ExitUsage, Err: err}
+	}
+
+	names := []string{}
+	for flags.NArg() > 0 {
+		names = append(names, flags.Arg(0))
+		if err := flags.Parse(flags.Args()[1:]); err != nil {
+			return nil, &ExitError{Code: ExitUsage, Err: err}
+		}
+	}
+	return names, nil
 }
 
 // Run parses global flags, dispatches to a subcommand, and returns the process

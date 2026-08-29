@@ -36,7 +36,7 @@ of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
 `Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
 `internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
-`start`, `stop`, `restart`, `ssh`, `console`, `destroy`, `completion`,
+`start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `completion`,
 `--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
 documented contract. What remains is hardening: the integration
 suite in `test/integration/` now covers the image build **and** the VM

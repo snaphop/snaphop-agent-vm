@@ -17,6 +17,19 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm update <name>...` brings a running VM's Linux packages up to date
+  from the host, without opening a shell in it: `apt-get update` and a
+  non-interactive `apt-get dist-upgrade` on Ubuntu, `dnf --refresh upgrade` on
+  Fedora, `pacman -Syu` on Arch, each followed by the family's cleanup step.
+  `agent-vm update --all` does the same for every VM in the state directory,
+  skipping the ones that are not running rather than starting them, and
+  attempting every VM even after one fails. The guest's own package-manager
+  output is streamed as it runs, `--timeout` (default 30m) bounds each VM, and
+  `--output json` reports per-VM results. Because guests boot their kernel from
+  the base image on the host, this updates the software inside a VM but not the
+  kernel it boots — a newer guest kernel still comes from `agent-vm image build
+  <distro> --force`.
+
 - Base images now carry `cf`, Cloudflare's newer CLI, installed with `mise` from npm
   (`mise use -g npm:cf`) on the same Node runtime as `wrangler` and Playwright,
   with a `/usr/local/bin` symlink so `ssh <vm> cf ...` works without a login

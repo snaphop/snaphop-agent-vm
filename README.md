@@ -10,8 +10,8 @@ thrown away when the task is done.
 
 > **Status: implementation in progress.** Every command in the documented
 > contract is implemented — `doctor`, `image build`/`list`/`inspect`/`rm`,
-> `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `console`,
-> `destroy`, and `completion` — and the integration suite has built and booted
+> `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `update`,
+> `console`, `destroy`, and `completion` — and the integration suite has built and booted
 > all three supported distros on a real KVM host, in **both** network modes:
 > the full lifecycle has been run for each distro under NAT and against a real
 > host bridge. What remains is hardening rather than missing commands.
@@ -173,7 +173,7 @@ make per-task VMs practical
 | Pull, build, and flatten OCI images | `podman` |
 | Root filesystem, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | Host bridge validation | `ip -json link` |
-| Guest shell | `ssh` |
+| Guest shell, and the package update `agent-vm update` runs in a guest | `ssh` |
 
 Two consequences worth knowing:
 

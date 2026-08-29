@@ -113,6 +113,7 @@ versions are enforced by `agent-vm doctor`.
 | Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-install --cloud-init user-data=…` |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
+| Guest package update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n` |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 
 Two rules keep this maintainable. **Machine-readable output only** — `--output=json`,
@@ -438,7 +439,7 @@ configuration; the only key material referenced is an SSH public key path.
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization | `image build` fails; appliance problems are the usual cause | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
-| `ssh` | any | `agent-vm ssh` | Only that subcommand fails | Host operator |
+| `ssh` | any | `agent-vm ssh`, `agent-vm update` | Only those subcommands fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |
 | Container registries | — | Source images | `image build` fails; unaffected once cached | Retry; pin digests to avoid surprise drift |
 | `cloud-init` in the guest | — | First-boot configuration | VM boots but has no user or SSH key; surfaces as a `--wait-for-ssh` timeout | Console log shows cloud-init output; fix the base image |
