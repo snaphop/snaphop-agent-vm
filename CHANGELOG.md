@@ -15,7 +15,39 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Fixed
+
+- `playwright install` in a guest no longer fails with `EACCES: permission
+  denied, mkdir '/opt/ms-playwright/__dirlock'` for every account but root. The
+  shared browser directory the image fills at build time was left owned by root
+  and unwritable by anyone else, so the command Playwright's own "browser not
+  found" error tells you to run — the one an agent needs after `mise` moves
+  `playwright` to a release pinning a newer browser build — could not run as the
+  guest user. It is now world-writable with the sticky bit, like `/tmp`: any
+  account may add a browser build, none may remove another's. Existing base
+  images keep the old permissions; rebuild with
+  `agent-vm image build <distro> --force`, or run
+  `sudo chmod 1777 /opt/ms-playwright /opt/ms-playwright/.links` in a guest.
+
 ### Added
+
+- Every base image now carries [Herdr](https://herdr.dev), a terminal workspace
+  manager for coding agents, and starts a server for `root` and every
+  interactive account at boot. The server owns the panes the agents run in, so
+  an agent left working in one keeps working while nobody is attached: run
+  `herdr` in an SSH session on the guest, or `herdr --remote <ip>` from your own
+  machine, to attach to it and detach again. It is installed with `mise`
+  (`mise use -g herdr`) like the `claude`, `opencode` and `pi` agents, so
+  `agent-vm update` keeps it current and an account can move to another release
+  itself. Each account's server is its own `agent-vm-herdr@<account>` systemd
+  unit, started by `agent-vm-herdr.service`, and uses only that account's
+  configuration and socket under `~/.config/herdr`; `systemctl status
+  agent-vm-herdr@<account>` is where one that will not start says why, and
+  `sudo systemctl stop agent-vm-herdr@<account>` turns it off. Accounts with no
+  login shell, and accounts with no `herdr` of their own — the account a
+  distribution bakes into its own image, such as Ubuntu's `ubuntu` — are
+  skipped, with the reason in the journal. Existing base
+  images do not have it — rebuild with `agent-vm image build <distro> --force` to get it.
 
 - `agent-vm update <name>...` brings a running VM's Linux packages up to date
   from the host, without opening a shell in it: `apt-get update` and a

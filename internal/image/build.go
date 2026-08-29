@@ -73,6 +73,7 @@ var buildContextFiles = []string{
 	"toolchains.sh",
 	"user-setup.sh",
 	"codex-remote-control.sh",
+	"herdr-server.sh",
 	"tmux-menu.sh",
 	"tmux-menu-profile.sh",
 }

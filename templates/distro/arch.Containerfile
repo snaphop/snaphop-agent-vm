@@ -178,6 +178,30 @@ RUN set -eu; \
       mise use --global --yes claude opencode pi; \
     rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
 
+# herdr, the terminal workspace manager a guest runs as a daemon.
+#
+# It owns the panes the agents above run in and keeps them alive across
+# disconnections: a server is started for every account at boot -- see the unit
+# further down -- an SSH session attaches to it by running `herdr`, and an
+# operator on the host attaches to the same server with `herdr --remote <vm>`.
+# Like the agents it comes from mise's registry, so the name resolves to the
+# vendor's own release binary and an account that needs another release runs
+# `mise use -g herdr@<version>` for itself. The version is unpinned for the same
+# reason theirs are: reproducibility comes from the digest the manifest records
+# for the source image (ADR-0006), not from the version of a tool that ships
+# several releases a week.
+#
+# The install goes into /etc/skel, like everything else mise manages here, so
+# herdr is in place before anyone logs in rather than being downloaded per
+# account inside a guest that may have no network at all.
+RUN set -eu; \
+    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_CONFIG_DIR=/etc/skel/.config/mise \
+    MISE_STATE_DIR=/etc/skel/.local/state/mise \
+    MISE_CACHE_DIR=/tmp/mise-cache \
+      mise use --global --yes herdr; \
+    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+
 # The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
 #
 # Neither version is pinned, like every other package here -- a pinned one would
@@ -295,7 +319,7 @@ RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 # place they come from now -- there is no packaged /usr/bin/node behind them.
 RUN set -eu; \
     for command in node npm npx go gofmt golangci-lint claude opencode pi \
-                   wrangler playwright cf; do \
+                   herdr wrangler playwright cf; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -340,6 +364,16 @@ RUN set -eu; \
         exit 1; \
       fi; \
     done
+
+# The same check for herdr, which is not an agent but is started as a daemon in
+# every VM built on this image. A herdr that cannot start would surface as a
+# failed unit on every boot of every guest instead of here, once.
+RUN set -eu; \
+    if ! herdr --version >/dev/null 2>&1; then \
+      echo 'the herdr CLI installed but cannot run:' >&2; \
+      herdr --version >&2 || true; \
+      exit 1; \
+    fi
 
 # The agents' configuration, each set to its most permissive mode so that an
 # agent works unattended instead of blocking on an approval prompt nobody is
@@ -456,6 +490,24 @@ RUN printf 'WRANGLER_SEND_METRICS=false\n' >> /etc/environment
 # profile.d file would leave exactly that case pointing at an empty ~/.cache.
 RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright playwright install chromium
 RUN printf 'PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright\n' >> /etc/environment
+
+# That directory has to be writable by every account, not only by the root that
+# filled it during the build.
+#
+# Playwright takes a lock at $PLAYWRIGHT_BROWSERS_PATH/__dirlock for any
+# install and records which package needs which build under .links, so a plain
+# `playwright install` fails as any other account with "EACCES: permission
+# denied, mkdir '/opt/ms-playwright/__dirlock'" -- and that command is exactly
+# what an agent runs after mise moves playwright to a release pinning a newer
+# browser build, because it is what Playwright's own "browser not found" error
+# tells it to run.
+#
+# The sticky bit makes this /tmp's arrangement: any account may add a browser
+# build, none may remove another's. A shared directory writable by every
+# account is defensible here for the reason the agents' permissive
+# configuration is -- the VM is the sandbox, single-tenant and disposable, and
+# the accounts inside it are not a security boundary (SECURITY.md).
+RUN install -d -m 1777 /opt/ms-playwright /opt/ms-playwright/.links
 
 # Expose that browser as `chromium`, so it is usable without going through
 # Playwright. See the script for why there is only one Chromium here.
@@ -665,6 +717,65 @@ RUN printf '%s\n' \
       'WantedBy=cloud-final.service' \
       > /usr/lib/systemd/system/agent-vm-codex-remote-control.service \
  && systemctl --root=/ enable agent-vm-codex-remote-control.service
+
+# The Herdr servers, one per interactive account, started at every boot.
+#
+# Same shape and the same reasons as the codex daemon above: the accounts do
+# not exist when the image is built, and a server dies with the VM, so it is
+# started again on each boot. The difference is who owns the process. Each
+# account's server is an instance of the template unit below, so systemd
+# supervises it -- its output is in the journal, a crash is restarted, and
+# `systemctl status agent-vm-herdr@<account>` says what it is doing -- and the
+# script is only what starts one instance per account.
+COPY herdr-server.sh /usr/local/sbin/agent-vm-herdr-server
+RUN chmod 0755 /usr/local/sbin/agent-vm-herdr-server
+
+# %i is the account name. systemd fills HOME, USER and LOGNAME from the account
+# database for a unit with User= set, and HOME is what decides which account's
+# configuration and socket the server uses -- both live in $HOME/.config/herdr
+# -- so each instance is that account's own server and no two of them collide.
+# The command is the /usr/local/bin shim, because a mise-installed herdr exists
+# nowhere else that a system unit could name.
+#
+# The start limit is wider than the default ten seconds on purpose: with a
+# five-second RestartSec only two starts fit in that window, so a server that
+# cannot run at all -- a mise shim pointing at nothing, say -- would be
+# restarted for the life of the VM without ever tripping the limit. At sixty
+# seconds it gives up after five attempts and stays failed, where the journal
+# still has the reason.
+RUN printf '%s\n' \
+      '[Unit]' \
+      'Description=Herdr terminal workspace server for %i' \
+      'After=network-online.target' \
+      'StartLimitIntervalSec=60' \
+      'StartLimitBurst=5' \
+      '' \
+      '[Service]' \
+      'Type=simple' \
+      'User=%i' \
+      'ExecStart=/usr/local/bin/herdr server' \
+      'Restart=on-failure' \
+      'RestartSec=5' \
+      > /usr/lib/systemd/system/agent-vm-herdr@.service
+
+# Wanted by cloud-final.service for the same reason as the units above: a unit
+# ordered after cloud-final and wanted by multi-user.target forms a cycle that
+# systemd breaks by silently dropping our job.
+RUN printf '%s\n' \
+      '[Unit]' \
+      'Description=Herdr servers for interactive accounts' \
+      'After=cloud-final.service agent-vm-user-setup.service network-online.target' \
+      'Wants=cloud-final.service network-online.target' \
+      '' \
+      '[Service]' \
+      'Type=oneshot' \
+      'RemainAfterExit=yes' \
+      'ExecStart=/usr/local/sbin/agent-vm-herdr-server' \
+      '' \
+      '[Install]' \
+      'WantedBy=cloud-final.service' \
+      > /usr/lib/systemd/system/agent-vm-herdr.service \
+ && systemctl --root=/ enable agent-vm-herdr.service
 
 # The virtualization stack, so a VM can create VMs of its own.
 #

@@ -284,7 +284,7 @@ var miseAgents = []string{"claude", "opencode", "pi"}
 var miseShims = []string{
 	"node", "npm", "npx",
 	"go", "gofmt", "golangci-lint",
-	"claude", "opencode", "pi", "wrangler", "playwright", "cf",
+	"claude", "opencode", "pi", "herdr", "wrangler", "playwright", "cf",
 }
 
 // shimLoopCommands returns the command names the recipe's `for command in ...;
@@ -935,6 +935,89 @@ func TestCodexRemoteControl_StartsAtEveryBootWithoutBreakingIt(t *testing.T) {
 	}
 }
 
+// TestHerdr_RunsAsADaemonForEveryAccount guards the terminal workspace server
+// a guest is supposed to come up with.
+//
+// Herdr is what keeps an agent's panes alive across disconnections, so it is
+// installed from mise's registry like the agents and started at every boot --
+// the accounts do not exist when the image is built, and a server dies with
+// the VM. Each account's server is an instance of a template unit so systemd
+// supervises it rather than this project's shell script.
+func TestHerdr_RunsAsADaemonForEveryAccount(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		if !strings.Contains(recipe, "mise use --global --yes herdr") {
+			t.Errorf("%s does not install herdr with mise; a guest built from it has no terminal workspace server to attach to", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "COPY herdr-server.sh /usr/local/sbin/agent-vm-herdr-server") {
+			t.Errorf("%s does not install the herdr boot script", d.Containerfile)
+		}
+		// The template unit is what systemd supervises, one instance per
+		// account. User=%i is what gives each account its own HOME, and so
+		// its own configuration and socket under $HOME/.config/herdr.
+		for _, line := range []string{
+			"'User=%i' \\",
+			// A five-second RestartSec fits only two starts into the
+			// default ten-second window, so a server that cannot run at
+			// all would be restarted forever without tripping the limit.
+			"'StartLimitIntervalSec=60' \\",
+			"'ExecStart=/usr/local/bin/herdr server' \\",
+			"> /usr/lib/systemd/system/agent-vm-herdr@.service",
+		} {
+			if !strings.Contains(recipe, line) {
+				t.Errorf("%s does not write %s into the herdr template unit; each account's server would not be its own", d.Containerfile, line)
+			}
+		}
+		if !strings.Contains(recipe, "enable agent-vm-herdr.service") {
+			t.Errorf("%s does not enable agent-vm-herdr.service; no server would ever start on a VM", d.Containerfile)
+		}
+		// Wanted by cloud-final.service, not multi-user.target, for the same
+		// reason as the units above it: a unit ordered after cloud-final and
+		// wanted by that target forms a cycle systemd breaks by dropping our
+		// job, leaving the unit enabled, inactive, and silent.
+		if !strings.Contains(recipe, "'WantedBy=cloud-final.service' \\\n      > /usr/lib/systemd/system/agent-vm-herdr.service") {
+			t.Errorf("%s does not attach the herdr unit to cloud-final.service; ordering it after cloud-final under multi-user.target forms a cycle and the job is silently dropped", d.Containerfile)
+		}
+	}
+
+	script := readTemplate(t, "distro/herdr-server.sh")
+
+	// One instance per account, started through systemd: a server spawned by
+	// the script itself would be a child of a oneshot unit with no journal of
+	// its own and nothing to restart it.
+	if !strings.Contains(script, `systemctl start "agent-vm-herdr@${name}.service"`) {
+		t.Error("the boot script does not start a template-unit instance per account; the servers would not be supervised")
+	}
+	// root has a home in the image and may well be the account an agent runs
+	// as, so it gets a server like every interactive account does.
+	if !strings.Contains(script, "start_for_account root /root") {
+		t.Error("the boot script does not start a server for root")
+	}
+	// The image installs herdr into /etc/skel, so every account cloud-init
+	// creates has one -- but an account baked into the distro's own image,
+	// Ubuntu's `ubuntu`, predates that skel, and /usr/local/bin/herdr is a
+	// mise shim that exits at once for such an account.
+	if !strings.Contains(script, `[ ! -x "${home}/.local/share/mise/shims/herdr" ]`) {
+		t.Error("the boot script starts a server for an account with no mise-installed herdr; the shim exits at once and the unit is restarted")
+	}
+	// The uid range does not separate people from system accounts on its own:
+	// Ubuntu's libvirt-qemu is uid 64055, and an instance started for it
+	// crash-loops for the life of the VM because Restart= brings it back.
+	if !strings.Contains(script, "*/nologin | */false") {
+		t.Error("the boot script starts a server for accounts with no login shell; Ubuntu's libvirt-qemu (uid 64055) would get one and restart forever")
+	}
+	// An account whose server will not start is a reason to look in the
+	// journal, not to mark the boot degraded.
+	if strings.Contains(script, "exit 1") {
+		t.Error("the boot script can exit non-zero; one account's failed server would boot the whole VM degraded")
+	}
+}
+
 // TestContainerfiles_InstallTheVirtualizationStack guards the tooling that
 // lets a guest run VMs of its own.
 //
@@ -1016,6 +1099,13 @@ func TestContainerfiles_ShareTheBrowsersThroughTheEnvironment(t *testing.T) {
 		}
 		if !strings.Contains(recipe, ">> /etc/environment") {
 			t.Errorf("%s does not put PLAYWRIGHT_BROWSERS_PATH in /etc/environment; a profile script would leave non-interactive commands looking in an empty ~/.cache", d.Containerfile)
+		}
+		// Root fills the directory during the build, and every install
+		// afterwards is run by an account that is not root: Playwright's
+		// __dirlock and .links are writes into it, so a root-owned 0755
+		// directory turns `playwright install` into EACCES for everyone.
+		if !strings.Contains(recipe, "install -d -m 1777 /opt/ms-playwright /opt/ms-playwright/.links") {
+			t.Errorf("%s leaves the shared browser directory writable only by root; `playwright install` fails with EACCES on __dirlock for every other account", d.Containerfile)
 		}
 	}
 }

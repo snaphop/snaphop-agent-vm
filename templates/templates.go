@@ -18,6 +18,6 @@ import "embed"
 //go:embed distro/agent-aliases.sh distro/chromium.sh distro/mise.sh
 //go:embed distro/toolchains.sh
 //go:embed distro/user-setup.sh distro/tmux-menu.sh distro/tmux-menu-profile.sh
-//go:embed distro/codex-remote-control.sh
+//go:embed distro/codex-remote-control.sh distro/herdr-server.sh
 //go:embed cloud-init/*.tmpl
 var FS embed.FS
