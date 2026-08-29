@@ -168,6 +168,18 @@ const (
 	cargoHome  = "/usr/local/cargo"
 )
 
+// rootMiseTmpDir keeps root's mise out of the lock directory the guest user's
+// mise needs. mise's npm backend locks each install under $TMPDIR/fslock, and
+// that directory belongs to whichever account created it, at mode 0755 — so
+// root's upgrade, which runs first here, would otherwise create /tmp/fslock
+// and the guest user's upgrade after it would fail with "failed to acquire
+// project lock: Permission denied" before installing anything. Base images
+// built after this now ship a tmpfiles.d rule that gives /tmp/fslock /tmp's
+// own permissions, but VMs created from an older image do not, and an update
+// is exactly what they need to run. mise creates the directory if it is
+// missing, so nothing has to exist in the guest beforehand.
+const rootMiseTmpDir = "/root/.cache/mise-tmp"
+
 // ToolingUpdate is what `agent-vm update` runs in every guest, whatever its
 // family, after that family's PackageUpdate. It covers the software the base
 // images install from outside the distro's repositories — which no package
@@ -190,18 +202,19 @@ func ToolingUpdate(user string) []UpdateStep {
 		// mise first, so the newer binary is the one that resolves and installs
 		// everything below it. --yes because an update is unattended; HOME is
 		// named explicitly because sudo's env_reset decides it otherwise, and
-		// self-update also refreshes the plugins under that home.
+		// self-update also refreshes the plugins under that home. TMPDIR is
+		// named for the reason rootMiseTmpDir documents.
 		{
 			Name:     "updating mise",
 			Root:     true,
 			Requires: "mise",
-			Argv:     []string{"env", "HOME=/root", "mise", "self-update", "--yes"},
+			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, "mise", "self-update", "--yes"},
 		},
 		{
 			Name:     "upgrading root's mise-managed tools",
 			Root:     true,
 			Requires: "mise",
-			Argv:     []string{"env", "HOME=/root", "mise", "upgrade", "--yes"},
+			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, "mise", "upgrade", "--yes"},
 		},
 	}
 	if user != "root" {

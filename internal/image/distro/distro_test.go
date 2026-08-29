@@ -97,7 +97,7 @@ func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
 	steps := ToolingUpdate("root")
 	upgrades := 0
 	for _, step := range steps {
-		if strings.Join(step.Argv, " ") == "env HOME=/root mise upgrade --yes" {
+		if strings.Join(step.Argv, " ") == "env HOME=/root TMPDIR="+rootMiseTmpDir+" mise upgrade --yes" {
 			upgrades++
 		}
 		if !step.Root {
@@ -115,4 +115,33 @@ func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
 			t.Errorf("%q would fail an update in a guest built from an image without it", step.Name)
 		}
 	}
+}
+
+// TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory covers the
+// ordering hazard in an update: root's mise runs first, and mise's npm backend
+// locks each install under $TMPDIR/fslock -- a directory owned by whoever
+// created it, at mode 0755. Left at the default /tmp, root's steps create it
+// and the guest user's `mise upgrade` after them fails with "failed to acquire
+// project lock: Permission denied" before installing anything.
+func TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory(t *testing.T) {
+	for _, step := range ToolingUpdate("agent") {
+		if step.Requires != "mise" || !step.Root {
+			continue
+		}
+		if !containsArg(step.Argv, "TMPDIR="+rootMiseTmpDir) {
+			t.Errorf("%q runs mise as root with the default TMPDIR: %v", step.Name, step.Argv)
+		}
+	}
+	if strings.HasPrefix(rootMiseTmpDir, "/tmp/") || rootMiseTmpDir == "/tmp" {
+		t.Errorf("rootMiseTmpDir = %q, which is the shared directory the guest user's mise locks in", rootMiseTmpDir)
+	}
+}
+
+func containsArg(argv []string, want string) bool {
+	for _, arg := range argv {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }

@@ -247,8 +247,8 @@ func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
 
 	guest := sshArgvs(fake)
 	want := []string{
-		"sudo -n env HOME=/root mise self-update --yes",
-		"sudo -n env HOME=/root mise upgrade --yes",
+		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp mise self-update --yes",
+		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp mise upgrade --yes",
 		// The guest user's own mise data directory, so not through sudo: root's
 		// copy and this account's copy are separate installations.
 		"mise upgrade --yes",
@@ -290,7 +290,7 @@ func TestUpdate_SkipsToolingTheGuestDoesNotHave(t *testing.T) {
 		t.Errorf("the rest of the update still counts as one:\n%s", stdout)
 	}
 	// The tools that are there are still updated.
-	if !contains(sshArgvs(fake), "sudo -n env HOME=/root mise self-update --yes") {
+	if !contains(sshArgvs(fake), "sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp mise self-update --yes") {
 		t.Errorf("one missing tool must not stop the others being updated:\n%s", fake)
 	}
 }

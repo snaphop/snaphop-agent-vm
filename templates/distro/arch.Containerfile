@@ -255,7 +255,19 @@ RUN set -eu; \
            MISE_CACHE_DIR=/tmp/mise-cache; \
     export PATH="$(mise where node)/bin:$PATH"; \
     mise use --global --yes npm:wrangler npm:playwright npm:cf; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /tmp/fslock /etc/skel/.local/share/mise/downloads
+
+# /tmp/fslock is where mise's npm backend takes the lock it holds while it
+# installs a package, and the directory belongs to whichever account created it
+# first, at mode 0755. Every install above ran as root, so committing that
+# directory would ship a root-owned lock directory in every guest: the first
+# `mise use -g npm:<package>` the agent account runs then fails with "failed to
+# acquire project lock: Permission denied" before it downloads anything, and so
+# does the unelevated half of `agent-vm update`. The rm above keeps the
+# build's copy out of the image; this rule recreates the directory at every
+# boot with /tmp's own permissions, so whichever account installs first no
+# longer locks the others out.
+RUN printf 'd /tmp/fslock 1777 root root -\n' > /etc/tmpfiles.d/agent-vm-mise-fslock.conf
 
 # root is created before /etc/skel exists in this form and never inherits from
 # it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a

@@ -1163,3 +1163,35 @@ func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount guards the
+// one thing that makes the npm packages above installable by anyone but root.
+//
+// mise's npm backend takes a lock under /tmp/fslock while it installs, and that
+// directory belongs to whichever account created it, at mode 0755. Every mise
+// install in these recipes runs as root, so a committed copy would leave the
+// agent account unable to install any npm-backed tool -- and would break the
+// unelevated half of `agent-vm update` -- with "failed to acquire project
+// lock: Permission denied". The build removes its own copy, and a tmpfiles.d
+// rule recreates the directory at boot with /tmp's own permissions.
+func TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		if !strings.Contains(recipe, "rm -rf /tmp/mise-cache /tmp/fslock ") {
+			t.Errorf("%s commits root's /tmp/fslock to the image; the agent account cannot install an npm-backed tool in a guest built from it", d.Containerfile)
+		}
+		if !strings.Contains(recipe, "d /tmp/fslock 1777 root root -") {
+			t.Errorf("%s installs no tmpfiles.d rule for /tmp/fslock; whichever account installs first locks the others out", d.Containerfile)
+		}
+	}
+}
