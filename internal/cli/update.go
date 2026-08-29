@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,20 +11,26 @@ import (
 	"time"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // defaultUpdateTimeout bounds one VM's whole update. A distribution upgrade
-// downloads and unpacks hundreds of packages over the guest's NAT link, so the
-// budget is generous: the point of the limit is that a guest waiting forever on
-// a mirror is reported rather than hanging the operator's terminal.
-const defaultUpdateTimeout = 30 * time.Minute
+// downloads and unpacks hundreds of packages over the guest's NAT link, and the
+// toolchains that follow it are downloads of their own, so the budget is
+// generous: the point of the limit is that a guest waiting forever on a mirror
+// is reported rather than hanging the operator's terminal.
+const defaultUpdateTimeout = 45 * time.Minute
+
+// sshConnectionFailed is the status ssh exits with when its own connection
+// failed, as opposed to passing on the remote command's status.
+const sshConnectionFailed = 255
 
 func updateCommand() *command {
 	return &command{
 		name:    "update",
-		summary: "bring a running VM's distro packages up to date",
+		summary: "bring a running VM's packages and tooling up to date",
 		usage:   "agent-vm update <name>... | --all [--timeout <duration>]",
 		run:     runUpdate,
 	}
@@ -183,6 +190,15 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 		return result, err
 	}
 
+	sshOptions := domain.SSHOptions{
+		User:         vm.Guest.User,
+		Address:      address,
+		IdentityFile: privateKeyFor(vm),
+		// An update is unattended by definition, so it must fail rather than
+		// stop at a prompt.
+		BatchMode: true,
+	}
+
 	// The whole update shares one budget rather than giving each step its own,
 	// because --timeout is the answer to "how long may this VM take", and a
 	// guest that spends it all downloading is as stuck as one that hangs.
@@ -196,16 +212,23 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 			return result, err
 		}
 
+		if step.Requires != "" {
+			present, err := a.guestHas(ctx, sshOptions, step.Requires, remaining)
+			if err != nil {
+				result.Error = err.Error()
+				return result, err
+			}
+			if !present {
+				a.out.Progress("[%d/%d] %s: skipping %q — no %s in this guest\n",
+					number+1, len(steps), vm.Name, step.Name, step.Requires)
+				continue
+			}
+		}
+
 		a.out.Progress("[%d/%d] %s: %s\n", number+1, len(steps), vm.Name, step.Name)
-		cmd, err := domain.SSHCommand(domain.SSHOptions{
-			User:         vm.Guest.User,
-			Address:      address,
-			IdentityFile: privateKeyFor(vm),
-			Command:      elevated(vm.Guest.User, step.Argv),
-			// An update is unattended by definition, so it must fail rather
-			// than stop at a prompt.
-			BatchMode: true,
-		})
+		run := sshOptions
+		run.Command = elevated(vm.Guest.User, step)
+		cmd, err := domain.SSHCommand(run)
 		if err != nil {
 			result.Error = err.Error()
 			return result, err
@@ -239,9 +262,11 @@ func (a *App) updateOutput() io.Writer {
 	return a.Stderr
 }
 
-// updateSteps is the package update for the family a VM was built from. A VM
-// whose base image predates this command, or whose family is no longer
-// supported, is reported rather than guessed at.
+// updateSteps is everything one VM's update runs: the package update for the
+// family it was built from, then the tooling the base images install from
+// outside that family's repositories — mise and the tools it manages, codex,
+// and the shared Rust toolchain. A VM whose base image predates this command,
+// or whose family is no longer supported, is reported rather than guessed at.
 func updateSteps(vm *state.VM) ([]distro.UpdateStep, error) {
 	family, ok := distro.Lookup(vm.BaseImage.Distro)
 	if !ok {
@@ -251,18 +276,58 @@ func updateSteps(vm *state.VM) ([]distro.UpdateStep, error) {
 	if len(family.PackageUpdate) == 0 {
 		return nil, exitf(ExitUsage, "there is no package update defined for %s guests.", family.Name)
 	}
-	return family.PackageUpdate, nil
+	steps := append([]distro.UpdateStep{}, family.PackageUpdate...)
+	return append(steps, distro.ToolingUpdate(vm.Guest.User)...), nil
 }
 
-// elevated runs a step as root. The guest user is an ordinary account with a
-// passwordless sudoers drop-in from cloud-init, so sudo is asked not to prompt:
-// a guest where that grant is missing must fail loudly rather than sit on a
-// password prompt no one is watching.
-func elevated(user string, argv []string) []string {
-	if user == "root" {
-		return argv
+// guestHas reports whether a command exists in the guest, so a step for
+// software this image does not carry is skipped instead of failing the whole
+// update. `command -v` is a shell builtin every guest's login shell has, and
+// ssh runs what it is given through that shell.
+//
+// Under --dry-run nothing is probed: the point of a dry run is to print the
+// plan, and a probe would either connect to the guest anyway or silently drop
+// every optional step from what it prints.
+func (a *App) guestHas(ctx context.Context, opts domain.SSHOptions, command string, timeout time.Duration) (bool, error) {
+	if a.dryRun {
+		return true, nil
 	}
-	return append([]string{"sudo", "-n"}, argv...)
+
+	probe := opts
+	probe.Command = []string{"command", "-v", command}
+	cmd, err := domain.SSHCommand(probe)
+	if err != nil {
+		return false, err
+	}
+	// Asking whether a command exists changes nothing.
+	cmd.Effect = hostexec.Read
+	cmd.Timeout = timeout
+
+	if _, err := a.runner.Run(ctx, cmd); err != nil {
+		var toolErr *hostexec.ToolError
+		// `command -v` exiting non-zero is the answer "no such command", not a
+		// failure of the update. ssh's own 255 is not an answer at all — a
+		// connection that dropped mid-update must be reported, not read as a
+		// guest without the tool.
+		if errors.As(err, &toolErr) && toolErr.ExitCode != sshConnectionFailed {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// elevated runs a step as root when it asked for root. The guest user is an
+// ordinary account with a passwordless sudoers drop-in from cloud-init, so sudo
+// is asked not to prompt: a guest where that grant is missing must fail loudly
+// rather than sit on a password prompt no one is watching. A step that is not
+// marked Root runs as the guest user, because it updates that account's own
+// per-user installation.
+func elevated(user string, step distro.UpdateStep) []string {
+	if !step.Root || user == "root" {
+		return step.Argv
+	}
+	return append([]string{"sudo", "-n"}, step.Argv...)
 }
 
 func (a *App) reportUpdates(results []updateResult) error {

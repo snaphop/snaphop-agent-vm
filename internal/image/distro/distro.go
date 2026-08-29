@@ -33,7 +33,8 @@ type Distro struct {
 	Containerfile string
 
 	// PackageUpdate is what `agent-vm update` runs inside a guest of this
-	// family to bring its packages up to date, in order. Each step is an
+	// family to bring its distro packages up to date, in order. It is followed
+	// by ToolingUpdate, which is the same for every family. Each step is an
 	// explicit argument vector run over ssh — no shell, so nothing here may
 	// rely on a pipeline, a redirection, or an expansion.
 	PackageUpdate []UpdateStep
@@ -46,11 +47,22 @@ type Distro struct {
 	InitrdPattern string
 }
 
-// UpdateStep is one command of a package update, with the name the operator
-// sees while it runs.
+// UpdateStep is one command of an update, with the name the operator sees
+// while it runs.
 type UpdateStep struct {
 	Name string
 	Argv []string
+	// Root runs the step through sudo. A step that writes only inside the
+	// invoking account's home leaves this off, because running it as root
+	// would update root's copy of a per-account tool and leave the account
+	// that asked for the update untouched.
+	Root bool
+	// Requires names the command the step needs, when the step applies only to
+	// guests that have it. It is probed in the guest first, and a step whose
+	// command is absent is skipped rather than failing the update: a VM built
+	// from a base image that predates a tool, or from an image an operator
+	// built themselves, is not broken — it simply has nothing to update.
+	Requires string
 }
 
 // ModulesDir is where every supported family keeps its kernel modules. The
@@ -97,17 +109,17 @@ var (
 		Initramfs:     "initramfs-tools",
 		Containerfile: "ubuntu.Containerfile",
 		PackageUpdate: []UpdateStep{
-			{Name: "refreshing package lists", Argv: []string{"apt-get", "update"}},
+			{Name: "refreshing package lists", Root: true, Argv: []string{"apt-get", "update"}},
 			// A guest is unattended, so apt may never stop at a prompt: the
 			// frontend is non-interactive and a package whose config file the
 			// image changed keeps the version already installed.
-			{Name: "upgrading packages", Argv: []string{
+			{Name: "upgrading packages", Root: true, Argv: []string{
 				"env", "DEBIAN_FRONTEND=noninteractive", "apt-get",
 				"-o", "Dpkg::Options::=--force-confdef",
 				"-o", "Dpkg::Options::=--force-confold",
 				"-y", "dist-upgrade",
 			}},
-			{Name: "removing packages nothing needs any more", Argv: []string{
+			{Name: "removing packages nothing needs any more", Root: true, Argv: []string{
 				"env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y", "--purge", "autoremove",
 			}},
 		},
@@ -122,8 +134,8 @@ var (
 		Initramfs:     "dracut",
 		Containerfile: "fedora.Containerfile",
 		PackageUpdate: []UpdateStep{
-			{Name: "upgrading packages", Argv: []string{"dnf", "-y", "--refresh", "upgrade"}},
-			{Name: "removing packages nothing needs any more", Argv: []string{"dnf", "-y", "autoremove"}},
+			{Name: "upgrading packages", Root: true, Argv: []string{"dnf", "-y", "--refresh", "upgrade"}},
+			{Name: "removing packages nothing needs any more", Root: true, Argv: []string{"dnf", "-y", "autoremove"}},
 		},
 		KernelPattern: "vmlinuz-*",
 		InitrdPattern: "initramfs-*.img",
@@ -139,12 +151,94 @@ var (
 		// whole upgrade, and removing orphans needs a pipeline we cannot run
 		// without a shell.
 		PackageUpdate: []UpdateStep{
-			{Name: "upgrading packages", Argv: []string{"pacman", "-Syu", "--noconfirm"}},
+			{Name: "upgrading packages", Root: true, Argv: []string{"pacman", "-Syu", "--noconfirm"}},
 		},
 		KernelPattern: "vmlinuz-linux",
 		InitrdPattern: "initramfs-linux.img",
 	}
 )
+
+// The paths the base images install shared, root-owned tooling into. They are
+// set by the per-distro Containerfiles under templates/distro/, and an update
+// has to name them because sudo resets the environment that would otherwise
+// carry them: /etc/environment is read by sshd through PAM, not by sudo.
+const (
+	codexHome  = "/usr/local/lib/codex"
+	rustupHome = "/usr/local/rustup"
+	cargoHome  = "/usr/local/cargo"
+)
+
+// ToolingUpdate is what `agent-vm update` runs in every guest, whatever its
+// family, after that family's PackageUpdate. It covers the software the base
+// images install from outside the distro's repositories — which no package
+// manager knows about and which therefore stays at the version the image was
+// built with unless something updates it explicitly.
+//
+// user is the account the update connects as. It matters because mise is
+// per account by design (see templates/distro/mise.sh): root's tools and the
+// guest user's tools are separate installations under separate homes, and both
+// are in use — an agent supervisor runs commands as the guest user, while the
+// boot-time services run as root. Both are upgraded, unless the guest user is
+// root and they are the same installation.
+//
+// Not covered: agy, which self-updates in the background and cannot write
+// /usr/local/bin as a non-root user, and the Playwright browser downloads,
+// which are refreshed by `playwright install` rather than by upgrading a
+// package.
+func ToolingUpdate(user string) []UpdateStep {
+	steps := []UpdateStep{
+		// mise first, so the newer binary is the one that resolves and installs
+		// everything below it. --yes because an update is unattended; HOME is
+		// named explicitly because sudo's env_reset decides it otherwise, and
+		// self-update also refreshes the plugins under that home.
+		{
+			Name:     "updating mise",
+			Root:     true,
+			Requires: "mise",
+			Argv:     []string{"env", "HOME=/root", "mise", "self-update", "--yes"},
+		},
+		{
+			Name:     "upgrading root's mise-managed tools",
+			Root:     true,
+			Requires: "mise",
+			Argv:     []string{"env", "HOME=/root", "mise", "upgrade", "--yes"},
+		},
+	}
+	if user != "root" {
+		// Unelevated on purpose: this is the account's own mise data directory,
+		// and running it through sudo would upgrade root's copy twice and leave
+		// this account on the versions the image shipped.
+		steps = append(steps, UpdateStep{
+			Name:     "upgrading " + user + "'s mise-managed tools",
+			Requires: "mise",
+			Argv:     []string{"mise", "upgrade", "--yes"},
+		})
+	}
+	return append(steps,
+		// codex is installed once into a shared, root-owned CODEX_HOME and
+		// symlinked into each account's ~/.codex, so updating it once as root
+		// updates it for everyone. `codex update` replaces the standalone
+		// package the remote-control daemon starts from.
+		UpdateStep{
+			Name:     "updating codex",
+			Root:     true,
+			Requires: "codex",
+			Argv:     []string{"env", "CODEX_HOME=" + codexHome, "codex", "update"},
+		},
+		// The Rust toolchain is shared out of /usr/local (docs/cli.md), which
+		// is why this needs root at all; CARGO_HOME is named so the update
+		// writes the proxies back where the image put them.
+		UpdateStep{
+			Name:     "updating the Rust toolchain",
+			Root:     true,
+			Requires: "rustup",
+			Argv: []string{
+				"env", "RUSTUP_HOME=" + rustupHome, "CARGO_HOME=" + cargoHome,
+				"rustup", "update",
+			},
+		},
+	)
+}
 
 // Default is the family used when the operator names none.
 var Default = Ubuntu

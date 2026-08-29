@@ -826,13 +826,42 @@ nothing about which of the two happened.
 
 ### `agent-vm update <name>... | --all`
 
-Brings a running guest's distribution packages up to date over SSH, by running
-the package-manager commands for the family the VM's base image was built from:
-`apt-get update`, then a non-interactive `apt-get dist-upgrade` and
-`apt-get --purge autoremove` on Ubuntu; `dnf --refresh upgrade` and
-`dnf autoremove` on Fedora; `pacman -Syu --noconfirm` on Arch. Each step runs
-under `sudo -n` as the guest user, which cloud-init grants passwordless sudo, and
-the guest's own output is streamed to stderr as it runs.
+Brings a running guest's software up to date over SSH — both its distribution
+packages and the tooling the base images install from outside the distro's
+repositories, which no package manager knows about.
+
+The distribution packages first, using the package-manager commands for the
+family the VM's base image was built from: `apt-get update`, then a
+non-interactive `apt-get dist-upgrade` and `apt-get --purge autoremove` on
+Ubuntu; `dnf --refresh upgrade` and `dnf autoremove` on Fedora;
+`pacman -Syu --noconfirm` on Arch.
+
+Then the rest of what a guest carries, in this order:
+
+| Step | What it runs | As |
+|---|---|---|
+| `mise` itself | `mise self-update --yes`, which also refreshes its plugins | root |
+| root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` | root |
+| the guest user's mise-managed tools | `mise upgrade --yes` | the guest user |
+| `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
+| the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` | root |
+
+`mise upgrade` covers everything `mise` manages in that account: `node`, the
+`claude`, `opencode` and `pi` agents, `java` and `maven`, `go` and
+`golangci-lint`, and the npm-backed `wrangler`, `playwright` and `cf`. It is run
+for both accounts because `mise` is per account by design — root's installation
+and the guest user's are separate, and both are in use. `codex` and Rust are
+shared, root-owned installations, so each is updated once for the whole VM.
+
+Steps run as root go through `sudo -n` as the guest user, which cloud-init grants
+passwordless sudo, and the guest's own output is streamed to stderr as it runs.
+Before each tooling step the guest is asked whether it has the command at all; a
+VM built from an image that predates one — or from an image you built yourself —
+skips that step and reports it, rather than failing the update.
+
+Two things are deliberately left alone: `agy`, which self-updates in the
+background, and the Playwright browser downloads, which are refreshed with
+`playwright install` rather than by upgrading a package.
 
 Takes one or more VM names, or `--all` for every VM recorded in this state
 directory. The two spellings are mutually exclusive, and giving neither exits `2`.
@@ -840,7 +869,7 @@ directory. The two spellings are mutually exclusive, and giving neither exits `2
 | Flag | Default | Meaning |
 |---|---|---|
 | `--all` | off | Update every running VM in this state directory instead of naming them. |
-| `--timeout <duration>` | `30m` | How long one VM's whole update may take. Exceeding it exits `6`. |
+| `--timeout <duration>` | `45m` | How long one VM's whole update may take — every step above shares the one budget. Exceeding it exits `6`. |
 
 Under `--all`, a VM that is not running is **skipped**, not started: reported as
 `skipped: not running` and left alone. A VM named explicitly that is not running
@@ -953,7 +982,7 @@ any command; the table below is the summary.
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
-| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> sudo -n …` per package-manager step (`apt-get`, `dnf`, or `pacman`, depending on the guest's family) |
+| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |

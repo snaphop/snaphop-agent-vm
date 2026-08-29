@@ -23,8 +23,21 @@ migration or rebuild step a user has to take.
   Fedora, `pacman -Syu` on Arch, each followed by the family's cleanup step.
   `agent-vm update --all` does the same for every VM in the state directory,
   skipping the ones that are not running rather than starting them, and
-  attempting every VM even after one fails. The guest's own package-manager
-  output is streamed as it runs, `--timeout` (default 30m) bounds each VM, and
+  attempting every VM even after one fails.
+
+  It also updates everything in a guest that its package manager does not know
+  about, which is most of what the base images actually carry: `mise` itself,
+  every tool `mise` manages — `node`, the `claude`, `opencode` and `pi` agents,
+  `java`, `maven`, `go`, `golangci-lint`, `wrangler`, `playwright` and `cf` — for
+  both root and the guest user, then `codex` and the shared Rust toolchain. A
+  guest that does not have one of them, because it was built from an older or a
+  hand-built image, has that step skipped and reported rather than failing the
+  update. `agy` and the Playwright browser downloads are left alone: the first
+  self-updates in the background, and the second is refreshed with `playwright
+  install`.
+
+  The guest's own output is streamed as it runs, `--timeout` (default 45m, up
+  from 30m now that the toolchains are updated too) bounds each VM, and
   `--output json` reports per-VM results. Because guests boot their kernel from
   the base image on the host, this updates the software inside a VM but not the
   kernel it boots — a newer guest kernel still comes from `agent-vm image build

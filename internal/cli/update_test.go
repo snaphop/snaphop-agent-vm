@@ -235,3 +235,83 @@ func TestUpdate_DryRunPrintsTheGuestCommandsAndRunsNone(t *testing.T) {
 		t.Errorf("a dry run must not touch the guest:\n%s", fake)
 	}
 }
+
+func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+
+	code, _, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	guest := sshArgvs(fake)
+	want := []string{
+		"sudo -n env HOME=/root mise self-update --yes",
+		"sudo -n env HOME=/root mise upgrade --yes",
+		// The guest user's own mise data directory, so not through sudo: root's
+		// copy and this account's copy are separate installations.
+		"mise upgrade --yes",
+		"sudo -n env CODEX_HOME=/usr/local/lib/codex codex update",
+		"sudo -n env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup update",
+	}
+	for _, step := range want {
+		if !contains(guest, step) {
+			t.Errorf("the guest was never asked to run %q:\n%s", step, fake)
+		}
+	}
+}
+
+func TestUpdate_SkipsToolingTheGuestDoesNotHave(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+	// A base image built before codex was part of it: every other probe answers
+	// as usual, so only codex's steps are dropped.
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "ssh" && contains(c.Args, "command") && contains(c.Args, "codex") {
+			return hostexec.FakeResponse{ExitCode: 1}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("a guest without codex is not a failed update: exit %d: %s", code, stderr)
+	}
+	for _, step := range sshArgvs(fake) {
+		if strings.Contains(step, "codex update") {
+			t.Errorf("codex was updated in a guest that does not have it: %q", step)
+		}
+	}
+	if !strings.Contains(stderr, "no codex in this guest") {
+		t.Errorf("a skipped step should say why:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "updated") {
+		t.Errorf("the rest of the update still counts as one:\n%s", stdout)
+	}
+	// The tools that are there are still updated.
+	if !contains(sshArgvs(fake), "sudo -n env HOME=/root mise self-update --yes") {
+		t.Errorf("one missing tool must not stop the others being updated:\n%s", fake)
+	}
+}
+
+func TestUpdate_ReportsAConnectionThatDropsDuringAProbe(t *testing.T) {
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+	// 255 is ssh's own failure, not a guest answering "no such command": it
+	// must not be read as a tool this image does not carry.
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "ssh" && contains(c.Args, "command") {
+			return hostexec.FakeResponse{ExitCode: 255, Stderr: "Connection closed by 192.168.122.3\n"}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	code, _, stderr := cliRun(t, fake, stateDir, "update", "agent-01")
+	if code == ExitOK {
+		t.Errorf("a dropped connection was reported as a successful update:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Connection closed") {
+		t.Errorf("the failure should carry ssh's own diagnosis:\n%s", stderr)
+	}
+}

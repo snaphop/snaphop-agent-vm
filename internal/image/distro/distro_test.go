@@ -72,3 +72,47 @@ func TestNames_ListsEverySupportedFamilyInAStableOrder(t *testing.T) {
 		t.Errorf("Names() = %s, want arch,fedora,ubuntu", got)
 	}
 }
+
+func TestToolingUpdate_UpgradesBothAccountsMiseInstallations(t *testing.T) {
+	steps := ToolingUpdate("agent")
+
+	var perUser []UpdateStep
+	for _, step := range steps {
+		if !step.Root {
+			perUser = append(perUser, step)
+		}
+	}
+	if len(perUser) != 1 {
+		t.Fatalf("want exactly one unelevated step, the guest user's own mise: %+v", perUser)
+	}
+	if got := strings.Join(perUser[0].Argv, " "); got != "mise upgrade --yes" {
+		t.Errorf("the guest user's step = %q, want mise upgrade --yes", got)
+	}
+	if !strings.Contains(perUser[0].Name, "agent") {
+		t.Errorf("the step name should say whose tools it upgrades: %q", perUser[0].Name)
+	}
+}
+
+func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
+	steps := ToolingUpdate("root")
+	upgrades := 0
+	for _, step := range steps {
+		if strings.Join(step.Argv, " ") == "env HOME=/root mise upgrade --yes" {
+			upgrades++
+		}
+		if !step.Root {
+			t.Errorf("a guest whose user is root has no separate per-user installation: %+v", step)
+		}
+	}
+	if upgrades != 1 {
+		t.Errorf("root's mise tools were upgraded %d times, want 1", upgrades)
+	}
+}
+
+func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
+	for _, step := range ToolingUpdate("agent") {
+		if step.Requires == "" {
+			t.Errorf("%q would fail an update in a guest built from an image without it", step.Name)
+		}
+	}
+}
