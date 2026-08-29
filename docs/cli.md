@@ -252,6 +252,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot, able to build for `linux/arm64` as well as the host's own architecture |
 | Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
+| Terminal workspace | `herdr`, managed by `mise`, with a server started at boot for every account |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` and `cf` (both Cloudflare), managed by `mise` |
 | Browser automation | `playwright`, managed by `mise`, with a headless `chromium` |
@@ -262,8 +263,9 @@ instead of on every first boot, and a VM works the same way offline.
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
-three. Everything except the coding agents, `tea`, `wrangler`, `cf`, Playwright's
-browsers, mise, Go, and Rust comes from the distro's own repository.
+three. Everything except the coding agents, `herdr`, `tea`, `wrangler`, `cf`,
+Playwright's browsers, mise, Go, and Rust comes from the distro's own
+repository.
 
 Docker can build for a foreign architecture out of the box: `docker build
 --platform linux/arm64 .` works on an x86_64 host, and `--platform
@@ -315,6 +317,33 @@ failing the boot. Log in inside the VM and run
 start` as that account) to start it then; `journalctl -u
 agent-vm-codex-remote-control` is where a failure is reported.
 
+#### The Herdr terminal workspace
+
+Every base image also carries [Herdr](https://herdr.dev), a terminal workspace
+manager built for coding agents: the server owns the panes the agents run in, so
+an agent left working in a pane keeps working while nobody is attached. It is
+installed with `mise` (`mise use -g herdr`) like `claude`, `opencode`, and `pi`,
+with the same `/usr/local/bin` shim, and its version is unpinned for the same
+reason theirs are.
+
+A server is started at boot for `root` and every interactive account, by the
+`agent-vm-herdr.service` unit — which starts one `agent-vm-herdr@<account>`
+instance per account, so each server is supervised by systemd and uses that
+account's own configuration and socket under `~/.config/herdr`. Unlike the codex
+daemon it needs no credentials, so it comes up on a fresh VM. Attach to it by
+running `herdr` in an SSH session on the guest, or from the host with `herdr
+--remote <ip>` against the VM's address; `systemctl status
+agent-vm-herdr@<account>` and `journalctl -u agent-vm-herdr@<account>` are where
+a server that will not start reports why. An account that would rather not have
+one runs `sudo systemctl stop agent-vm-herdr@<account>`.
+
+Accounts without a `herdr` of their own are skipped, with a line in
+`agent-vm-herdr.service`'s journal saying so: an account the distribution baked
+into its own image — Ubuntu's `ubuntu` — predates the `/etc/skel` the `mise`
+install lands in, so it has no `mise` data directory at all. Running
+`mise use -g herdr` as that account and then
+`sudo systemctl start agent-vm-herdr@<account>` gives it one.
+
 #### Forge CLIs, wrangler, browsers, and the JVM toolchain
 
 `gh` comes from each distribution's own repository. `tea` does not: only Arch
@@ -351,8 +380,8 @@ do at all. `PLAYWRIGHT_BROWSERS_PATH` is set in `/etc/environment` rather than a
 profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 
-The JVM toolchain — and `claude`, `opencode`, and `pi`, described above — comes
-from [mise](https://mise.jdx.dev). The `mise` binary itself is shared, in
+The JVM toolchain — and `claude`, `opencode`, `pi`, and `herdr`, described
+above — comes from [mise](https://mise.jdx.dev). The `mise` binary itself is shared, in
 `/usr/local/bin`, so every account has the command; what it installs is per
 account, into `/etc/skel` so each account cloud-init creates gets its own copy. Installing a tool writes into mise's data directory, so one
 shared copy would have every user on the VM writing to the same place.
@@ -847,7 +876,7 @@ Then the rest of what a guest carries, in this order:
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` | root |
 
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
-`claude`, `opencode` and `pi` agents, `java` and `maven`, `go` and
+`claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and
 `golangci-lint`, and the npm-backed `wrangler`, `playwright` and `cf`. It is run
 for both accounts because `mise` is per account by design — root's installation
 and the guest user's are separate, and both are in use. `codex` and Rust are

@@ -17,6 +17,24 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Every base image now carries [Herdr](https://herdr.dev), a terminal workspace
+  manager for coding agents, and starts a server for `root` and every
+  interactive account at boot. The server owns the panes the agents run in, so
+  an agent left working in one keeps working while nobody is attached: run
+  `herdr` in an SSH session on the guest, or `herdr --remote <ip>` from your own
+  machine, to attach to it and detach again. It is installed with `mise`
+  (`mise use -g herdr`) like the `claude`, `opencode` and `pi` agents, so
+  `agent-vm update` keeps it current and an account can move to another release
+  itself. Each account's server is its own `agent-vm-herdr@<account>` systemd
+  unit, started by `agent-vm-herdr.service`, and uses only that account's
+  configuration and socket under `~/.config/herdr`; `systemctl status
+  agent-vm-herdr@<account>` is where one that will not start says why, and
+  `sudo systemctl stop agent-vm-herdr@<account>` turns it off. Accounts with no
+  login shell, and accounts with no `herdr` of their own — the account a
+  distribution bakes into its own image, such as Ubuntu's `ubuntu` — are
+  skipped, with the reason in the journal. Existing base
+  images do not have it — rebuild with `agent-vm image build <distro> --force` to get it.
+
 - `agent-vm update <name>...` brings a running VM's Linux packages up to date
   from the host, without opening a shell in it: `apt-get update` and a
   non-interactive `apt-get dist-upgrade` on Ubuntu, `dnf --refresh upgrade` on
