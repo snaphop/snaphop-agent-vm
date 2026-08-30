@@ -72,9 +72,24 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 		return err
 	}
 
+	conn, err := app.Connection()
+	if err != nil {
+		return err
+	}
+
 	report := doctorReport{}
-	report.Checks = append(report.Checks, checkKVM())
-	report.Checks = append(report.Checks, checkGroups(cfg)...)
+	// The transport is checked first and its result gates the rest: when the
+	// hypervisor cannot be reached, every check below it would fail for the
+	// same reason and say so eight times over.
+	transport := checkHypervisor(ctx, app, conn)
+	if transport != nil {
+		report.Checks = append(report.Checks, *transport)
+		if transport.Status == statusFail {
+			return app.reportDoctor(report)
+		}
+	}
+	report.Checks = append(report.Checks, checkKVM(ctx, app, conn))
+	report.Checks = append(report.Checks, checkGroups(ctx, app, cfg, conn)...)
 	report.Checks = append(report.Checks, checkTools(ctx, app)...)
 	report.Checks = append(report.Checks, checkOptionalTools(ctx, app)...)
 
@@ -83,9 +98,16 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkStateDir(app, cfg))
 	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
-	report.Checks = append(report.Checks, checkForwarding(cfg))
+	report.Checks = append(report.Checks, checkForwarding(cfg, conn))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
+	return app.reportDoctor(report)
+}
+
+// reportDoctor renders the checks and turns a failure into the documented exit
+// code. It is a method rather than inline so that an early return — a
+// hypervisor that cannot be reached at all — reports what it did learn.
+func (a *App) reportDoctor(report doctorReport) error {
 	report.OK = true
 	for _, c := range report.Checks {
 		if c.Status == statusFail {
@@ -93,7 +115,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 		}
 	}
 
-	if err := app.renderDoctor(report); err != nil {
+	if err := a.renderDoctor(report); err != nil {
 		return err
 	}
 	if !report.OK {
@@ -103,6 +125,36 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 		}
 	}
 	return nil
+}
+
+// checkHypervisor confirms agent-vm can run a command on the machine libvirt is
+// on. It is nil for a local connection, where there is nothing to reach.
+//
+// Everything below it depends on this working: with a remote URI, agent-vm
+// builds images, creates disks, and defines domains by running the host tools
+// there over ssh (ADR-0010), so an unreachable host is the only thing worth
+// reporting.
+func checkHypervisor(ctx context.Context, app *App, conn *config.Connection) *check {
+	if !conn.Remote {
+		return nil
+	}
+	name := "hypervisor host " + conn.SSHDestination
+
+	// `true` is the smallest thing that proves a command ran there.
+	if _, err := app.runner.Run(ctx, hostexec.Command{Name: "true", Effect: hostexec.Read}); err != nil {
+		// The transport error already names the destination, quotes ssh, and
+		// says what has to work, so it is the remedy rather than a preamble to
+		// one.
+		return &check{
+			Name: name, Status: statusFail,
+			Detail: "cannot run a command over ssh",
+			Remedy: err.Error(),
+		}
+	}
+	return &check{
+		Name: name, Status: statusPass,
+		Detail: "reachable over ssh; host tools and the state directory live there",
+	}
 }
 
 func (a *App) renderDoctor(report doctorReport) error {
@@ -143,8 +195,11 @@ func statusLabel(s checkStatus) string {
 // checkKVM confirms hardware virtualization is available to this user.
 // Software emulation is not an acceptable fallback: it is slow enough that a
 // VM per task stops being viable.
-func checkKVM() check {
+func checkKVM(ctx context.Context, app *App, conn *config.Connection) check {
 	const path = "/dev/kvm"
+	if conn.Remote {
+		return checkRemoteKVM(ctx, app, path)
+	}
 	if err := syscall.Access(path, unixReadWrite); err != nil {
 		if errors.Is(err, syscall.ENOENT) {
 			return check{
@@ -165,10 +220,39 @@ func checkKVM() check {
 // unixReadWrite is R_OK|W_OK for syscall.Access.
 const unixReadWrite = 0x2 | 0x4
 
+// checkRemoteKVM asks the same question on the hypervisor, where the answer
+// concerns the account agent-vm logs in as there rather than this one. `test`
+// is the shell builtin that answers exactly what syscall.Access does locally.
+func checkRemoteKVM(ctx context.Context, app *App, path string) check {
+	probe := func(args ...string) bool {
+		_, err := app.runner.Run(ctx, hostexec.Command{Name: "test", Args: args, Effect: hostexec.Read})
+		return err == nil
+	}
+
+	switch {
+	case !probe("-e", path):
+		return check{
+			Name: "kvm", Status: statusFail,
+			Detail: path + " does not exist on " + app.runner.HypervisorHost(),
+			Remedy: "Enable virtualization in firmware on that host and load the kvm_intel or kvm_amd module. Nested virtualization must be enabled if it is itself a VM.",
+		}
+	case !probe("-r", path, "-a", "-w", path):
+		return check{
+			Name: "kvm", Status: statusFail,
+			Detail: path + " is not readable and writable by the account agent-vm logs in as on " + app.runner.HypervisorHost(),
+			Remedy: "On that host: sudo usermod -aG kvm <the account in the libvirt URI>, then let it start a new session.",
+		}
+	}
+	return check{Name: "kvm", Status: statusPass, Detail: path + " is available on " + app.runner.HypervisorHost()}
+}
+
 // checkGroups reports group membership. It is a warning rather than a failure:
 // a host may grant access through udev rules or ACLs instead, and the KVM and
 // libvirt checks already test what actually matters.
-func checkGroups(cfg *config.Config) []check {
+func checkGroups(ctx context.Context, app *App, cfg *config.Config, conn *config.Connection) []check {
+	if conn.Remote {
+		return checkRemoteGroups(ctx, app, cfg)
+	}
 	current, err := user.Current()
 	if err != nil {
 		return []check{{Name: "groups", Status: statusSkip, Detail: fmt.Sprintf("cannot determine the current user: %v", err)}}
@@ -185,11 +269,7 @@ func checkGroups(cfg *config.Config) []check {
 		}
 	}
 
-	required := []string{"kvm"}
-	if cfg.LibvirtURI != config.SessionURI {
-		required = append(required, "libvirt")
-	}
-
+	required := requiredGroups(cfg)
 	checks := make([]check, 0, len(required))
 	for _, group := range required {
 		if names[group] {
@@ -203,6 +283,57 @@ func checkGroups(cfg *config.Config) []check {
 		})
 	}
 	return checks
+}
+
+// checkRemoteGroups reports the group membership of the account agent-vm logs
+// in as on the hypervisor. `id` is asked rather than the passwd database,
+// because that database is on the other machine.
+func checkRemoteGroups(ctx context.Context, app *App, cfg *config.Config) []check {
+	ask := func(args ...string) (string, error) {
+		res, err := app.runner.Run(ctx, hostexec.Command{Name: "id", Args: args, Effect: hostexec.Read})
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(res.Stdout)), nil
+	}
+
+	username, err := ask("-un")
+	if err != nil {
+		return []check{{Name: "groups", Status: statusSkip, Detail: fmt.Sprintf("cannot determine the remote user: %v", err)}}
+	}
+	groups, err := ask("-nG")
+	if err != nil {
+		return []check{{Name: "groups", Status: statusSkip, Detail: fmt.Sprintf("cannot read remote group membership: %v", err)}}
+	}
+
+	names := map[string]bool{}
+	for _, group := range strings.Fields(groups) {
+		names[group] = true
+	}
+
+	checks := make([]check, 0, 2)
+	for _, group := range requiredGroups(cfg) {
+		where := username + " on " + app.runner.HypervisorHost()
+		if names[group] {
+			checks = append(checks, check{Name: "group " + group, Status: statusPass, Detail: where + " is a member"})
+			continue
+		}
+		checks = append(checks, check{
+			Name: "group " + group, Status: statusWarn,
+			Detail: where + " is not a member",
+			Remedy: fmt.Sprintf("On that host: sudo usermod -aG %s %s, then let it start a new session. Ignore this if the host grants access another way and the other checks pass.", group, username),
+		})
+	}
+	return checks
+}
+
+// requiredGroups are the groups that grant the hypervisor access this
+// configuration needs.
+func requiredGroups(cfg *config.Config) []string {
+	if cfg.SessionMode() {
+		return []string{"kvm"}
+	}
+	return []string{"kvm", "libvirt"}
 }
 
 // checkTools verifies every tool this project delegates to, and its minimum
@@ -291,14 +422,21 @@ func checkOptionalTools(ctx context.Context, app *App) []check {
 // clear message when the daemon is not running or not reachable, so its exit
 // status is the whole check — nothing needs parsing.
 func checkLibvirt(ctx context.Context, app *App, cfg *config.Config) check {
-	_, err := app.runner.Run(ctx, hostexec.Command{
+	// virsh runs on the hypervisor, so it is given the URI as that machine
+	// reads it (ADR-0010). The remedy below still names the URI the operator
+	// configured, because that is the one they would type.
+	uri, err := app.hypervisorURI()
+	if err != nil {
+		return check{Name: "libvirt connection", Status: statusFail, Detail: err.Error()}
+	}
+	_, err = app.runner.Run(ctx, hostexec.Command{
 		Name:   hostexec.Virsh.Name,
-		Args:   []string{"--connect", cfg.LibvirtURI, "version"},
+		Args:   []string{"--connect", uri, "version"},
 		Effect: hostexec.Read,
 	})
 	if err != nil {
 		remedy := "Start libvirt with `sudo systemctl start libvirtd` (or `virtqemud`), and confirm your user may connect to " + cfg.LibvirtURI + "."
-		if cfg.LibvirtURI == config.SessionURI {
+		if cfg.SessionMode() {
 			remedy = "Session mode needs a running user session daemon: `systemctl --user start virtqemud`."
 		}
 		return check{
@@ -364,10 +502,22 @@ func checkStateDir(app *App, cfg *config.Config) check {
 func checkStateDirTraversal(app *App, cfg *config.Config) check {
 	const name = "state directory access"
 
-	if cfg.LibvirtURI == config.SessionURI {
+	if cfg.SessionMode() {
 		return check{
 			Name: name, Status: statusSkip,
-			Detail: "not applicable: " + config.SessionURI + " runs QEMU as the invoking user",
+			Detail: "not applicable: " + cfg.LibvirtURI + " runs QEMU as the invoking user",
+		}
+	}
+	if cfg.RemoteHypervisor() {
+		// The check reads the hypervisor's own passwd database and the
+		// permission bits on every ancestor of the state directory. Both are
+		// on the other machine, and a verdict from this machine's would be
+		// confidently wrong.
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "not checked for a remote hypervisor: it reads that host's accounts and directory permissions",
+			Remedy: "Run `agent-vm doctor` on " + app.runner.HypervisorHost() +
+				" if a VM fails to start with a permission error on its disk.",
 		}
 	}
 
@@ -410,7 +560,11 @@ func checkNATNetwork(ctx context.Context, app *App, cfg *config.Config, libvirtO
 		return check{Name: name, Status: statusSkip, Detail: "skipped: no libvirt connection"}
 	}
 
-	defined, active, err := network.NATStatus(ctx, app.runner, cfg.LibvirtURI, cfg.NATNetwork)
+	uri, err := app.hypervisorURI()
+	if err != nil {
+		return check{Name: name, Status: statusFail, Detail: err.Error()}
+	}
+	defined, active, err := network.NATStatus(ctx, app.runner, uri, cfg.NATNetwork)
 	switch {
 	case err != nil:
 		return check{Name: name, Status: statusFail, Detail: err.Error()}
@@ -434,10 +588,10 @@ func checkBridge(ctx context.Context, app *App, cfg *config.Config) []check {
 	}
 	name := "host bridge " + cfg.Bridge
 
-	if cfg.LibvirtURI == config.SessionURI {
+	if cfg.SessionMode() {
 		return []check{{
 			Name: name, Status: statusWarn,
-			Detail: "bridged networking is not supported on " + config.SessionURI,
+			Detail: "bridged networking is not supported on " + cfg.LibvirtURI,
 			Remedy: "Use --libvirt-uri qemu:///system for bridged networking. NAT mode works either way.",
 		}}
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,7 +184,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return &state.ExistsError{Kind: "VM", Name: name}
 	}
 
-	manager := domain.New(app.runner, cfg.LibvirtURI)
+	hypervisorURI, err := app.hypervisorURI()
+	if err != nil {
+		return err
+	}
+	manager := domain.New(app.runner, hypervisorURI)
 	defined, err := manager.Exists(ctx, name)
 	if err != nil {
 		return err
@@ -222,6 +227,16 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
 	})
+}
+
+// jumpArgs renders the -J a guest connection carries when the hypervisor is
+// another machine, for the plan lines that are written out rather than built
+// as commands.
+func jumpArgs(jump string) string {
+	if jump == "" {
+		return ""
+	}
+	return " -J " + jump
 }
 
 // errNoStart explains why --no-start cannot be honored. It is a usage error
@@ -498,7 +513,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	a.out.Progress("Defining and starting domain %s\n", name)
 	argv, err := req.manager.Create(ctx, domain.CreateOptions{
 		Name:           name,
-		LibvirtURI:     cfg.LibvirtURI,
+		LibvirtURI:     req.manager.LibvirtURI(),
 		VCPUs:          cfg.VCPUs,
 		Memory:         cfg.Memory,
 		MaxMemory:      cfg.MaxMemory,
@@ -563,7 +578,11 @@ func (a *App) ensureNetwork(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	a.out.Progress("Checking NAT network %s\n", cfg.NATNetwork)
-	return network.EnsureNAT(ctx, a.runner, cfg.LibvirtURI, cfg.NATNetwork, store)
+	uri, err := a.hypervisorURI()
+	if err != nil {
+		return err
+	}
+	return network.EnsureNAT(ctx, a.runner, uri, cfg.NATNetwork, store)
 }
 
 // waitForGuest waits for the guest to get an address and accept SSH. Both waits
@@ -592,9 +611,11 @@ func (a *App) waitForGuest(ctx context.Context, req createRequest, vm *state.VM)
 	err = req.manager.WaitForSSH(ctx, req.name, domain.SSHOptions{
 		User:    vm.Guest.User,
 		Address: address,
-		// The probe offers the same key `agent-vm ssh` will, so that "create
-		// says it is ready" and "ssh works" cannot disagree.
+		// The probe offers the same key `agent-vm ssh` will, and reaches the
+		// guest the same way, so that "create says it is ready" and "ssh
+		// works" cannot disagree.
 		IdentityFile: privateKeyFor(vm),
+		Jump:         a.sshJump(),
 	}, remaining)
 	if err != nil {
 		return address, err
@@ -680,23 +701,41 @@ func (r *createRollback) undo(ctx context.Context, cause error) error {
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
 func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool) error {
-	layout := state.NewLayout(cfg.StateDir)
+	// The store, not the configured path, because a remote hypervisor's
+	// default state directory sits under *its* home directory.
+	store, err := a.Store()
+	if err != nil {
+		return err
+	}
+	layout := store.Layout
 	vmDir := layout.VMDir(name)
 	ref := cfg.Distro
 
-	if cfg.BridgeMode() {
-		a.out.Printf("ip -json link show type bridge\n")
-	} else {
-		a.out.Printf("virsh --connect %s net-list --all --name\n", cfg.LibvirtURI)
+	uri, err := a.hypervisorURI()
+	if err != nil {
+		return err
 	}
 
-	a.out.Printf("qemu-img create -f qcow2 -F qcow2 -b %s %s %d\n",
-		layout.BaseDiskPath(ref.Distro.Name, ref.Tag),
-		vmDir+"/"+state.OverlayFile, int64(cfg.Disk))
+	// Every line below is rendered through the runner rather than printed
+	// directly, so that a plan for a remote hypervisor shows the ssh
+	// invocations that would really run (ADR-0010).
+	plan := func(name string, args ...string) {
+		a.out.Printf("%s\n", a.runner.Render(hostexec.Command{Name: name, Args: args}))
+	}
+
+	if cfg.BridgeMode() {
+		plan("ip", "-json", "link", "show", "type", "bridge")
+	} else {
+		plan(hostexec.Virsh.Name, "--connect", uri, "net-list", "--all", "--name")
+	}
+
+	plan(hostexec.QemuImg.Name, "create", "-f", "qcow2", "-F", "qcow2",
+		"-b", layout.BaseDiskPath(ref.Distro.Name, ref.Tag),
+		vmDir+"/"+state.OverlayFile, strconv.FormatInt(int64(cfg.Disk), 10))
 
 	args, err := domain.VirtInstallArgs(domain.CreateOptions{
 		Name:        name,
-		LibvirtURI:  cfg.LibvirtURI,
+		LibvirtURI:  uri,
 		VCPUs:       cfg.VCPUs,
 		Memory:      cfg.Memory,
 		MaxMemory:   cfg.MaxMemory,
@@ -716,13 +755,15 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	if err != nil {
 		return err
 	}
-	a.out.Printf("%s\n", (hostexec.Command{Name: hostexec.VirtInstall.Name, Args: args}).String())
-	a.out.Printf("virsh --connect %s domifaddr %s --source agent\n", cfg.LibvirtURI, name)
-	a.out.Printf("virsh --connect %s domiflist %s\n", cfg.LibvirtURI, name)
-	a.out.Printf("virsh --connect %s dumpxml %s\n", cfg.LibvirtURI, name)
+	plan(hostexec.VirtInstall.Name, args...)
+	plan(hostexec.Virsh.Name, "--connect", uri, "domifaddr", name, "--source", "agent")
+	plan(hostexec.Virsh.Name, "--connect", uri, "domiflist", name)
+	plan(hostexec.Virsh.Name, "--connect", uri, "dumpxml", name)
 	if githubSSHKey {
+		// gh and the connection to the guest run here rather than on the
+		// hypervisor, so they are rendered as this machine would run them.
 		a.out.Printf("gh auth status --hostname github.com\n")
-		a.out.Printf("ssh %s@<guest address> cat %s\n", cfg.GuestUser, guestPublicKeyPath)
+		a.out.Printf("ssh%s %s@<guest address> cat %s\n", jumpArgs(a.sshJump()), cfg.GuestUser, guestPublicKeyPath)
 		a.out.Printf("gh api --method POST user/keys -f title=%q -f key=<the guest's public key> --jq .id\n",
 			githubKeyTitle(name))
 	}

@@ -1,8 +1,10 @@
 package hostexec
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 )
@@ -29,9 +31,14 @@ type Fake struct {
 	// Default answers any invocation no other rule matched.
 	Default FakeResponse
 
-	mu     sync.Mutex
-	calls  []Command
-	became []Command
+	// Hypervisor is what HypervisorHost reports, for tests that exercise the
+	// remote-hypervisor branches.
+	Hypervisor string
+
+	mu      sync.Mutex
+	calls   []Command
+	became  []Command
+	started []Command
 }
 
 // FakeResponse is a canned outcome for one invocation.
@@ -137,6 +144,45 @@ func (f *Fake) Become(c Command) error {
 	return r.Err
 }
 
+// Start records the invocation and returns a process wired to the canned
+// response: its stdout replays the response, and its stdin is discarded.
+func (f *Fake) Start(_ context.Context, c Command) (*Process, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, c)
+	f.started = append(f.started, c)
+	f.mu.Unlock()
+
+	if f.Missing[c.Name] {
+		return nil, &NotFoundError{Tool: c.Name}
+	}
+	r := f.lookup(c)
+	if r.Err != nil {
+		return nil, r.Err
+	}
+	if r.ExitCode != 0 {
+		return nil, &ToolError{Tool: c.Name, Argv: c.Argv(), ExitCode: r.ExitCode, Stderr: r.Stderr}
+	}
+	return &Process{
+		Stdin:  nopWriteCloser{io.Discard},
+		Stdout: bufio.NewReader(strings.NewReader(r.Stdout)),
+	}, nil
+}
+
+// Started returns the commands this Fake was asked to start and not wait for.
+func (f *Fake) Started() []Command {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Command(nil), f.started...)
+}
+
+// HypervisorHost is the machine a test says host tools run on. It is empty
+// unless a test sets it.
+func (f *Fake) HypervisorHost() string { return f.Hypervisor }
+
+// Render is the command itself: a Fake stands in for the whole process
+// boundary, transport included.
+func (f *Fake) Render(c Command) string { return c.String() }
+
 // Became returns the commands this process was asked to be replaced by.
 func (f *Fake) Became() []Command {
 	f.mu.Lock()
@@ -145,7 +191,7 @@ func (f *Fake) Became() []Command {
 }
 
 // LookPath reports a tool as present unless it is listed in Missing.
-func (f *Fake) LookPath(name string) (string, error) {
+func (f *Fake) LookPath(name string, _ Location) (string, error) {
 	if f.Missing[name] {
 		return "", &NotFoundError{Tool: name}
 	}

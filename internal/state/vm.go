@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -197,28 +196,22 @@ func (s *Store) LoadVM(name string) (*VM, error) {
 
 // HasVM reports whether a VM record exists, without reading it.
 func (s *Store) HasVM(name string) bool {
-	_, err := os.Stat(filepath.Join(s.VMDir(name), VMRecordFile))
-	return err == nil
+	found, err := s.fsys.Exists(filepath.Join(s.VMDir(name), VMRecordFile))
+	return err == nil && found
 }
 
 // ListVMs returns every VM this state directory has a record of, by name.
 // Domains that exist in libvirt but have no record here are deliberately not
 // discoverable: this tool acts only on VMs it created.
 func (s *Store) ListVMs() ([]*VM, error) {
-	entries, err := os.ReadDir(filepath.Join(s.root, "vms"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	entries, err := s.fsys.Subdirectories(filepath.Join(s.root, "vms"))
 	if err != nil {
 		return nil, fmt.Errorf("listing VMs: %w", err)
 	}
 
 	vms := make([]*VM, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		vm, err := s.LoadVM(entry.Name())
+		vm, err := s.LoadVM(entry)
 		if err != nil {
 			var notFound *NotFoundError
 			if errors.As(err, &notFound) {

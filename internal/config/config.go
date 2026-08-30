@@ -77,7 +77,13 @@ type Config struct {
 	// ConfigFile is the file that was read, or "" if none existed.
 	ConfigFile string
 	StateDir   string
-	LibvirtURI string
+	// StateDirIsDefault reports that nothing named a state directory, so
+	// StateDir is the built-in default resolved against *this* machine's home
+	// directory. That distinction only matters for a remote hypervisor, where
+	// the state directory lives on the other machine and this machine's home
+	// says nothing about where it is (ADR-0010).
+	StateDirIsDefault bool
+	LibvirtURI        string
 
 	Distro distro.Ref
 	VCPUs  int
@@ -165,15 +171,16 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 
 func defaults(env Environ) *Config {
 	return &Config{
-		StateDir:   filepath.Join(userDataDir(env), "agent-vm"),
-		LibvirtURI: DefaultLibvirtURI,
-		Distro:     distro.Ref{Distro: distro.Default, Tag: distro.Default.DefaultTag},
-		VCPUs:      DefaultVCPUs,
-		Memory:     DefaultMemory,
-		Disk:       DefaultDisk,
-		Network:    DefaultNetwork,
-		NATNetwork: DefaultNATNetwork,
-		GuestUser:  DefaultGuestUser,
+		StateDir:          filepath.Join(userDataDir(env), "agent-vm"),
+		StateDirIsDefault: true,
+		LibvirtURI:        DefaultLibvirtURI,
+		Distro:            distro.Ref{Distro: distro.Default, Tag: distro.Default.DefaultTag},
+		VCPUs:             DefaultVCPUs,
+		Memory:            DefaultMemory,
+		Disk:              DefaultDisk,
+		Network:           DefaultNetwork,
+		NATNetwork:        DefaultNATNetwork,
+		GuestUser:         DefaultGuestUser,
 	}
 }
 
@@ -224,6 +231,7 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 			return err
 		}
 		cfg.StateDir = path
+		cfg.StateDirIsDefault = false
 	}
 	if o.LibvirtURI != "" {
 		cfg.LibvirtURI = o.LibvirtURI
@@ -295,6 +303,11 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 
 // BridgeMode reports whether this configuration puts guests on the LAN.
 func (c *Config) BridgeMode() bool { return c.Network == NetworkBridge }
+
+// DefaultStateDirSuffix is the state directory's location under a home
+// directory. It is named separately from the default itself so that the same
+// layout can be built against a remote account's home.
+const DefaultStateDirSuffix = ".local/share/agent-vm"
 
 // ImagesDir and VMsDir are the two top-level areas of the state directory.
 func (c *Config) ImagesDir() string { return filepath.Join(c.StateDir, "images") }

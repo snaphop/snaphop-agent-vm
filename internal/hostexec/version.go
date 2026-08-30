@@ -74,7 +74,14 @@ type Tool struct {
 	versionRe *regexp.Regexp
 	// stderrVersion marks tools that print their version to stderr.
 	stderrVersion bool
+	// location is the machine this tool has to be installed on. Almost every
+	// one belongs on the hypervisor; ssh and gh belong here, because they use
+	// the operator's keys and logins (ADR-0010).
+	location Location
 }
+
+// Location is the machine this tool runs on.
+func (t Tool) Location() Location { return t.location }
 
 // The tools agent-vm requires, with the minimum versions doctor enforces.
 // Keep in sync with docs/cli.md (doctor's table) and docs/architecture.md.
@@ -120,12 +127,16 @@ var (
 		Name: "gh", Package: "gh", Minimum: Version{Major: 2},
 		versionArgs: []string{"--version"},
 		versionRe:   regexp.MustCompile(`gh version (\d+\.\d+(?:\.\d+)?)`),
+		location:    Client,
 	}
+	// SSH is needed here rather than on the hypervisor: it is what reaches
+	// the hypervisor in the first place, and what reaches a guest through it.
 	SSH = Tool{
 		Name: "ssh", Package: "openssh-client",
 		versionArgs:   []string{"-V"},
 		versionRe:     regexp.MustCompile(`OpenSSH_(\d+\.\d+)`),
 		stderrVersion: true,
+		location:      Client,
 	}
 )
 
@@ -206,7 +217,7 @@ func (v *Versions) Require(ctx context.Context, tool Tool) (Version, error) {
 }
 
 func (v *Versions) probe(ctx context.Context, tool Tool) (Version, error) {
-	if _, err := v.runner.LookPath(tool.Name); err != nil {
+	if _, err := v.runner.LookPath(tool.Name, tool.location); err != nil {
 		var nf *NotFoundError
 		if errors.As(err, &nf) {
 			// LookPath does not know which package ships the tool; we do.
@@ -216,9 +227,10 @@ func (v *Versions) probe(ctx context.Context, tool Tool) (Version, error) {
 	}
 
 	res, err := v.runner.Run(ctx, Command{
-		Name:   tool.Name,
-		Args:   tool.versionArgs,
-		Effect: Read,
+		Name:     tool.Name,
+		Args:     tool.versionArgs,
+		Effect:   Read,
+		Location: tool.location,
 	})
 	// ssh -V exits non-zero on some builds while still printing its version, so
 	// the output is parsed before the exit status is judged.

@@ -231,7 +231,18 @@ func readShellVar(path, name string) (string, bool) {
 // It warns rather than fails: the live ruleset cannot be read without root, so
 // an operator may have a route rule this check cannot see, and a false failure
 // would exit non-zero on a host that actually works.
-func checkForwarding(cfg *config.Config) check {
+func checkForwarding(cfg *config.Config, conn *config.Connection) check {
+	if conn.Remote {
+		// The files below describe this machine's firewall, which has nothing
+		// to do with whether the hypervisor forwards its guests' packets.
+		// Reading them here would produce a confident verdict about the wrong
+		// host.
+		return check{
+			Name: "host firewall forwarding", Status: statusSkip,
+			Detail: "not checked for a remote hypervisor: the firewall that matters is that host's",
+			Remedy: "Run `agent-vm doctor` on " + conn.SSHDestination + " if guests boot but their outbound connections hang.",
+		}
+	}
 	return forwardingCheck(cfg, readUFWState(ufwConfPath, ufwDefaultsPath, ufwRulesPath))
 }
 

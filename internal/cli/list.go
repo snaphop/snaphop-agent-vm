@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
@@ -122,18 +123,31 @@ func (a *App) statusesOf(ctx context.Context, vms []*state.VM) ([]vmStatus, erro
 	return statuses, nil
 }
 
-// uriFor returns the connection a VM was created on. A VM is queried where it
-// was defined, not where this invocation happens to point, so a record written
-// against qemu:///session is not reported as missing from qemu:///system.
+// uriFor returns the connection a VM was created on, spelled as virsh sees it.
+// A VM is queried where it was defined, not where this invocation happens to
+// point, so a record written against qemu:///session is not reported as missing
+// from qemu:///system.
+//
+// The record holds the URI the operator gave, which for a remote hypervisor
+// names the transport as well. virsh runs on the hypervisor, so the transport
+// is dropped here (ADR-0010); keeping it would send virsh back over ssh to the
+// machine it is already on.
 func (a *App) uriFor(vm *state.VM) string {
 	if vm.LibvirtURI != "" {
-		return vm.LibvirtURI
+		conn, err := config.ParseConnection(vm.LibvirtURI)
+		if err != nil {
+			// The record was written by another version, or edited by hand.
+			// It is passed through unchanged so virsh, not this function, is
+			// the one to reject it.
+			return vm.LibvirtURI
+		}
+		return conn.HypervisorURI()
 	}
-	cfg, err := a.Config()
+	uri, err := a.hypervisorURI()
 	if err != nil {
 		return ""
 	}
-	return cfg.LibvirtURI
+	return uri
 }
 
 func resourceSummary(vm *state.VM) string {

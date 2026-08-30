@@ -15,7 +15,48 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Added
+
+- **`agent-vm` can now drive a hypervisor on another machine.** Point
+  `--libvirt-uri` at `qemu+ssh://[user@]host[:port]/system` (or set
+  `libvirt_uri` in the config file, or `AGENT_VM_LIBVIRT_URI`) and everything
+  runs there: base images are built there, disks are created there, domains are
+  defined there, and the state directory lives there. Your laptop needs nothing
+  but `ssh` — no KVM, no libvirt, no podman, no libguestfs. `agent-vm ssh` and
+  `agent-vm update` reach a guest through the hypervisor, because a NAT guest
+  sits on a network that only exists on that host. Two things still run on your
+  own machine and are unchanged: `gh`, which uses your GitHub login, and the
+  connection into a guest, which uses your keys and your terminal.
+
+  Requirements: `ssh <host> true` has to succeed without a prompt — use an SSH
+  agent or a default key, or name one with `?keyfile=<path>` in the URI — and
+  the hypervisor needs the tools `doctor` already lists, plus `flock`, `find`,
+  and coreutils, which any Linux host running libvirt has. `--state-dir` now
+  names a path *on the hypervisor*; left unset it defaults to
+  `~/.local/share/agent-vm` in the home directory of the account the URI names.
+  `--dry-run` prints the `ssh` invocations it would run, transport and all.
+  See "Remote Hypervisors" in `docs/cli.md` and §9 of `docs/host-setup.md`.
+
+- `doctor` reports a remote hypervisor rather than the machine you ran it on:
+  `/dev/kvm` and group membership are checked over the transport, and a new
+  `hypervisor host <destination>` check runs first — if the host cannot be
+  reached, that is reported on its own instead of eight checks failing for the
+  same reason. Two checks cannot be answered from a client and now say so
+  rather than guessing: the host firewall, and whether the account QEMU runs as
+  can reach the state directory. Both point at running `agent-vm doctor` on the
+  hypervisor itself.
+
 ### Changed
+
+- A failing tool now says which machine it ran on, so an error from a remote
+  hypervisor cannot be mistaken for one from your own host. ssh failing to
+  connect is reported separately from a tool failing on the far side, because
+  they need different fixes.
+
+- `doctor`'s `libvirt` group check and its refusal of bridged networking now
+  key off whether the connection is a `/session` one rather than matching the
+  literal string `qemu:///session`, so they behave correctly for
+  `qemu+ssh://host/session` too.
 
 - The tmux session menu an interactive login lands on is quicker to get through
   and no longer leaves you at a menu after a session ends. Pressing Enter at the

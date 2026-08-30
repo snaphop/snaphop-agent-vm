@@ -20,7 +20,7 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 |---|---|---|
 | `--config <path>` | `~/.config/agent-vm/config.toml` | Configuration file. |
 | `--state-dir <path>` | `~/.local/share/agent-vm` | Root of all VM and image state. |
-| `--libvirt-uri <uri>` | `qemu:///system` | libvirt connection URI. |
+| `--libvirt-uri <uri>` | `qemu:///system` | libvirt connection URI. `qemu+ssh://[user@]host[:port]/system` drives a hypervisor on another machine — see [Remote Hypervisors](#remote-hypervisors). |
 | `--output <text\|json>` | `text` | Output format. `json` is machine-readable and stable. |
 | `--verbose` | off | Debug-level logging to stderr. |
 | `--quiet` | off | Suppress progress output; errors still go to stderr. |
@@ -30,6 +30,60 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 
 Human-readable progress and logs go to **stderr**. Command results go to
 **stdout**, so `--output json` can be piped safely.
+
+## Remote Hypervisors
+
+`--libvirt-uri qemu+ssh://[user@]host[:port]/system` drives libvirt on another
+machine. That URI selects more than a connection: **every host tool runs on that
+machine, and the state directory lives there**
+([ADR-0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md)).
+`podman` and libguestfs build base images there, `qemu-img` creates overlays
+there, and `virt-install` and `virsh` run there against that host's own
+`qemu:///system`. This machine becomes a thin driver.
+
+Two things stay here, because they are the operator's rather than the
+hypervisor's: `gh`, which uses your GitHub login, and the `ssh` into a guest,
+which uses your keys and your terminal. A guest sits on a network that exists
+only on the hypervisor, so `agent-vm ssh` and `agent-vm update` reach it with
+`ssh -J <hypervisor>`.
+
+| Aspect | With a remote URI |
+|---|---|
+| Base images, overlays, kernels, `vm.json`, locks | On the hypervisor, under its state directory. |
+| `--state-dir` | A path **on the hypervisor**. Unset, it defaults to `~/.local/share/agent-vm` in the home directory of the account the URI names, which `agent-vm` asks that host for. |
+| `--dry-run` | Prints the `ssh` invocations that would run, transport and all. |
+| `vm.json`'s `libvirtUri` | The URI you gave, transport included. `virsh` is invoked with `qemu:///system`, as that machine reads it. |
+| `agent-vm ssh`, `agent-vm update` | `ssh -J <hypervisor> <guest>`. |
+| `agent-vm console` | `ssh -t <hypervisor> virsh --connect qemu:///system console <name>`. |
+| Locks | `flock` on the hypervisor, so two operators driving the same host contend correctly. |
+
+Requirements:
+
+- **`ssh <destination> true` must succeed without a prompt.** `agent-vm` runs ssh
+  in `BatchMode`, because it captures ssh's output and a prompt would be
+  invisible. Use an SSH agent, a default identity, or name a key with
+  `?keyfile=<path>` in the URI. This is the same condition libvirt's own
+  `qemu+ssh` transport needs.
+- The hypervisor needs every tool `doctor` lists **except `ssh` and `gh`**, which
+  are needed here instead. It also needs `flock` (util-linux), `find`
+  (findutils), and coreutils — all of which a Linux host running libvirt already
+  has.
+- Connections are shared for the run (`ControlMaster`), so a create or an image
+  build does not pay for a key exchange per invocation.
+
+URI parameters honored: `keyfile=<path>` (offered to ssh as `-i`) and
+`no_verify=1` (skips host key checking, matching what you already told libvirt).
+A password in the URI is refused: it cannot be handed to ssh, and ignoring it
+would leave you wondering why you are prompted.
+
+Only `qemu+ssh://` is accepted for a remote hypervisor. `qemu+tls://`,
+`qemu+tcp://`, and the `libssh` transports reach libvirt but give `agent-vm` no
+shell there, so they are refused as usage errors (exit `2`) rather than failing
+partway through a `create`.
+
+A remote URI is a real grant: it lets `agent-vm` run host tools as that account
+on that machine, which is more than a libvirt connection alone. That is why it
+has to be spelled out rather than inferred.
 
 ## Configuration Precedence
 
@@ -45,7 +99,7 @@ Later sources win:
 ```toml
 # ~/.config/agent-vm/config.toml
 state_dir   = "~/.local/share/agent-vm"
-libvirt_uri = "qemu:///system"
+libvirt_uri = "qemu:///system"   # or "qemu+ssh://kvm@hypervisor.lan/system"
 
 [defaults]
 distro  = "ubuntu"
@@ -90,12 +144,22 @@ Checks that the host can run VMs and reports each check as pass/fail with a
 remedy. Exits `0` only if every required check passes.
 
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
-the `kvm` group, and in the `libvirt` group when the URI is `qemu:///system`;
+the `kvm` group, and in the `libvirt` group when the URI is not a `/session` one;
 state directory writable with sufficient free space; state directory reachable by
 the account the hypervisor runs as; the configured NAT network is definable; the
 host firewall does not drop the guest's forwarded traffic; and, when a bridge is
-configured, that the bridge exists and is up. Bridged networking under
-`qemu:///session` is reported as unsupported rather than attempted.
+configured, that the bridge exists and is up. Bridged networking on a `/session`
+connection is reported as unsupported rather than attempted.
+
+With a [remote URI](#remote-hypervisors), the checks describe the hypervisor
+rather than this machine: `/dev/kvm` and group membership are that host's, asked
+over the transport, and a `hypervisor host <destination>` check runs first. If
+that check fails nothing else is reported, because everything below it would fail
+for the same reason. Two checks cannot be answered from here at all — the host
+firewall, and whether the account QEMU runs as can traverse to the state
+directory — because both need that machine's configuration files and passwd
+database; they report `skip` and point at running `agent-vm doctor` on the
+hypervisor itself.
 
 `gh` is checked too, but only ever reports `pass` or `skip`: it is needed solely
 by `--github-ssh-key`, so a host without it is still a ready host.
@@ -140,7 +204,9 @@ ruleset cannot be read without root and a false failure would exit non-zero on a
 working host. The remedy names the NAT network to look the bridge up with, since
 libvirt allocates the bridge (`virbrN`) and its name is not knowable from
 configuration alone. The check is skipped in bridged mode, where a guest sits on the LAN
-directly and its traffic never reaches the host's forward hook. It asks about
+directly and its traffic never reaches the host's forward hook, and for a
+[remote hypervisor](#remote-hypervisors), whose firewall is the one that matters
+and is not this machine's. It asks about
 the network *mode*, not whether a bridge is configured, so a host that sets a
 default `[network.bridge] interface` and still creates NAT VMs is checked. Only `ufw` is understood, so a pass means
 "no `ufw` problem" rather than "no firewall problem";
@@ -157,7 +223,9 @@ to open the overlay. The check reads permission bits and any POSIX ACL, so a
 `setfacl` grant is recognised, and it names the shallowest directory that blocks
 the path along with the `setfacl` command that fixes it. It is skipped rather than
 guessed when the hypervisor's account cannot be identified, and it does not apply
-to `qemu:///session`, where QEMU runs as the invoking user. Because it only
+to a `/session` connection, where QEMU runs as the invoking user. It is also
+skipped for a [remote hypervisor](#remote-hypervisors), whose accounts and
+directory permissions cannot be judged from here. Because it only
 inspects the filesystem it still runs under `--dry-run`.
 
 It also verifies every tool this project delegates to, against its minimum
@@ -1023,6 +1091,7 @@ any command; the table below is the summary.
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
+| any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh <destination> -- <argv>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
 | `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list` and — when a bridge is configured — `ip -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything

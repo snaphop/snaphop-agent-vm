@@ -83,8 +83,11 @@ func (c *Config) validate() error {
 	if c.StateDir == "" {
 		return &ValidationError{Field: "state_dir", Value: "", Err: fmt.Errorf("must not be empty")}
 	}
-	if c.LibvirtURI == "" {
-		return &ValidationError{Field: "libvirt_uri", Value: "", Err: fmt.Errorf("must not be empty")}
+	// The URI is parsed here rather than at the point of use, so an
+	// unsupported transport is a usage error before anything on either host
+	// changes.
+	if _, err := c.Connection(); err != nil {
+		return err
 	}
 	if c.VCPUs < MinVCPUs || c.VCPUs > MaxVCPUs {
 		return &ValidationError{
@@ -131,12 +134,12 @@ func (c *Config) validateNetwork() error {
 			Remedy: "Pass --bridge <iface>, set AGENT_VM_BRIDGE, or set [network.bridge] interface in the config file.",
 		}
 	}
-	if c.LibvirtURI == SessionURI {
+	if c.SessionMode() {
 		return &ValidationError{
 			Field:  "network",
 			Value:  string(NetworkBridge),
-			Err:    fmt.Errorf("bridged networking is not supported on %s", SessionURI),
-			Remedy: "Use --libvirt-uri qemu:///system for bridged networking, or keep the default NAT mode.",
+			Err:    fmt.Errorf("bridged networking is not supported on %s", c.LibvirtURI),
+			Remedy: "Use a system connection such as qemu:///system for bridged networking, or keep the default NAT mode.",
 		}
 	}
 	return nil

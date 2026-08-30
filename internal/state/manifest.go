@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -116,7 +115,7 @@ func (s *Store) HasImage(distro, tag string) bool {
 		s.KernelPath(distro, tag),
 		s.InitrdPath(distro, tag),
 	} {
-		if _, err := os.Stat(path); err != nil {
+		if found, err := s.fsys.Exists(path); err != nil || !found {
 			return false
 		}
 	}
@@ -126,28 +125,22 @@ func (s *Store) HasImage(distro, tag string) bool {
 // ListImages returns the manifest of every cached base image.
 func (s *Store) ListImages() ([]*Manifest, error) {
 	imagesDir := filepath.Join(s.root, "images")
-	distros, err := os.ReadDir(imagesDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	distros, err := s.fsys.Subdirectories(imagesDir)
 	if err != nil {
 		return nil, fmt.Errorf("listing base images: %w", err)
 	}
 
 	var manifests []*Manifest
 	for _, d := range distros {
-		if !d.IsDir() {
-			continue
-		}
-		tags, err := os.ReadDir(filepath.Join(imagesDir, d.Name()))
+		tags, err := s.fsys.Subdirectories(filepath.Join(imagesDir, d))
 		if err != nil {
-			return nil, fmt.Errorf("listing base images for %s: %w", d.Name(), err)
+			return nil, fmt.Errorf("listing base images for %s: %w", d, err)
 		}
 		for _, tag := range tags {
-			if !tag.IsDir() || !s.HasImage(d.Name(), tag.Name()) {
+			if !s.HasImage(d, tag) {
 				continue
 			}
-			m, err := s.LoadManifest(d.Name(), tag.Name())
+			m, err := s.LoadManifest(d, tag)
 			if err != nil {
 				return nil, err
 			}
@@ -177,21 +170,7 @@ func (s *Store) VMsUsingImage(distro, tag string) ([]*VM, error) {
 
 // DiskUsage reports the space a base image occupies on disk, for `image list`.
 func (s *Store) DiskUsage(distro, tag string) (config.Size, error) {
-	var total int64
-	err := filepath.WalkDir(s.ImageDir(distro, tag), func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
+	total, err := s.fsys.Usage(s.ImageDir(distro, tag))
 	if err != nil {
 		return 0, fmt.Errorf("measuring base image %s:%s: %w", distro, tag, err)
 	}

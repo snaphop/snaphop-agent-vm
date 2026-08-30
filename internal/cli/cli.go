@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -41,6 +42,11 @@ type App struct {
 	// libvirt runs QEMU as. It is the seam tests use in place of the host's
 	// passwd database; in a real run it is nil and the host is consulted.
 	HypervisorIdentity func() (*hypervisorIdentity, error)
+	// StateFS substitutes the filesystem the state directory lives on. It is
+	// the seam that lets a test exercise a remote-hypervisor run against a
+	// real directory on this disk; in a real run it is nil and the machine the
+	// libvirt URI names is used.
+	StateFS state.FS
 
 	// globals, populated from the global flags.
 	configFile string
@@ -58,7 +64,11 @@ type App struct {
 	runner   hostexec.Runner
 	versions *hostexec.Versions
 	cfg      *config.Config
+	conn     *config.Connection
 	store    *state.Store
+	// cleanup holds what the run has to undo before it exits — currently only
+	// the directory holding the ssh connection-sharing socket.
+	cleanup []func()
 }
 
 // command is one subcommand. Flags are registered per command so that
@@ -158,6 +168,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 // code. Reporting lives here rather than in Run so that a test exercises the
 // same path an operator sees, message and code together.
 func (a *App) Main(ctx context.Context, args []string) int {
+	defer a.finish()
 	err := a.run(ctx, args)
 	if err == nil {
 		return ExitOK
@@ -178,7 +189,7 @@ func (a *App) run(ctx context.Context, args []string) error {
 
 	flags.StringVar(&a.configFile, "config", "", "configuration file (default ~/.config/agent-vm/config.toml)")
 	flags.StringVar(&a.stateDir, "state-dir", "", "root of all VM and image state (default ~/.local/share/agent-vm)")
-	flags.StringVar(&a.libvirtURI, "libvirt-uri", "", "libvirt connection URI (default qemu:///system)")
+	flags.StringVar(&a.libvirtURI, "libvirt-uri", "", "libvirt connection URI; qemu+ssh://user@host/system runs everything on that host (default qemu:///system)")
 	flags.StringVar(&a.format, "output", string(OutputText), "output format: text or json")
 	flags.BoolVar(&a.verbose, "verbose", false, "debug-level logging to stderr")
 	flags.BoolVar(&a.quiet, "quiet", false, "suppress progress output")
@@ -199,7 +210,9 @@ func (a *App) run(ctx context.Context, args []string) error {
 	}
 	a.out = &output{stdout: a.Stdout, stderr: a.Stderr, format: format, quiet: a.quiet}
 	a.logger = a.newLogger()
-	a.runner = a.newRunner()
+	if err := a.newRunner(); err != nil {
+		return err
+	}
 	a.versions = hostexec.NewVersions(a.runner)
 
 	if a.showVer {
@@ -230,10 +243,16 @@ func (a *App) newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(a.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
-// newRunner returns the process runner for this invocation. Under --dry-run,
-// mutating commands are printed to stdout instead of being run, while read-only
-// ones still execute so the printed plan reflects the real host.
-func (a *App) newRunner() hostexec.Runner {
+// newRunner builds the process runner for this invocation.
+//
+// Three decisions are layered here, innermost first. Processes are spawned by
+// hostexec.Exec. Under --dry-run, mutating commands are printed to stdout
+// instead of being run, while read-only ones still execute so the printed plan
+// reflects the real host. And when the libvirt URI names another machine, every
+// hypervisor-located command is wrapped in ssh, so what --dry-run prints is the
+// ssh invocation that would actually run — which is what an operator debugging
+// a remote host needs to see.
+func (a *App) newRunner() error {
 	runner := a.Runner
 	if runner == nil {
 		runner = hostexec.New(a.logger)
@@ -241,7 +260,137 @@ func (a *App) newRunner() hostexec.Runner {
 	if a.dryRun {
 		runner = hostexec.NewDryRun(runner, a.Stdout)
 	}
-	return runner
+
+	// A substituted Runner is a test standing in for the whole process
+	// boundary, including the transport, so it is never wrapped.
+	if a.Runner != nil {
+		a.runner = runner
+		return nil
+	}
+
+	conn, err := a.Connection()
+	if err != nil {
+		// A configuration this bad cannot say where the hypervisor is, so the
+		// local runner stands in. Nothing is lost: every command resolves the
+		// same configuration and reports the same error as a usage failure
+		// before it runs anything.
+		a.runner = runner
+		return nil
+	}
+	if !conn.Remote {
+		a.runner = runner
+		return nil
+	}
+
+	dir, err := hostexec.ControlDir()
+	if err != nil {
+		return err
+	}
+	a.cleanup = append(a.cleanup, func() { _ = os.RemoveAll(dir) })
+
+	remote := hostexec.NewRemote(runner, a.logger, conn.SSHDestination, dir)
+	remote.Port = conn.SSHPort
+	remote.IdentityFile = conn.IdentityFile
+	remote.NoVerify = conn.NoVerify
+	a.runner = remote
+	return nil
+}
+
+// become replaces this process with cmd, after releasing what the run holds.
+//
+// The release has to happen first: replacing the process image discards every
+// deferred cleanup with it, so an `agent-vm ssh` or `agent-vm console` that
+// left it to finish would orphan the ssh control socket's directory every time
+// it ran.
+func (a *App) become(cmd hostexec.Command) error {
+	a.finish()
+	return a.runner.Become(cmd)
+}
+
+// finish releases what the run holds. It runs on every exit path, including a
+// failing one, because the ssh control socket outlives this process otherwise.
+func (a *App) finish() {
+	for i := len(a.cleanup) - 1; i >= 0; i-- {
+		a.cleanup[i]()
+	}
+	a.cleanup = nil
+}
+
+// Connection resolves the libvirt URI on first use. It is separate from Config
+// because the runner has to be built before any command runs, and the runner
+// depends on whether the hypervisor is this machine.
+func (a *App) Connection() (*config.Connection, error) {
+	if a.conn != nil {
+		return a.conn, nil
+	}
+	cfg, err := a.Config()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := cfg.Connection()
+	if err != nil {
+		return nil, err
+	}
+	a.conn = conn
+	return conn, nil
+}
+
+// remoteStateDir resolves where the state directory is on the hypervisor.
+//
+// The built-in default is a path under a home directory, and this machine's
+// home directory says nothing about the account agent-vm logs in as over there
+// — the usernames need not even match. So when nothing named a state directory
+// explicitly, the hypervisor is asked for its own: an ssh session starts in the
+// home directory of the account it logged in as, which makes `pwd` the answer.
+//
+// A state directory the operator did name is used verbatim, because they were
+// naming a path on that host.
+func (a *App) remoteStateDir(cfg *config.Config) (string, error) {
+	if !cfg.StateDirIsDefault || a.StateFS != nil {
+		return cfg.StateDir, nil
+	}
+
+	res, err := a.runner.Run(context.Background(), hostexec.Command{Name: "pwd", Effect: hostexec.Read})
+	if err != nil {
+		return "", fmt.Errorf("asking %s where its home directory is, to place the default state directory: %w",
+			a.runner.HypervisorHost(), err)
+	}
+	home := strings.TrimSpace(string(res.Stdout))
+	if !strings.HasPrefix(home, "/") {
+		return "", fmt.Errorf("%s reported %q as its home directory, which is not an absolute path;\n"+
+			"  name the state directory explicitly with --state-dir or the state_dir config key",
+			a.runner.HypervisorHost(), home)
+	}
+	return filepath.Join(home, config.DefaultStateDirSuffix), nil
+}
+
+// sshJump is the machine a guest connection is made through, or "" when the
+// guest is reachable from here.
+//
+// A NAT guest sits on a bridge that exists only on the hypervisor, so from
+// another machine there is no route to it at all. Rather than tunnel or
+// forward a port, the connection is made through the hypervisor the way ssh
+// already knows how: -J, with the same destination agent-vm runs host tools on.
+func (a *App) sshJump() string {
+	conn, err := a.Connection()
+	if err != nil || !conn.Remote {
+		return ""
+	}
+	if conn.SSHPort != 0 {
+		return fmt.Sprintf("%s:%d", conn.SSHDestination, conn.SSHPort)
+	}
+	return conn.SSHDestination
+}
+
+// hypervisorURI is the libvirt URI as virsh and virt-install see it. They run
+// on the hypervisor, so a remote URI would send them back over ssh to the
+// machine they are already on (ADR-0010).
+func (a *App) hypervisorURI() (string, error) {
+	conn, err := a.Connection()
+	if err != nil {
+		return "", err
+	}
+	return conn.HypervisorURI(), nil
 }
 
 // Config resolves configuration on first use. Flags beat environment variables,
@@ -269,27 +418,46 @@ func (a *App) ConfigWith(overrides config.Overrides) (*config.Config, error) {
 	return cfg, nil
 }
 
-// Store opens the state directory on first use.
+// Store opens the state directory on first use, creating its tree unless this
+// is a dry run.
 func (a *App) Store() (*state.Store, error) {
 	if a.store != nil {
 		return a.store, nil
 	}
-	cfg, err := a.Config()
-	if err != nil {
-		return nil, err
-	}
-	open := state.Open
-	if a.dryRun {
-		// Creating the state directory tree is a change to the host, and a dry
-		// run makes none.
-		open = state.OpenExisting
-	}
-	store, err := open(cfg.StateDir)
+	// Creating the state directory tree is a change to the host, and a dry run
+	// makes none.
+	store, err := a.openStore(!a.dryRun)
 	if err != nil {
 		return nil, err
 	}
 	a.store = store
 	return store, nil
+}
+
+// openStore resolves where the state directory is and opens it there.
+func (a *App) openStore(create bool) (*state.Store, error) {
+	cfg, err := a.Config()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := a.Connection()
+	if err != nil {
+		return nil, err
+	}
+	// The state directory is on the machine the hypervisor is on: everything
+	// in it is something QEMU has to open (ADR-0010).
+	fsys := state.Local()
+	dir := cfg.StateDir
+	if conn.Remote {
+		fsys = state.Remote(a.runner)
+		if dir, err = a.remoteStateDir(cfg); err != nil {
+			return nil, err
+		}
+	}
+	if a.StateFS != nil {
+		fsys = a.StateFS
+	}
+	return state.OpenOn(fsys, dir, create)
 }
 
 // printVersions implements --version: this tool, plus the detected versions of
@@ -362,7 +530,11 @@ Commands:
 Global flags:
   --config <path>        configuration file (default ~/.config/agent-vm/config.toml)
   --state-dir <path>     root of all VM and image state (default ~/.local/share/agent-vm)
-  --libvirt-uri <uri>    libvirt connection URI (default qemu:///system)
+  --libvirt-uri <uri>    libvirt connection URI (default qemu:///system).
+                         qemu+ssh://user@host/system drives a hypervisor on
+                         another machine: base images, disks, and the state
+                         directory all live there, and guests are reached
+                         through it.
   --output <text|json>   output format (default text)
   --verbose              debug-level logging to stderr
   --quiet                suppress progress output

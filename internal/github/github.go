@@ -47,6 +47,10 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 		Name:   hostexec.GH.Name,
 		Args:   []string{"auth", "status", "--hostname", "github.com"},
 		Effect: hostexec.Read,
+		// gh runs here, never on the hypervisor: it uses the operator's own
+		// GitHub login, and no GitHub credential belongs on a machine that
+		// hosts untrusted guests (SECURITY.md).
+		Location: hostexec.Client,
 	})
 	if err != nil {
 		return fmt.Errorf("gh is not logged in to github.com; run `gh auth login`: %w", err)
@@ -109,7 +113,8 @@ func (c *Client) AddKey(ctx context.Context, title, publicKey string) (int64, er
 			// GitHub may extend later.
 			"--jq", ".id",
 		},
-		Effect: hostexec.Mutate,
+		Effect:   hostexec.Mutate,
+		Location: hostexec.Client,
 	})
 	if err != nil {
 		return 0, err
@@ -137,7 +142,8 @@ func (c *Client) DeleteKey(ctx context.Context, id int64) (removed bool, err err
 			// The API returns an empty body; --silent keeps it off stdout.
 			"--silent",
 		},
-		Effect: hostexec.Mutate,
+		Effect:   hostexec.Mutate,
+		Location: hostexec.Client,
 	})
 	switch {
 	case err == nil:

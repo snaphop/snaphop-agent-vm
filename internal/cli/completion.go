@@ -146,15 +146,14 @@ func imageRefs(app *App) []string {
 }
 
 // completionStore opens the state directory read-only. Completing a command
-// line must never create anything on the host, so this never falls back to
-// state.Open.
-func (a *App) completionStore() (*state.Store, error) {
-	cfg, err := a.Config()
-	if err != nil {
-		return nil, err
-	}
-	return state.OpenExisting(cfg.StateDir)
-}
+// line must never create anything on the host, so this never asks for the tree
+// to be created.
+//
+// It opens the directory wherever it actually is, which for a remote hypervisor
+// means a connection per completion. That is slower than a local read, but the
+// alternative is reading a path on this machine that holds nothing and offering
+// no completions at all, with nothing to explain why.
+func (a *App) completionStore() (*state.Store, error) { return a.openStore(false) }
 
 func completionSpecs() map[string]*completionSpec {
 	timeoutFlags := []string{"timeout", "force"}

@@ -113,6 +113,9 @@ NAT-only, fully unprivileged use, `qemu:///session` works — set
 `libvirt_uri = "qemu:///session"` in the config file, and note that host bridges
 are unavailable in that mode.
 
+To drive this host from another machine, see
+[§9](#9-driving-this-host-from-another-machine).
+
 ## 4. Storage
 
 State lives in `~/.local/share/agent-vm` by default: cached base images
@@ -436,13 +439,89 @@ agent-vm destroy smoke-test --yes
 The first `image build` needs registry access and takes a few minutes. Subsequent
 `create` calls use the cache and should complete in seconds.
 
+## 9. Driving This Host From Another Machine
+
+`agent-vm` can drive a hypervisor over ssh:
+
+```bash
+agent-vm --libvirt-uri qemu+ssh://kvm@hypervisor.lan/system doctor
+```
+
+Set it permanently in the client's config file instead of typing it each time:
+
+```toml
+libvirt_uri = "qemu+ssh://kvm@hypervisor.lan/system"
+```
+
+**Everything in this document applies to the hypervisor, not to the client.**
+The packages in §2, the group membership in §3, the storage in §4, the NAT
+network and firewall rules in §5, and the bridge in §6 are all that host's;
+`agent-vm` builds base images, creates disks, and defines domains there
+([ADR-0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md)).
+
+### On the hypervisor
+
+Everything in §§1–7, plus `flock` (util-linux), `find` (findutils), and
+coreutils — which any Linux host running libvirt already has. `ssh` and `gh` are
+**not** needed there; they are needed on the client.
+
+The account named in the URI is the one that matters: it needs the `kvm` and
+`libvirt` group membership from §3, and its home directory is where the state
+directory goes by default. `agent-vm doctor` run from the client reports both.
+
+### On the client
+
+Only `ssh` (and `gh`, if you use `--github-ssh-key`). No KVM, no libvirt, no
+podman, no libguestfs.
+
+Key-based login must work without a prompt, because `agent-vm` captures ssh's
+output and a prompt would look like a hang:
+
+```bash
+ssh kvm@hypervisor.lan true    # must succeed silently
+```
+
+Use an SSH agent or a default identity. If the key is somewhere else, name it in
+the URI: `qemu+ssh://kvm@hypervisor.lan/system?keyfile=/home/me/.ssh/hv_ed25519`.
+A non-standard port goes in the URI too:
+`qemu+ssh://kvm@hypervisor.lan:2222/system`.
+
+### Where things live
+
+| | Location |
+|---|---|
+| Base images, overlays, `vm.json`, locks | The hypervisor, under `~/.local/share/agent-vm` of the account in the URI, or the `--state-dir` you name — which is a path **on that host** |
+| Guests | The hypervisor's networks. `agent-vm ssh` reaches them with `ssh -J kvm@hypervisor.lan` |
+| Your GitHub login | The client. No GitHub credential is sent to the hypervisor |
+
+### What `doctor` cannot tell you from here
+
+The hypervisor's firewall (§5) and whether its QEMU account can reach its state
+directory (§4) both need that machine's configuration files and passwd database.
+Those two checks report `skip` from the client. If guests boot but their outbound
+connections hang, or a `create` fails with a permission error on the overlay, run
+`agent-vm doctor` on the hypervisor itself.
+
+### Verifying
+
+```bash
+export AGENT_VM_LIBVIRT_URI=qemu+ssh://kvm@hypervisor.lan/system
+agent-vm doctor
+agent-vm create smoke-test --dry-run   # prints the ssh invocations it would run
+agent-vm create smoke-test
+agent-vm ssh smoke-test -- uname -a
+agent-vm destroy smoke-test --yes
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
 | `exit 3`, cannot connect to libvirt | Service down, or user not in `libvirt` | `systemctl status libvirtd`, `id` |
 | `exit 3`, tool missing or too old | Host package missing or below the floor | `agent-vm doctor`, the package table above |
-| A tool failed and you want to reproduce it | — | The error names the tool, argv, and exit status; rerun it by hand, or use `--dry-run` |
+| A tool failed and you want to reproduce it | — | The error names the tool, argv, exit status, and the machine it ran on; rerun it there, or use `--dry-run` |
+| `cannot reach the hypervisor host … over ssh` | Key-based login is not working non-interactively | `ssh <destination> true` must succeed silently; see [§9](#9-driving-this-host-from-another-machine) |
+| `the tls transport is not supported` | A remote URI that gives no shell on the hypervisor | Use `qemu+ssh://`; see [§9](#9-driving-this-host-from-another-machine) |
 | `exit 3`, `/dev/kvm` unusable | Virtualization disabled, or user not in `kvm` | firmware settings, `ls -l /dev/kvm` |
 | `Cannot access storage file ... Permission denied` on create | The hypervisor's account cannot search a directory above the state directory | `agent-vm doctor` (state directory access), then `setfacl -m u:<qemu user>:x` on the directory it names |
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |

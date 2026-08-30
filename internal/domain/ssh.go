@@ -27,6 +27,12 @@ type SSHOptions struct {
 	// decides — agent keys and the operator's defaults. This tool never reads
 	// the file; it only names it to ssh.
 	IdentityFile string
+	// Jump is the [user@]host[:port] of a machine to connect through, set when
+	// the hypervisor is not this one. A guest sits on a network that exists on
+	// the hypervisor — libvirt's NAT bridge is host-local by design — so it is
+	// not routable from here and the connection is made through that host
+	// instead (ADR-0010).
+	Jump string
 	// Command is run non-interactively when set; otherwise ssh opens a shell.
 	Command []string
 	// BatchMode fails instead of prompting. It is what a probe and a scripted
@@ -54,7 +60,15 @@ func SSHCommand(opts SSHOptions) (hostexec.Command, error) {
 		port = 22
 	}
 
-	args := []string{
+	args := []string{}
+	if opts.Jump != "" {
+		// The jump host is authenticated exactly the way `ssh <host>` would
+		// authenticate it — the agent, ~/.ssh/config, the default identities —
+		// which is already a working connection, because agent-vm runs every
+		// host tool through it.
+		args = append(args, "-J", opts.Jump)
+	}
+	args = append(args,
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		// Without this, every connection prints a warning about the discarded
@@ -62,7 +76,7 @@ func SSHCommand(opts SSHOptions) (hostexec.Command, error) {
 		"-o", "LogLevel=ERROR",
 		"-o", "ConnectTimeout=5",
 		"-p", fmt.Sprint(port),
-	}
+	)
 	if opts.BatchMode {
 		args = append(args, "-o", "BatchMode=yes")
 	}
@@ -80,6 +94,9 @@ func SSHCommand(opts SSHOptions) (hostexec.Command, error) {
 		Args: args,
 		// Whatever the operator runs in the guest is assumed to change it.
 		Effect: hostexec.Mutate,
+		// This runs here rather than on the hypervisor: it uses the operator's
+		// keys and, for an interactive session, their terminal.
+		Location: hostexec.Client,
 	}, nil
 }
 

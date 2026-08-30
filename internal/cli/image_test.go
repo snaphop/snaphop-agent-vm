@@ -28,7 +28,13 @@ func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) 
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 
-	app := &App{Stdout: &stdout, Stderr: &stderr, Env: func(string) string { return "" }, Runner: fake}
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env: func(string) string { return "" }, Runner: fake,
+		// The state directory stays on this disk even when the test points at
+		// a hypervisor on another machine (see App.StateFS).
+		StateFS: state.Local(),
+	}
 	full := append([]string{"--state-dir", stateDir, "--config", t.TempDir() + "/absent.toml"}, args...)
 
 	code := app.Main(context.Background(), full)
