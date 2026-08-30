@@ -369,15 +369,7 @@ func (b *Builder) extractBootArtifacts(ctx context.Context, work *workspace, d d
 		if rename.from == rename.to {
 			continue
 		}
-		from, err := b.Store.Resolve(filepath.Join(work.dir, rename.from))
-		if err != nil {
-			return err
-		}
-		to, err := b.Store.Resolve(filepath.Join(work.dir, rename.to))
-		if err != nil {
-			return err
-		}
-		if err := os.Rename(from, to); err != nil {
+		if err := b.Store.Rename(filepath.Join(work.dir, rename.from), filepath.Join(work.dir, rename.to)); err != nil {
 			return fmt.Errorf("renaming %s to %s: %w", rename.from, rename.to, err)
 		}
 	}
@@ -464,8 +456,8 @@ func (b *Builder) writeManifest(ctx context.Context, work *workspace, opts Build
 		ToolVersions:   b.toolVersions(ctx),
 		AgentVMVersion: b.AgentVMVersion,
 	}
-	if info, err := os.Stat(work.diskPath); err == nil {
-		manifest.BaseDiskBytes = info.Size()
+	if size, err := b.Store.FileSize(work.diskPath); err == nil {
+		manifest.BaseDiskBytes = size
 	}
 
 	// The manifest is written into the workspace, so it is renamed into place
@@ -497,14 +489,6 @@ func (b *Builder) toolVersions(ctx context.Context) map[string]string {
 // the image becomes visible and bootable, and it is the last step.
 func (b *Builder) commit(work *workspace, distroName, tag string) error {
 	final := b.Store.ImageDir(distroName, tag)
-	resolvedFinal, err := b.Store.Resolve(final)
-	if err != nil {
-		return err
-	}
-	resolvedWork, err := b.Store.Resolve(work.dir)
-	if err != nil {
-		return err
-	}
 	if err := b.Store.MkdirAll(filepath.Dir(final)); err != nil {
 		return err
 	}
@@ -512,20 +496,24 @@ func (b *Builder) commit(work *workspace, distroName, tag string) error {
 	// A rebuild replaces an existing image. The old directory is moved aside
 	// first and removed only after the new one is in place, so a failure here
 	// leaves the previous image intact rather than nothing at all.
-	previous := resolvedFinal + ".previous"
-	if _, err := os.Stat(resolvedFinal); err == nil {
+	previous := final + ".previous"
+	existed, err := b.Store.Exists(final)
+	if err != nil {
+		return err
+	}
+	if existed {
 		if err := b.Store.Remove(previous); err != nil {
 			return err
 		}
-		if err := os.Rename(resolvedFinal, previous); err != nil {
+		if err := b.Store.Rename(final, previous); err != nil {
 			return fmt.Errorf("moving the previous %s:%s image aside: %w", distroName, tag, err)
 		}
 	}
 
-	if err := os.Rename(resolvedWork, resolvedFinal); err != nil {
-		if _, statErr := os.Stat(previous); statErr == nil {
+	if err := b.Store.Rename(work.dir, final); err != nil {
+		if existed {
 			// Put the previous image back rather than leaving the cache empty.
-			if restoreErr := os.Rename(previous, resolvedFinal); restoreErr != nil {
+			if restoreErr := b.Store.Rename(previous, final); restoreErr != nil {
 				return fmt.Errorf("installing the new %s:%s image failed (%w), and the previous one could not be restored: %v",
 					distroName, tag, err, restoreErr)
 			}

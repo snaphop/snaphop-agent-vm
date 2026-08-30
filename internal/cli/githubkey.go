@@ -32,6 +32,7 @@ func (a *App) readGuestPublicKey(ctx context.Context, req createRequest, vm *sta
 		User:         vm.Guest.User,
 		Address:      address,
 		IdentityFile: privateKeyFor(vm),
+		Jump:         a.sshJump(),
 	}, guestPublicKeyPath, req.waitForSSH)
 	if err != nil {
 		return "", fmt.Errorf("reading %s from %s, which the guest generates on first boot: %w",

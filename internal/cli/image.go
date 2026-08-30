@@ -126,14 +126,18 @@ func runImageBuild(ctx context.Context, app *App, args []string) error {
 // perform. Values that only exist once the build has run — the source digest,
 // the kernel file name — appear as placeholders rather than as guesses.
 func (a *App) printBuildPlan(opts image.BuildOptions) error {
-	cfg, err := a.Config()
+	// The store, not the configured path, because a remote hypervisor's
+	// default state directory sits under *its* home directory.
+	store, err := a.Store()
 	if err != nil {
 		return err
 	}
-	layout := state.NewLayout(cfg.StateDir)
+	layout := store.Layout
 
 	for _, cmd := range image.Plan(layout, opts) {
-		a.out.Printf("%s\n", cmd.String())
+		// Rendered through the runner so that a plan for a remote hypervisor
+		// shows the ssh invocations that would really run (ADR-0010).
+		a.out.Printf("%s\n", a.runner.Render(cmd))
 	}
 	for _, note := range image.PlanNotes(layout, opts.Ref) {
 		a.out.Printf("# %s\n", note)

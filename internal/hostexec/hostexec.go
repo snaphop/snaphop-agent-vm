@@ -11,6 +11,7 @@
 package hostexec
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -48,15 +49,37 @@ const (
 	Mutate
 )
 
+// Location says which machine a command runs on. The zero value is the
+// hypervisor host, because that is where all but a handful of this tool's
+// invocations belong: qemu-img writes a disk the hypervisor must open, podman
+// and libguestfs build an image the hypervisor must boot, and virt-install
+// hands libvirt paths only the hypervisor can resolve. When the libvirt URI is
+// local those two machines are the same one and this changes nothing
+// (ADR-0010).
+type Location int
+
+const (
+	// Hypervisor is the machine libvirt and QEMU run on.
+	Hypervisor Location = iota
+	// Client is the machine the operator typed the command on. It is for the
+	// few invocations that belong to the operator rather than to the
+	// hypervisor: `gh`, which uses their GitHub login, and the `ssh` into a
+	// guest, which uses their keys and their terminal.
+	Client
+)
+
 // Command is a single tool invocation. Name is the tool as it appears on PATH;
 // it is also the name used in errors and logs.
 type Command struct {
-	Name    string
-	Args    []string
-	Effect  Effect
-	Stdin   io.Reader
-	Dir     string
-	Timeout time.Duration
+	Name   string
+	Args   []string
+	Effect Effect
+	// Location selects the machine this runs on. The zero value, Hypervisor,
+	// is correct for everything that touches a disk, an image, or a domain.
+	Location Location
+	Stdin    io.Reader
+	Dir      string
+	Timeout  time.Duration
 
 	// Output, when set, receives stdout and stderr as they are produced, in
 	// addition to the buffers Result carries. It exists for the invocations
@@ -100,11 +123,50 @@ type Result struct {
 // at the process boundary rather than mocking inside our own packages.
 type Runner interface {
 	Run(ctx context.Context, c Command) (*Result, error)
-	// LookPath resolves a tool on PATH, returning *NotFoundError if absent.
-	LookPath(name string) (string, error)
+	// LookPath resolves a tool on the PATH of the machine loc names, returning
+	// *NotFoundError if it is absent there.
+	LookPath(name string, loc Location) (string, error)
 	// Become replaces this process with the command, so the operator's terminal
 	// talks to it directly. It returns only on failure to start.
 	Become(c Command) error
+	// Start runs a command without waiting for it, handing back its standard
+	// input and output. It exists for the one thing Run cannot express: a
+	// process that must stay alive while the caller does something else.
+	Start(ctx context.Context, c Command) (*Process, error)
+	// HypervisorHost names the machine host tools run on, or "" when that is
+	// this machine. It is reported to the operator, never used to build a
+	// command.
+	HypervisorHost() string
+	// Render is the command as it would actually be run, transport included.
+	// It is what --dry-run prints for a plan assembled ahead of time rather
+	// than executed, so that the printed plan and the real run cannot differ.
+	Render(c Command) string
+}
+
+// Process is a command that has been started but not waited for. It exists for
+// the advisory lock on the state directory: a file lock lives only as long as
+// some process holds the file open, so taking one on another machine means
+// keeping a process alive there and closing it to release.
+type Process struct {
+	// Stdin is the process's standard input. Closing it is how a remote
+	// command that blocks on a read is told to exit.
+	Stdin io.WriteCloser
+	// Stdout is the process's standard output, buffered so a caller can read
+	// one line and leave the rest.
+	Stdout *bufio.Reader
+
+	stop func() error
+}
+
+// Close stops the process and waits for it, so that whatever it held — a lock,
+// an ssh connection — is released before this returns.
+func (p *Process) Close() error {
+	if p == nil || p.stop == nil {
+		return nil
+	}
+	stop := p.stop
+	p.stop = nil
+	return stop()
 }
 
 // Exec is the real Runner.
@@ -203,7 +265,7 @@ func (e *Exec) Run(ctx context.Context, c Command) (*Result, error) {
 // all of that over at once, and is why `agent-vm ssh` behaves exactly like the
 // `ssh` it prints under --dry-run.
 func (e *Exec) Become(c Command) error {
-	path, err := e.LookPath(c.Name)
+	path, err := e.LookPath(c.Name, c.Location)
 	if err != nil {
 		return err
 	}
@@ -216,8 +278,58 @@ func (e *Exec) Become(c Command) error {
 	return nil
 }
 
+// Start runs a command in the background, wired to pipes rather than to this
+// process's own streams.
+func (e *Exec) Start(ctx context.Context, c Command) (*Process, error) {
+	if c.Name == "" {
+		return nil, errors.New("hostexec: command has no tool name")
+	}
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("connecting to %s: %w", c.Name, err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("connecting to %s: %w", c.Name, err)
+	}
+	// stderr is collected rather than discarded so that a process which dies on
+	// startup can say why when Close reports the failure.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	e.Logger.Debug("started host tool", "tool", c.Name, "argv", c.Argv())
+	if err := cmd.Start(); err != nil {
+		if isNotFound(err) {
+			return nil, &NotFoundError{Tool: c.Name}
+		}
+		return nil, fmt.Errorf("running %s: %w", c.Name, err)
+	}
+
+	return &Process{
+		Stdin:  stdin,
+		Stdout: bufio.NewReader(stdout),
+		stop: func() error {
+			// Closing stdin is the graceful stop: a command blocked on a read
+			// sees end-of-file and exits, releasing what it held. The kill is
+			// the fallback for one that does not.
+			_ = stdin.Close()
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil
+		},
+	}, nil
+}
+
+// HypervisorHost is empty: this runner runs everything on this machine.
+func (e *Exec) HypervisorHost() string { return "" }
+
+// Render is the command itself: nothing wraps it here.
+func (e *Exec) Render(c Command) string { return c.String() }
+
 // LookPath resolves a tool on PATH.
-func (e *Exec) LookPath(name string) (string, error) {
+func (e *Exec) LookPath(name string, _ Location) (string, error) {
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return "", &NotFoundError{Tool: name}
@@ -254,7 +366,9 @@ func (d *DryRun) Run(ctx context.Context, c Command) (*Result, error) {
 }
 
 // LookPath delegates; resolving a tool changes nothing.
-func (d *DryRun) LookPath(name string) (string, error) { return d.Inner.LookPath(name) }
+func (d *DryRun) LookPath(name string, loc Location) (string, error) {
+	return d.Inner.LookPath(name, loc)
+}
 
 // Become prints the command instead of becoming it. This is the documented way
 // to get the exact `ssh` or `virsh console` invocation for a VM and run it
@@ -267,8 +381,36 @@ func (d *DryRun) Become(c Command) error {
 	return nil
 }
 
+// Start delegates a read-only command and, for a mutating one, hands back a
+// process that does nothing. The mutating case is the state directory lock: a
+// dry run must not take one, and must not fail for want of it either.
+func (d *DryRun) Start(ctx context.Context, c Command) (*Process, error) {
+	if c.Effect == Read {
+		return d.Inner.Start(ctx, c)
+	}
+	d.planned = append(d.planned, c)
+	if d.Out != nil {
+		_, _ = fmt.Fprintln(d.Out, c.String())
+	}
+	return &Process{
+		Stdin:  nopWriteCloser{io.Discard},
+		Stdout: bufio.NewReader(strings.NewReader(c.DryRunStdout)),
+	}, nil
+}
+
+// HypervisorHost reports what the wrapped runner would use.
+func (d *DryRun) HypervisorHost() string { return d.Inner.HypervisorHost() }
+
+// Render defers to the wrapped runner, which is what would have run it.
+func (d *DryRun) Render(c Command) string { return d.Inner.Render(c) }
+
 // Planned returns the mutating commands that were printed rather than run.
 func (d *DryRun) Planned() []Command { return d.planned }
+
+// nopWriteCloser adds a no-op Close, for a process that has no real stdin.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 // syncWriter serializes writes from the stdout and stderr copiers onto one
 // destination.

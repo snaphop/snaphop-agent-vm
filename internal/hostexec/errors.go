@@ -15,11 +15,18 @@ type ToolError struct {
 	ExitCode int
 	Stderr   string
 	Duration time.Duration
+	// Host is the machine the tool ran on, empty when that is this one. An
+	// operator rerunning the command by hand has to know which machine to run
+	// it on, and "it works here" is the wrong conclusion to let them draw.
+	Host string
 }
 
 func (e *ToolError) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s exited %d", e.Tool, e.ExitCode)
+	if e.Host != "" {
+		fmt.Fprintf(&b, " on %s", e.Host)
+	}
 	fmt.Fprintf(&b, "\n  command: %s", quoteArgv(e.Argv))
 	if e.Stderr != "" {
 		fmt.Fprintf(&b, "\n  stderr: %s", indent(e.Stderr))
@@ -48,10 +55,16 @@ type TimeoutError struct {
 	Tool    string
 	Argv    []string
 	Timeout time.Duration
+	// Host is the machine the tool ran on, empty when that is this one.
+	Host string
 }
 
 func (e *TimeoutError) Error() string {
-	return fmt.Sprintf("%s did not finish within %s\n  command: %s", e.Tool, e.Timeout, quoteArgv(e.Argv))
+	where := ""
+	if e.Host != "" {
+		where = " on " + e.Host
+	}
+	return fmt.Sprintf("%s did not finish within %s%s\n  command: %s", e.Tool, e.Timeout, where, quoteArgv(e.Argv))
 }
 
 // VersionError is a tool present but older than this project's floor. Raising a

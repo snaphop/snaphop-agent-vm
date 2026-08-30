@@ -51,7 +51,8 @@ single-host tool with no daemon of its own.
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
 │  internal/github     gh api calls for --github-ssh-key, on the host only           │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
-│  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status    │
+│  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status,   │
+│                      and the ssh transport for a hypervisor on another machine     │
 └───────────────────────────────────────┬────────────────────────────────────────────┘
                                         │ argv + machine-readable output
         ┌───────────────────────────────┼────────────────────────────┐
@@ -75,6 +76,16 @@ performed by the standard tool that already does it. `internal/hostexec` is the
 only package that spawns a process, so argv construction, logging, and exit-status
 handling exist in exactly one place.
 
+Everything below the dashed line above is on **the machine libvirt runs on**. By
+default that is the machine the command was typed on, and the two are the same. A
+`qemu+ssh://` libvirt URI separates them: the tools, the state directory, and the
+guests are on the hypervisor, and `agent-vm` drives them from the client by
+wrapping each invocation in `ssh`
+([ADR-0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md)).
+Only two invocations stay on the client — `gh`, which uses the operator's GitHub
+login, and the `ssh` into a guest, which uses their keys and terminal and reaches
+the guest through the hypervisor with `-J`.
+
 Trust boundaries, from most to least trusted:
 
 1. **The operator's shell** — supplies arguments, config, and SSH public keys.
@@ -83,7 +94,11 @@ Trust boundaries, from most to least trusted:
    operation.
 2. **`agent-vm` and libvirt/QEMU on the host** — the control plane. It runs
    with the operator's privileges (or `qemu:///system` access) and is the only
-   component allowed to touch host state.
+   component allowed to touch host state. With a `qemu+ssh://` URI this spans two
+   machines, and the ssh connection between them is part of the control plane: it
+   terminates on the hypervisor and is never reachable from a guest. The account
+   the URI names can run host tools on that machine, which is a broader grant
+   than a libvirt connection alone — hence the explicit `ssh` in the URI.
 3. **The guest** — untrusted. Everything coming back from it (guest agent
    responses, DHCP leases, console output, exit statuses) is untrusted input and
    is validated before use, and nothing is exposed to it beyond its own virtual
@@ -258,11 +273,17 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 
 - **Responsibility:** Own `$STATE_DIR`, the per-VM directory, `vm.json`, and the
   locks that serialize concurrent operations on the same VM or base image.
+  `$STATE_DIR` is on the machine the hypervisor is on — everything in it is
+  something QEMU has to open — so file operations go through an `FS`: the `os`
+  package locally, and coreutils, findutils, and `flock(1)` over the ssh
+  transport for a remote hypervisor (ADR-0010).
 - **Public interface:** the state layout and `vm.json` schema.
 - **Failure behavior:** every path is resolved and checked to be inside
-  `$STATE_DIR` before any write or delete. A stale lock from a crashed process is
-  detectable and reported rather than silently broken. A `vm.json` with an
-  unknown `schemaVersion` is refused, not guessed at.
+  `$STATE_DIR` before any write or delete, identically on either machine. A stale
+  lock from a crashed process is detectable and reported rather than silently
+  broken; a remote lock is held by a process whose stdin this tool keeps open, so
+  it is released the same way a local one is when that process dies. A `vm.json`
+  with an unknown `schemaVersion` is refused, not guessed at.
 - **Compatibility constraints:** the layout is public; scripts and operators read
   it directly.
 
@@ -302,13 +323,20 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 - **Responsibility:** The single place where a process is spawned. Builds argument
   vectors (never shell strings), applies timeouts and cancellation, captures stdout
   and stderr, logs each invocation with its exit status, and detects tool presence
-  and version. Every other package asks it to run something.
+  and version. Every other package asks it to run something. It also owns *where*
+  a command runs: each command carries a location, and a remote hypervisor's
+  commands are wrapped in ssh here rather than at each call site (ADR-0010). That
+  wrapping is the one place an argument vector becomes text, because ssh has no
+  way to pass one through untouched, so every argument is quoted such that the
+  remote shell interprets nothing.
 - **Public interface:** internal only, but its behavior is visible in two public
   ways: `--dry-run` output and the logged argv.
 - **Failure behavior:** a non-zero exit becomes an error carrying the tool name,
-  argv, exit status, and a bounded excerpt of stderr — so a failure is always
-  attributable to a specific command an operator can rerun. A missing or too-old
-  tool is a host-readiness failure (exit `3`) naming the tool and required version.
+  argv, exit status, the machine it ran on, and a bounded excerpt of stderr — so a
+  failure is always attributable to a specific command an operator can rerun, on
+  the right host. A missing or too-old tool is a host-readiness failure (exit `3`)
+  naming the tool and required version. ssh failing to connect and a tool failing
+  on the far side are different errors, because they need different remedies.
 - **Compatibility constraints:** version floors live here and are surfaced by
   `doctor`. Output parsers live next to the caller that needs them, prefer
   machine-readable modes, and are tested against fixtures captured from real tools.
@@ -418,9 +446,9 @@ One profile, parameterized:
 
 | Dimension | Options | Notes |
 |---|---|---|
-| libvirt URI | `qemu:///system` (default), `qemu:///session` | Session mode is unprivileged and NAT-only; bridged mode needs system mode. |
+| libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session mode is unprivileged and NAT-only; bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
 | Network mode | `nat` (default), `bridge` | Bridge requires a pre-existing host bridge. |
-| State directory | user-local default, or a shared path | A shared path implies shared locks and shared images across users. |
+| State directory | user-local default, or a shared path | A shared path implies shared locks and shared images across users. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
 | Guest distro | `ubuntu`, `fedora`, `arch` | Pinned by digest per base image. |
 
 There are no feature flags, no build-time profiles, and no staging/production

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // healthyHost answers every tool probe with a version at or above the floor and
@@ -48,6 +49,10 @@ func runDoctorWith(t *testing.T, fake *hostexec.Fake, extraArgs ...string) (doct
 		Stdout: &stdout, Stderr: &stderr,
 		Env: func(string) string { return "" }, Runner: fake,
 		HypervisorIdentity: undeterminableHypervisor,
+		// The state directory stays on this disk even when the test points at
+		// a hypervisor on another machine, so these tests exercise the remote
+		// branches without needing a fake to stand in for a filesystem too.
+		StateFS: state.Local(),
 	}
 	args := append([]string{
 		"--state-dir", t.TempDir(),
@@ -209,6 +214,10 @@ func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
 		Stdout: &stdout, Stderr: &stderr,
 		Env: func(string) string { return "" }, Runner: fake,
 		HypervisorIdentity: undeterminableHypervisor,
+		// The state directory stays on this disk even when the test points at
+		// a hypervisor on another machine, so these tests exercise the remote
+		// branches without needing a fake to stand in for a filesystem too.
+		StateFS: state.Local(),
 	}
 	_ = app.run(context.Background(), []string{
 		"--state-dir", t.TempDir(),

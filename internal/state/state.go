@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -66,43 +65,60 @@ func (l Layout) InitrdPath(distro, tag string) string {
 	return filepath.Join(l.ImageDir(distro, tag), InitrdFile)
 }
 
-// Store is a state directory that exists on disk.
+// Store is a state directory that exists on disk — the hypervisor's disk,
+// which is this machine's only when libvirt is local.
 type Store struct {
 	Layout
+	fsys FS
 }
 
-// Open returns a Store rooted at dir, creating the directory tree if needed.
-func Open(dir string) (*Store, error) { return open(dir, true) }
+// Open returns a Store rooted at dir on this machine, creating the directory
+// tree if needed.
+func Open(dir string) (*Store, error) { return OpenOn(Local(), dir, true) }
 
-// OpenExisting returns a Store rooted at dir without creating anything. It is
-// what --dry-run uses: creating a directory tree is a change to the host, and a
-// dry run makes none.
-func OpenExisting(dir string) (*Store, error) { return open(dir, false) }
+// OpenExisting returns a Store rooted at dir on this machine without creating
+// anything. It is what --dry-run uses: creating a directory tree is a change to
+// the host, and a dry run makes none.
+func OpenExisting(dir string) (*Store, error) { return OpenOn(Local(), dir, false) }
 
-func open(dir string, create bool) (*Store, error) {
+// OpenOn returns a Store rooted at dir on fsys, which is how a state directory
+// on a remote hypervisor is opened (ADR-0010).
+func OpenOn(fsys FS, dir string, create bool) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("state: no state directory configured")
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("resolving state directory %s: %w", dir, err)
+	if !filepath.IsAbs(dir) {
+		// A relative path would be resolved against this process's working
+		// directory, which says nothing about the hypervisor's filesystem.
+		// Configuration makes the state directory absolute before it gets here.
+		return nil, fmt.Errorf("state: the state directory %s must be an absolute path", dir)
 	}
+	store := &Store{Layout: NewLayout(filepath.Clean(dir)), fsys: fsys}
 	if !create {
-		return &Store{Layout: NewLayout(abs)}, nil
+		return store, nil
 	}
 	for _, path := range []string{
-		abs,
-		filepath.Join(abs, "images"),
-		filepath.Join(abs, "vms"),
-		filepath.Join(abs, "locks"),
-		filepath.Join(abs, "networks"),
+		store.root,
+		filepath.Join(store.root, "images"),
+		filepath.Join(store.root, "vms"),
+		filepath.Join(store.root, "locks"),
+		filepath.Join(store.root, "networks"),
 	} {
-		if err := os.MkdirAll(path, dirPerm); err != nil {
-			return nil, fmt.Errorf("creating state directory %s: %w", path, err)
+		if err := fsys.MkdirAll(path, dirPerm); err != nil {
+			return nil, fmt.Errorf("creating state directory: %w", err)
 		}
 	}
-	return &Store{Layout: NewLayout(abs)}, nil
+	return store, nil
 }
+
+// FS is the filesystem this state directory lives on. Callers that must move
+// or measure a file inside it use it rather than reaching for the os package,
+// which would silently act on the wrong machine.
+func (s *Store) FS() FS { return s.fsys }
+
+// Host names the machine the state directory is on, or "" when that machine is
+// this one. It appears in operator-facing messages, never in a path.
+func (s *Store) Host() string { return s.fsys.Describe() }
 
 // Paths within a VM directory, named once so no caller spells them again.
 const (
@@ -166,17 +182,19 @@ func (s *Store) Resolve(path string) (string, error) {
 	if path == "" {
 		return "", &ContainmentError{Path: path, Resolved: "", Root: s.root}
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("resolving %s: %w", path, err)
+	if !filepath.IsAbs(path) {
+		// Every path this package is handed is built from the layout, which is
+		// rooted at an absolute state directory. A relative one would be
+		// resolved against the wrong machine's working directory.
+		return "", &ContainmentError{Path: path, Resolved: path, Root: s.root}
 	}
 
-	root, err := filepath.EvalSymlinks(s.root)
+	root, err := s.fsys.Canonicalize(s.root)
 	if err != nil {
-		return "", fmt.Errorf("resolving state directory %s: %w", s.root, err)
+		return "", err
 	}
 
-	resolved, err := resolveExisting(abs)
+	resolved, err := s.fsys.Canonicalize(filepath.Clean(path))
 	if err != nil {
 		return "", err
 	}
@@ -184,31 +202,6 @@ func (s *Store) Resolve(path string) (string, error) {
 		return "", &ContainmentError{Path: path, Resolved: resolved, Root: root}
 	}
 	return resolved, nil
-}
-
-// resolveExisting resolves symlinks in the longest existing prefix of path and
-// re-appends the rest, so a path that has not been created yet can still be
-// checked for containment.
-func resolveExisting(path string) (string, error) {
-	remainder := ""
-	current := path
-	for {
-		evaluated, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			return filepath.Join(evaluated, remainder), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("resolving %s: %w", path, err)
-		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			// Reached the filesystem root without finding anything that exists.
-			return path, nil
-		}
-		remainder = filepath.Join(filepath.Base(current), remainder)
-		current = parent
-	}
 }
 
 // within reports whether path is root or sits beneath it. It compares path
@@ -232,10 +225,7 @@ func (s *Store) Remove(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(resolved); err != nil {
-		return fmt.Errorf("removing %s: %w", resolved, err)
-	}
-	return nil
+	return s.fsys.RemoveAll(resolved)
 }
 
 // MkdirAll creates a directory inside the state directory.
@@ -244,10 +234,7 @@ func (s *Store) MkdirAll(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(resolved, dirPerm); err != nil {
-		return fmt.Errorf("creating %s: %w", resolved, err)
-	}
-	return nil
+	return s.fsys.MkdirAll(resolved, dirPerm)
 }
 
 // WriteFile writes a file inside the state directory, replacing it atomically
@@ -257,33 +244,7 @@ func (s *Store) WriteFile(path string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(resolved), dirPerm); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(resolved), err)
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(resolved), "."+filepath.Base(resolved)+".*")
-	if err != nil {
-		return fmt.Errorf("creating temporary file for %s: %w", resolved, err)
-	}
-	// A no-op once the rename below succeeds; on every failure path it is what
-	// keeps a partial file out of the state directory.
-	defer func() { _ = os.Remove(tmp.Name()) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("writing %s: %w", resolved, err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("setting permissions on %s: %w", resolved, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", resolved, err)
-	}
-	if err := os.Rename(tmp.Name(), resolved); err != nil {
-		return fmt.Errorf("replacing %s: %w", resolved, err)
-	}
-	return nil
+	return s.fsys.WriteFile(resolved, data, perm)
 }
 
 // ReadFile reads a file from inside the state directory.
@@ -292,12 +253,45 @@ func (s *Store) ReadFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(resolved)
+	return s.fsys.ReadFile(resolved)
+}
+
+// Rename moves a path inside the state directory onto another, after
+// confirming both are contained. Both halves are checked because the
+// destination is what survives.
+func (s *Store) Rename(from, to string) error {
+	resolvedFrom, err := s.Resolve(from)
+	if err != nil {
+		return err
+	}
+	resolvedTo, err := s.Resolve(to)
+	if err != nil {
+		return err
+	}
+	return s.fsys.Rename(resolvedFrom, resolvedTo)
+}
+
+// Exists reports whether a path inside the state directory exists.
+func (s *Store) Exists(path string) (bool, error) {
+	resolved, err := s.Resolve(path)
+	if err != nil {
+		return false, err
+	}
+	return s.fsys.Exists(resolved)
+}
+
+// FileSize is the size in bytes of a file inside the state directory.
+func (s *Store) FileSize(path string) (int64, error) {
+	resolved, err := s.Resolve(path)
+	if err != nil {
+		return 0, err
+	}
+	return s.fsys.Size(resolved)
 }
 
 // FreeBytes reports free space in the state directory's filesystem, which
 // doctor checks and image builds need.
-func (s *Store) FreeBytes() (uint64, error) { return freeBytes(s.root) }
+func (s *Store) FreeBytes() (uint64, error) { return s.fsys.FreeBytes(s.root) }
 
 // WriteNetworkXML stores generated libvirt network XML under networks/ and
 // returns its path. `virsh net-define` takes a file, and the file is worth

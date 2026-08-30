@@ -227,6 +227,9 @@ Additional checks required for specific changes:
   and record which distro/tag combinations you actually booted.
 - Networking changes: exercise both NAT and bridged modes, or state explicitly
   which one you could not verify and why.
+- Anything touching where commands run — `internal/hostexec` locations, the ssh
+  transport, `internal/state`'s `FS`, or the libvirt URI: verify against both a
+  local and a `qemu+ssh://` connection, or say which you could not.
 
 **The integration suite creates and destroys real VMs, networks, and disk
 images on the host it runs on.** It uses a dedicated `agent-vm-test-` name prefix
@@ -254,7 +257,10 @@ Major modules and responsibilities:
 - `internal/network` — ensures the NAT network exists via `virsh net-*`, or
   validates an existing host bridge with `ip -json link`.
 - `internal/state` — owns the state directory, per-VM `vm.json`, and the file
-  locks that keep concurrent `create`/`destroy` calls from racing.
+  locks that keep concurrent `create`/`destroy` calls from racing. The state
+  directory is on the machine the hypervisor is on, so its file operations go
+  through an `FS`: the `os` package locally, and coreutils plus `flock(1)` over
+  the ssh transport for a remote hypervisor.
 - `internal/github` — adds and removes SSH **public** keys on the operator's
   GitHub account through `gh api`, for `--github-ssh-key` on `create` and
   `destroy`. It runs on the host with the operator's existing login; no GitHub
@@ -263,7 +269,11 @@ Major modules and responsibilities:
   bar redrawn in place on a terminal, one plain line per step anywhere else.
   Presentation only; the package doing the work reports which step it reached.
 - `internal/hostexec` — the only package that spawns processes: argv construction,
-  timeouts, logging with exit status, and tool version detection.
+  timeouts, logging with exit status, tool version detection, and *where* a
+  command runs. Each command carries a location; with a `qemu+ssh://` libvirt URI
+  the hypervisor-located ones — everything touching a disk, an image, or a domain
+  — are wrapped in `ssh` here rather than at each call site (ADR-0010). Only `gh`
+  and the `ssh` into a guest stay on the client.
 
 Flow for `agent-vm create`: resolve config → check host readiness → ensure base
 image (build if the cache misses) → allocate the VM's state directory under a lock
@@ -276,7 +286,10 @@ half-written state directory behind.
 
 Runtime profiles and configuration: a single profile, parameterized by the
 libvirt URI (`qemu:///system` by default, `qemu:///session` supported for
-NAT-only unprivileged use), the state directory, and the network mode. There is
+NAT-only unprivileged use, and `qemu+ssh://[user@]host/system` to drive a
+hypervisor on another machine — other remote transports are refused, because
+they reach libvirt but give no shell to build images and disks with), the state
+directory, and the network mode. There is
 no database, queue, or cache beyond the base image cache on local disk. External
 services are container registries, contacted only during an image build.
 
@@ -302,7 +315,8 @@ path.
 Require an ADR in [`docs/decisions/`](./docs/decisions/) for decisions that are
 hard to reverse, affect multiple components, or change the security/deployment
 boundary — specifically the virtualization stack, the boot method, the image
-cache format, guest-to-host sharing, network modes, the default resource profile,
+cache format, guest-to-host sharing, network modes, where host tools run
+(ADR-0010), the default resource profile,
 adding a supported distro family, or **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 

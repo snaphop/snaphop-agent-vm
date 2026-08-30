@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -18,16 +19,30 @@ import (
 // never leaves a lock behind for a human to clean up — the kernel releases it
 // when the file descriptor closes.
 //
-// The lock file records the holder's PID and the operation, so a contended lock
-// can say who is holding it rather than just timing out.
+// They are taken on the machine the state directory is on, which is the
+// hypervisor. Two operators driving the same remote hypervisor from their own
+// laptops contend for the same lock, which is the point: the thing being
+// protected is the state directory, not the client.
+//
+// The lock file records the holder's host, PID, and operation, so a contended
+// lock can say who is holding it rather than just timing out.
 
 // lockPollInterval is how often a blocked acquisition retries. Lock waits here
 // are short (another create finishing), so polling beats a signal mechanism.
 const lockPollInterval = 100 * time.Millisecond
 
+// lockPerm is deliberately group- and world-readable: a contended lock is
+// meant to be able to name its holder, and on a shared hypervisor the process
+// asking is often not the one that wrote it.
+const lockPerm fs.FileMode = 0o644
+
+// holderLimit bounds how much of a lock file is read back. The description is
+// one short line; anything longer is not ours and is not worth quoting.
+const holderLimit = 256
+
 // Lock is a held file lock. Release must be called, normally with defer.
 type Lock struct {
-	file *os.File
+	held io.Closer
 	path string
 }
 
@@ -88,75 +103,64 @@ func (s *Store) tryLock(path, resource, operation string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(resolved), dirPerm); err != nil {
-		return nil, fmt.Errorf("creating lock directory: %w", err)
-	}
 
-	file, err := os.OpenFile(resolved, os.O_CREATE|os.O_RDWR, 0o644)
+	held, err := s.fsys.TryLock(resolved, holderDescription(operation))
 	if err != nil {
-		return nil, fmt.Errorf("opening lock file %s: %w", resolved, err)
-	}
-
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		holder := readHolder(file)
-		_ = file.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, &BusyError{Resource: resource, Holder: holder}
+		// The filesystem knows who holds a busy lock but not what the caller
+		// was trying to lock, so the resource is named here.
+		var busy *BusyError
+		if errors.As(err, &busy) {
+			busy.Resource = resource
+			return nil, busy
 		}
-		return nil, fmt.Errorf("locking %s: %w", resolved, err)
-	}
-
-	// Record the holder only after the lock is ours, so the file always
-	// describes the process that actually holds it.
-	if err := writeHolder(file, operation); err != nil {
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		_ = file.Close()
 		return nil, err
 	}
-	return &Lock{file: file, path: resolved}, nil
+	return &Lock{held: held, path: resolved}, nil
 }
 
 // Release drops the lock. It is safe to call more than once.
 func (l *Lock) Release() error {
-	if l == nil || l.file == nil {
+	if l == nil || l.held == nil {
 		return nil
 	}
-	file := l.file
-	l.file = nil
-
-	// The lock file itself is left in place: removing it would race with
-	// another process that has already opened it and is waiting on flock.
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("releasing lock %s: %w", l.path, err)
-	}
-	return file.Close()
+	held := l.held
+	l.held = nil
+	return held.Close()
 }
 
-func writeHolder(file *os.File, operation string) error {
-	if err := file.Truncate(0); err != nil {
-		return fmt.Errorf("preparing lock file: %w", err)
+// holderDescription is the line written into a lock file. The host is included
+// because a lock on a shared hypervisor may be held from another machine
+// entirely, where a bare PID would be no help at all.
+func holderDescription(operation string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
 	}
-	if _, err := file.WriteAt([]byte(fmt.Sprintf("pid=%d operation=%s\n", os.Getpid(), operation)), 0); err != nil {
-		return fmt.Errorf("recording lock holder: %w", err)
-	}
-	return nil
+	return fmt.Sprintf("host=%s pid=%d operation=%s\n", host, os.Getpid(), operation)
 }
 
-// readHolder reads the holder description written by the process that owns the
-// lock. Its contents are advisory: they come from another process and are only
-// ever used in a message.
-func readHolder(file *os.File) string {
-	buf := make([]byte, 256)
-	n, err := file.ReadAt(buf, 0)
-	if n == 0 || (err != nil && n == 0) {
-		return ""
-	}
-	line := strings.TrimSpace(string(buf[:n]))
-	if pid, rest, ok := strings.Cut(strings.TrimPrefix(line, "pid="), " "); ok {
-		if _, err := strconv.Atoi(pid); err == nil {
-			return "pid " + pid + ", " + rest
+// DescribeHolder renders a lock file's contents for a message. It is parsed
+// leniently: the contents come from another process and are only ever shown to
+// a person.
+func DescribeHolder(line string) string {
+	line = strings.TrimSpace(line)
+	fields := map[string]string{}
+	for _, field := range strings.Fields(line) {
+		if key, value, ok := strings.Cut(field, "="); ok {
+			fields[key] = value
 		}
 	}
-	return line
+	pid, err := strconv.Atoi(fields["pid"])
+	if err != nil {
+		return line
+	}
+
+	described := "pid " + strconv.Itoa(pid)
+	if host := fields["host"]; host != "" {
+		described += " on " + host
+	}
+	if operation := fields["operation"]; operation != "" {
+		described += ", operation=" + operation
+	}
+	return described
 }

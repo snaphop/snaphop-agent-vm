@@ -46,7 +46,13 @@ Trust levels, most to least trusted:
    mistake here becomes a host-level operation.
 2. **`agent-vm`, libvirt, and QEMU on the host** — the control plane, running
    with the operator's privileges. The only components allowed to touch host
-   state.
+   state. With a `qemu+ssh://` libvirt URI this spans two machines
+   ([ADR-0010](./docs/decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md)):
+   the ssh connection is part of the control plane, terminates on the
+   hypervisor, and is never reachable from a guest. That URI grants `agent-vm`
+   the ability to run host tools as that account on that machine, which is more
+   than a libvirt connection alone — which is why it must be spelled out in the
+   URI rather than inferred.
 3. **The guest** — untrusted. Everything it returns is untrusted input.
 4. **Container registries** — untrusted content, pinned by digest.
 
@@ -183,6 +189,15 @@ rules below govern it in advance, so that adding it cannot happen by accident.
   vector. MUST NOT build command strings for a shell, MUST NOT use `sh -c`, and MUST
   NOT pass untrusted values where a tool would interpret them as options — terminate
   options and validate first.
+- **One exception, and only one:** the ssh transport that runs host tools on a
+  remote hypervisor. ssh has no mechanism for passing an argument vector through
+  untouched — the far side is always a shell — so `internal/hostexec` renders the
+  vector to text there. That rendering MUST live in that single function, MUST
+  quote every argument such that the remote shell interprets nothing in it, and
+  MUST be covered by tests, including against a real shell. No other code in this
+  project may build a command string, and this exception MUST NOT be widened to
+  compose remote shell logic: each remote operation is one argument vector, not a
+  script. Adding a second such place requires an ADR.
 - Secrets MUST NOT be passed as command-line arguments. Argument vectors are logged
   and are visible to every process on the host.
 - Generated cloud-init data and network XML MUST be produced with proper escaping

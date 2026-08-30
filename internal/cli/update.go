@@ -194,6 +194,7 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 		User:         vm.Guest.User,
 		Address:      address,
 		IdentityFile: privateKeyFor(vm),
+		Jump:         a.sshJump(),
 		// An update is unattended by definition, so it must fail rather than
 		// stop at a prompt.
 		BatchMode: true,

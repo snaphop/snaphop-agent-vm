@@ -53,6 +53,7 @@ func runSSH(ctx context.Context, app *App, args []string) error {
 		User:         vm.Guest.User,
 		Address:      address,
 		IdentityFile: privateKeyFor(vm),
+		Jump:         app.sshJump(),
 		Command:      remote,
 		// A command given on the command line is scripted, so it must fail
 		// rather than stop at a prompt. An interactive session may prompt.
@@ -61,7 +62,7 @@ func runSSH(ctx context.Context, app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	return app.runner.Become(cmd)
+	return app.become(cmd)
 }
 
 func runConsole(ctx context.Context, app *App, args []string) error {
@@ -92,7 +93,7 @@ func runConsole(ctx context.Context, app *App, args []string) error {
 	}
 
 	app.out.Progress("Attaching to %s. Escape character is ^] .\n", vm.Name)
-	return app.runner.Become(manager.ConsoleCommand(vm.Name))
+	return app.become(manager.ConsoleCommand(vm.Name))
 }
 
 // splitRemoteCommand divides our arguments from the guest's at the first `--`.
