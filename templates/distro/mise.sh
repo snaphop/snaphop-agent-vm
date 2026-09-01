@@ -1,9 +1,10 @@
 # Put the mise-managed toolchain on PATH in a login shell.
 #
-# Each account gets its own mise under $HOME, copied from /etc/skel when the
-# account is created, because installing a tool writes into mise's data
-# directory. A single shared one would have every user on the VM writing to the
-# same place.
+# $HOME/.local/share/mise is a symlink to /usr/local/lib/mise, the store every
+# account shares. The link comes from /etc/skel, which useradd copies into each
+# new home; agent-vm-user-setup.service makes one for any account that was
+# created without skel. Which tool version an account uses is still its own --
+# that lives in $HOME/.config/mise -- so only the installs are shared.
 #
 # The shims are real executables -- symlinks to the mise binary, which dispatches
 # on the name it was called by -- rather than shell functions, so a script that

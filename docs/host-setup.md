@@ -395,6 +395,45 @@ agent-vm create agent-04 --network bridge --bridge br0
 
 Wireless interfaces cannot be bridged in the usual way; use NAT on laptops.
 
+### Turn Off The Spanning Tree Forward Delay
+
+A bridge running STP puts every newly added port through the listening and
+learning states before it forwards anything, for the forward delay each time. A
+guest's tap device is a new port on every boot, so with the 15-second default
+nothing the guest sends leaves the host for 30 seconds: DHCP cannot complete,
+`systemd-networkd-wait-online` blocks, cloud-init's network stage waits behind
+it, and sshd is the last thing to start. **This adds about 30 seconds to every
+`agent-vm create` on that bridge**, and no guest-side setting can shorten it —
+the frames genuinely do not pass. `agent-vm doctor` and `agent-vm create` both
+warn when the configured bridge is in this state.
+
+Check it, and turn it off:
+
+```bash
+ip -d link show br0 | grep -o 'stp_state [0-9]* .* forward_delay [0-9]*'
+sudo ip link set br0 type bridge stp_state 0
+```
+
+STP exists to break forwarding loops. A bridge whose only ports are one uplink
+and a set of guest taps has no loop to break, so turning it off is the right
+answer and it is what libvirt's own NAT bridges effectively do (they keep STP
+on with a zero delay). If the bridge has other ports on it and you would rather
+keep the protocol, set the delay to zero instead:
+
+```bash
+sudo ip link set br0 type bridge forward_delay 0
+```
+
+Both are runtime settings and are lost on reboot. Make it persistent in
+whatever manages the bridge — with NetworkManager:
+
+```bash
+nmcli connection modify br0 bridge.stp no
+nmcli connection up br0
+```
+
+`agent-vm` never changes this for you: host network configuration is yours.
+
 Set a default bridge in the config file to avoid repeating the flag:
 
 ```toml
@@ -532,6 +571,7 @@ agent-vm destroy smoke-test --yes
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
 | VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `agent-vm doctor` (host firewall guest services), `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
 | VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |
+| Bridged VM takes ~30 s longer than a NAT one to accept SSH | The host bridge runs STP with a non-zero forward delay, so the guest's tap port does not forward while DHCP is trying | `agent-vm doctor` (host bridge), `ip -d link show <bridge>`, then [Turn Off The Spanning Tree Forward Delay](#turn-off-the-spanning-tree-forward-delay) |
 | The same hang, on a host where the ufw rule used to work | libvirt allocated a different `virbrN` and the rule no longer matches | `virsh net-info agent-vm-nat \| grep Bridge`, compare with `sudo ufw status` |
 | Bridged VM has no address | Bridge down, or no DHCP on that VLAN | `ip -br link`, LAN DHCP server |
 | Disk full mid-task | Thin overlays grew | `du -sh` on the state directory |

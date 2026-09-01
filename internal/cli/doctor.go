@@ -616,7 +616,8 @@ func checkBridge(ctx context.Context, app *App, cfg *config.Config) []check {
 		}}
 	}
 
-	if err := network.ValidateBridge(ctx, app.runner, cfg.Bridge); err != nil {
+	warning, err := network.ValidateBridge(ctx, app.runner, cfg.Bridge)
+	if err != nil {
 		var berr *network.BridgeError
 		if errors.As(err, &berr) {
 			return []check{{
@@ -626,6 +627,16 @@ func checkBridge(ctx context.Context, app *App, cfg *config.Config) []check {
 			}}
 		}
 		return []check{{Name: name, Status: statusFail, Detail: err.Error()}}
+	}
+	// A spanning tree forward delay is not a broken host — the guest boots and
+	// is reachable — so it is a warning with the command that removes it,
+	// rather than a refusal to use a bridge the operator asked for.
+	if warning != nil {
+		return []check{{
+			Name: name, Status: statusWarn,
+			Detail: warning.Detail(),
+			Remedy: warning.Remedy(),
+		}}
 	}
 	return []check{{Name: name, Status: statusPass, Detail: "exists and is up"}}
 }

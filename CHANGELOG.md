@@ -17,6 +17,18 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `doctor` and `create` now warn when the configured host bridge runs the
+  spanning tree protocol with a non-zero forward delay. Such a bridge holds each
+  guest's tap port in listening and learning before it forwards anything, so the
+  guest cannot finish DHCP for twice that delay — about 30 seconds with the
+  usual default — and every VM on that bridge takes that much longer to accept
+  SSH. Nothing inside the guest can shorten it: the frames genuinely do not
+  pass, which is why the wait looks like a slow image rather than a network
+  setting. The warning names the command that removes it
+  (`ip link set <bridge> type bridge stp_state 0`), and the VM is still created.
+  `agent-vm` never changes host network configuration itself. See
+  "Turn Off The Spanning Tree Forward Delay" in `docs/host-setup.md`.
+
 - **`agent-vm` can now drive a hypervisor on another machine.** Point
   `--libvirt-uri` at `qemu+ssh://[user@]host[:port]/system` (or set
   `libvirt_uri` in the config file, or `AGENT_VM_LIBVIRT_URI`) and everything
@@ -63,6 +75,25 @@ migration or rebuild step a user has to take.
   and warns rather than fails.
 
 ### Changed
+
+- **A VM's first boot is about nine seconds shorter, and writes 1.7 GiB less to
+  its disk.** The base images kept the whole `mise`-managed toolchain — the JDK,
+  Maven, Node, Go, and the coding agents — in `/etc/skel`, so `useradd` copied
+  all of it into the login user's home before cloud-init could get to the SSH
+  keys. It now lives in `/usr/local/lib/mise`, one store every account shares,
+  and each account's `~/.local/share/mise` is a symlink to it.
+
+  Nothing an account can do changes: every directory in the store is writable
+  with the sticky bit, the way `/tmp` and the Playwright browser directory
+  already are, so `mise use -g node@24` still works without `sudo` and still
+  affects no other account — the installs are shared, but *which* version an
+  account uses stays in its own `~/.config/mise`. No account may remove
+  another's tool.
+
+  This takes effect when a base image is rebuilt (`agent-vm image build
+  --force`). Existing VMs and existing base images are untouched: an account
+  that already has its own copy of the toolchain keeps it, and first boot leaves
+  it alone rather than replacing it with a link.
 
 - **The cloud-init seed is now built by `agent-vm` and attached as a read-only
   virtio disk**, instead of being built and attached by

@@ -179,7 +179,7 @@ func TestDoctor_UndefinedNATNetworkIsNotAFailure(t *testing.T) {
 
 func TestDoctor_ValidatesAConfiguredBridge(t *testing.T) {
 	fake := healthyHost()
-	fake.Respond("ip -json link show type bridge", hostexec.FakeResponse{
+	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
 		Stdout: `[{"ifname":"br0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"operstate":"UP"}]`,
 	})
 

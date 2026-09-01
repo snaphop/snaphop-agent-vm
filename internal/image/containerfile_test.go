@@ -628,10 +628,11 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 //
 // The base filesystem is built to the size of the image plus a little slack, so
 // a guest that cannot grow its root partition has that slack and nothing more.
-// First boot then copies /etc/skel -- the JDK, Node, the agents, and the Rust
-// toolchain -- into a new account, runs out of space, and takes cloud-final and
-// sshd down with it: a VM that boots and never accepts SSH. Ubuntu's cloud-init
-// pulls growpart in as a dependency; Fedora's and Arch's do not.
+// First boot then writes into that slack -- cloud-init's own logs, the account
+// it creates, and everything an agent does afterwards -- runs out of space, and
+// takes cloud-final and sshd down with it: a VM that boots and never accepts
+// SSH. Ubuntu's cloud-init pulls growpart in as a dependency; Fedora's and
+// Arch's do not.
 func TestContainerfiles_CanGrowTheRootFilesystem(t *testing.T) {
 	growpart := map[string]string{
 		"fedora": "cloud-utils-growpart",
@@ -848,13 +849,13 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "MISE_INSTALL_PATH=/usr/local/bin/mise") {
 			t.Errorf("%s does not install mise where every account has it on PATH", d.Containerfile)
 		}
-		// The JVM toolchain has to be installed into the skel copy, before it
-		// is cloned to /root: a JDK downloaded per account at first use would
-		// be a download a network-isolated guest cannot make. It goes to
-		// /etc/skel rather than one shared directory because installing a tool
-		// writes into mise's data directory.
-		if !strings.Contains(recipe, "MISE_DATA_DIR=/etc/skel/.local/share/mise") {
-			t.Errorf("%s does not install the mise toolchain into /etc/skel; accounts cloud-init creates would have none, and a shared copy would have every user writing to one directory", d.Containerfile)
+		// The toolchain is installed into one store every account shares: a JDK
+		// downloaded per account at first use would be a download a
+		// network-isolated guest cannot make, and a copy per account cost every
+		// VM about nine seconds of first boot and 1.7 GiB of overlay writes in
+		// useradd.
+		if !strings.Contains(recipe, "MISE_DATA_DIR=/usr/local/lib/mise") {
+			t.Errorf("%s does not install the mise toolchain into the shared store; a per-account copy costs every first boot about nine seconds and 1.7 GiB of overlay writes", d.Containerfile)
 		}
 		// java@temurin, not java@latest: mise names a distribution by prefix,
 		// and an unprefixed version gets an Oracle build of OpenJDK instead of
@@ -862,8 +863,29 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "mise use --global --yes java@temurin maven@latest") {
 			t.Errorf("%s does not install a Temurin JDK and Maven with mise; a guest would come up with `mise` and no Java, or with the wrong JDK", d.Containerfile)
 		}
-		if !strings.Contains(recipe, "cp -a /etc/skel/.local/share/mise /root/.local/share/mise") {
-			t.Errorf("%s does not copy the toolchain to /root, which is created before /etc/skel holds it and never inherits from it", d.Containerfile)
+		// Every account reaches the store through a symlink at the path mise
+		// looks in by default. /etc/skel is what useradd copies into a new
+		// home, and useradd copies a symlink as a symlink; root needs its own
+		// because it is created before /etc/skel holds anything and never
+		// consults skel.
+		for _, link := range []string{
+			"ln -sfn /usr/local/lib/mise /etc/skel/.local/share/mise",
+			"ln -sfn /usr/local/lib/mise /root/.local/share/mise",
+		} {
+			if !strings.Contains(recipe, link) {
+				t.Errorf("%s does not run %q, so that account would have no toolchain at all", d.Containerfile, link)
+			}
+		}
+		// Sharing a store is only usable if every account may install into it.
+		// The sticky bit is what keeps one account from removing another's
+		// tool, the way /tmp and /opt/ms-playwright work.
+		if !strings.Contains(recipe, "find /usr/local/lib/mise -type d -exec chmod 1777 {} +") {
+			t.Errorf("%s does not make the shared mise store writable; `mise use -g` would fail for every account but root", d.Containerfile)
+		}
+		// The store must not be copied per account by any route: that is the
+		// cost this design exists to remove.
+		if strings.Contains(recipe, "cp -a /etc/skel/.local/share/mise") {
+			t.Errorf("%s still copies the mise store per account, which is the nine seconds of first boot the shared store removes", d.Containerfile)
 		}
 		// The shims are executables, not a shell function, but they still have
 		// to be put on PATH for a login shell to find java and mvn.
@@ -873,14 +895,14 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 	}
 }
 
-// TestUserSetupScript_DoesBothJobsItIsThereFor guards the first-boot script
+// TestUserSetupScript_DoesEveryJobItIsThereFor guards the first-boot script
 // that finishes every interactive account.
 //
-// Neither job can be done at build time — the accounts do not exist yet — and
-// neither can be done from the seed: cloud-init only knows about the login
+// None of these jobs can be done at build time — the accounts do not exist yet
+// — and none can be done from the seed: cloud-init only knows about the login
 // user agent-vm asks for, and a private key must never be written into a seed
 // (SECURITY.md).
-func TestUserSetupScript_DoesBothJobsItIsThereFor(t *testing.T) {
+func TestUserSetupScript_DoesEveryJobItIsThereFor(t *testing.T) {
 	script := readTemplate(t, "distro/user-setup.sh")
 
 	for _, group := range []string{"docker", "libvirt", "kvm"} {
@@ -910,6 +932,20 @@ func TestUserSetupScript_DoesBothJobsItIsThereFor(t *testing.T) {
 	// account has to come from coreutils.
 	if strings.Contains(script, "$(hostname)") {
 		t.Error("the first-boot script calls hostname, which Arch does not install; use uname -n")
+	}
+
+	// The mise store is shared, and an account reaches it through a symlink at
+	// the path mise looks in by default. An account created from /etc/skel
+	// already has that link; this is the backstop for one that was not, such
+	// as an account the distro baked into its own image.
+	if !strings.Contains(script, `ln -sfn "${mise_store}" "${home}/.local/share/mise"`) {
+		t.Error("the first-boot script does not link an account with no skel copy to the shared mise store; that account would have no toolchain at all")
+	}
+	// A VM created from a base image that predates the shared store has a real
+	// directory there, holding whatever that account installed. Replacing it
+	// with a link would throw that away.
+	if !strings.Contains(script, `[ ! -e "${home}/.local/share/mise" ]`) {
+		t.Error("the first-boot script does not leave an existing mise directory alone; on an older base image it would discard the account's own toolchain")
 	}
 }
 
@@ -1038,10 +1074,10 @@ func TestHerdr_RunsAsADaemonForEveryAccount(t *testing.T) {
 	if !strings.Contains(script, "start_for_account root /root") {
 		t.Error("the boot script does not start a server for root")
 	}
-	// The image installs herdr into /etc/skel, so every account cloud-init
-	// creates has one -- but an account baked into the distro's own image,
-	// Ubuntu's `ubuntu`, predates that skel, and /usr/local/bin/herdr is a
-	// mise shim that exits at once for such an account.
+	// The image installs herdr into the shared mise store, which every account
+	// reaches through the ~/.local/share/mise symlink -- but an account that
+	// has neither that link nor a store has no herdr, and /usr/local/bin/herdr
+	// is a mise shim that exits at once for such an account.
 	if !strings.Contains(script, `[ ! -x "${home}/.local/share/mise/shims/herdr" ]`) {
 		t.Error("the boot script starts a server for an account with no mise-installed herdr; the shim exits at once and the unit is restarted")
 	}
@@ -1170,10 +1206,15 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)
 			}
 		}
-		if !strings.Contains(recipe, "the mise shims are missing from /etc/skel") {
-			t.Errorf("%s does not check that the mise shims landed in /etc/skel, which is where accounts cloud-init creates get them from", d.Containerfile)
+		if !strings.Contains(recipe, "the mise shims are missing from the shared store") {
+			t.Errorf("%s does not check that the mise shims landed in the shared store, which is where every account gets them from", d.Containerfile)
 		}
-		// The shims existing in /etc/skel says nothing about whether the
+		// A build that regressed to a per-account copy would still pass every
+		// check above, and would only show up as a slow first boot.
+		if !strings.Contains(recipe, "[ -L /etc/skel/.local/share/mise ]") {
+			t.Errorf("%s does not check that /etc/skel points at the shared store; a copy there would silently cost every VM nine seconds of first boot", d.Containerfile)
+		}
+		// The shims existing in the store says nothing about whether the
 		// profile script puts them on PATH, which is what makes `java`
 		// resolvable at all.
 		if !strings.Contains(recipe, `bash -lc 'command -v java'`) {

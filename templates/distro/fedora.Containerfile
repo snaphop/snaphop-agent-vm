@@ -121,9 +121,25 @@ RUN chmod 0644 /etc/profile.d/zz-agent-vm-tmux-menu.sh
 #
 # The binary goes in /usr/local/bin so that `mise` is on the default PATH for
 # every account, including the non-interactive `ssh <vm> mise install` an agent
-# may run. What it installs is per account -- see below.
+# may run.
+#
+# What it installs goes in /usr/local/lib/mise, one store shared by every
+# account, and each account's ~/.local/share/mise is a symlink to it. The
+# alternative -- a full copy in /etc/skel, which useradd copies into each new
+# home -- is what this image used to do, and it cost every single VM about nine
+# seconds of first boot and 1.7 GiB of writes into its copy-on-write overlay
+# before cloud-init could even get to the SSH keys. A symlink costs neither.
+#
+# Sharing the store is safe because mise splits the two things cleanly: the
+# store holds tool *installs*, keyed by name and version, while *which* version
+# an account uses is its own MISE_CONFIG_DIR under its home. Two accounts
+# wanting different Node releases get two directories in the shared store and
+# one config file each; they never contend for the same install.
+#
+# What they do share is the ability to write there, which is granted below.
 RUN set -eu; \
-    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
+    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh; \
+    install -d -m 0755 /usr/local/lib/mise
 
 # Node.js: what wrangler and Playwright run on, and what a guest handed a
 # JavaScript repository builds with.
@@ -137,9 +153,9 @@ RUN set -eu; \
 # Node 18, past end of life -- so all three recipes get the same runtime by the
 # same route.
 #
-# Like everything else mise installs here this goes into /etc/skel, the copy
-# every account created later inherits, rather than being downloaded per
-# account inside a guest that may have no network at all.
+# Like everything else mise installs here this goes into the shared store, so
+# it is in place before anyone logs in rather than being downloaded per account
+# inside a guest that may have no network at all.
 #
 # libatomic first: the official Node binaries mise downloads are linked against
 # libatomic.so.1, which Fedora's base image does not carry -- a distro package
@@ -148,23 +164,23 @@ RUN set -eu; \
 RUN dnf -y install libatomic && dnf clean all
 
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_DATA_DIR=/usr/local/lib/mise \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
       mise use --global --yes node@latest; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # 22.19 or newer is the floor this image promises: wrangler and Playwright both
 # want a current release, and a guest handed a JavaScript repository is likelier
 # to need a new Node than an old one. A guest that cannot run what it was given
 # is indistinguishable from a broken image until someone SSHes in hours later,
 # so a too-old Node fails the build here instead of shipping. It runs the Node
-# just installed into /etc/skel -- `mise where` is what turns a version mise
-# resolved into a path -- because that is the only Node in the image now; there
-# is no packaged one behind it.
+# just installed into the shared store -- `mise where` is what turns a version
+# mise resolved into a path -- because that is the only Node in the image now;
+# there is no packaged one behind it.
 RUN set -eu; \
-    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    export MISE_DATA_DIR=/usr/local/lib/mise \
            MISE_CONFIG_DIR=/etc/skel/.config/mise \
            MISE_STATE_DIR=/etc/skel/.local/state/mise; \
     export PATH="$(mise where node)/bin:$PATH"; \
@@ -195,17 +211,16 @@ RUN set -eu; \
 # image was rebuilt. Reproducibility comes from the digest the manifest records
 # for the source image, not from the agent versions (ADR-0006).
 #
-# The install goes into /etc/skel, like everything else mise manages here, so
-# the agents are in place before anyone logs in rather than being downloaded
-# per account inside a guest that may have no network at all. See the JVM
-# toolchain below for why the destination is skel and not one shared directory.
+# The install goes into the shared store, like everything else mise manages
+# here, so the agents are in place before anyone logs in rather than being
+# downloaded per account inside a guest that may have no network at all.
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_DATA_DIR=/usr/local/lib/mise \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
       mise use --global --yes claude opencode pi; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # herdr, the terminal workspace manager a guest runs as a daemon.
 #
@@ -220,16 +235,16 @@ RUN set -eu; \
 # for the source image (ADR-0006), not from the version of a tool that ships
 # several releases a week.
 #
-# The install goes into /etc/skel, like everything else mise manages here, so
-# herdr is in place before anyone logs in rather than being downloaded per
-# account inside a guest that may have no network at all.
+# The install goes into the shared store, like everything else mise manages
+# here, so herdr is in place before anyone logs in rather than being downloaded
+# per account inside a guest that may have no network at all.
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_DATA_DIR=/usr/local/lib/mise \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
       mise use --global --yes herdr; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
 #
@@ -241,23 +256,22 @@ RUN set -eu; \
 # whichever one it defaults to. A version mise cannot resolve or install fails
 # the build rather than silently shipping a guest with no JDK.
 #
-# This writes into /etc/skel, the copy every account created later inherits, so
-# the JDK and Maven are in place before anyone logs in instead of being
-# downloaded per account inside a guest that may have no network at all. It goes
-# to /etc/skel rather than one shared directory because installing a tool writes
-# into mise's data directory, so a single shared one would have every user on
-# the VM writing to the same place.
+# This writes into the shared store, so the JDK and Maven are in place before
+# anyone logs in instead of being downloaded per account inside a guest that may
+# have no network at all. A JDK is the clearest case for sharing: it is the
+# largest thing mise installs here, and copying it per account was most of the
+# nine seconds first boot used to spend in useradd.
 #
 # The cache is a build-time scratch directory and is discarded: it holds the
 # downloaded archives, which are of no use once they have been extracted, and
-# every account inheriting a copy of them would be wasted space in every guest.
+# shipping them would be wasted space in every guest.
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_DATA_DIR=/usr/local/lib/mise \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
       mise use --global --yes java@temurin maven@latest; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # The Go toolchain and golangci-lint, both from mise.
 #
@@ -275,40 +289,37 @@ RUN set -eu; \
 # image was rebuilt.
 #
 # Rust is not here. mise's `rust` is rustup underneath and re-reads
-# RUSTUP_HOME and CARGO_HOME from the environment of whoever runs cargo, so a
-# toolchain shared out of /usr/local makes mise decide rust is missing and
-# re-run rustup-init as that account, which cannot write there. Per account it
-# works, at roughly 1.5 GiB of toolchain per account; the image keeps the one
-# shared rustup installation below instead.
+# RUSTUP_HOME and CARGO_HOME from the environment of whoever runs cargo, so it
+# would re-run rustup-init per account rather than use what the store already
+# holds; the image keeps the one shared rustup installation below instead.
 #
-# Both go into /etc/skel, the copy every account created later inherits, so
-# nothing is downloaded per account inside a guest that may have no network at
-# all.
+# Both go into the shared store, so nothing is downloaded per account inside a
+# guest that may have no network at all.
 RUN set -eu; \
-    MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    MISE_DATA_DIR=/usr/local/lib/mise \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
       mise use --global --yes go@latest golangci-lint@latest; \
-    rm -rf /tmp/mise-cache /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # wrangler, Playwright, and cf: the npm packages left in the image.
 #
 # None of them is packaged by any family and all are published only to npm, so
 # they come from mise's npm backend -- `npm:` names rather than the registry
 # names the agents use, because npm is the only place they exist. They are
-# installed here, with everything else mise manages, so that root inherits
-# them in the copy below and the build can run `playwright install chromium` a
-# few steps later. What each is for, and the environment each needs, is
+# installed here, with everything else mise manages, so that they are in the
+# shared store before the build runs `playwright install chromium` a few steps
+# later. What each is for, and the environment each needs, is
 # further down.
 RUN set -eu; \
-    export MISE_DATA_DIR=/etc/skel/.local/share/mise \
+    export MISE_DATA_DIR=/usr/local/lib/mise \
            MISE_CONFIG_DIR=/etc/skel/.config/mise \
            MISE_STATE_DIR=/etc/skel/.local/state/mise \
            MISE_CACHE_DIR=/tmp/mise-cache; \
     export PATH="$(mise where node)/bin:$PATH"; \
     mise use --global --yes npm:wrangler npm:playwright npm:cf; \
-    rm -rf /tmp/mise-cache /tmp/fslock /etc/skel/.local/share/mise/downloads
+    rm -rf /tmp/mise-cache /tmp/fslock /usr/local/lib/mise/downloads
 
 # /tmp/fslock is where mise's npm backend takes the lock it holds while it
 # installs a package, and the directory belongs to whichever account created it
@@ -322,13 +333,36 @@ RUN set -eu; \
 # longer locks the others out.
 RUN printf 'd /tmp/fslock 1777 root root -\n' > /etc/tmpfiles.d/agent-vm-mise-fslock.conf
 
-# root is created before /etc/skel exists in this form and never inherits from
-# it, so it gets the same toolchain copied in explicitly. mkdir -p rather than a
-# plain copy of .local and .config: the agent configuration below lands in
-# both as well.
+# Open the shared store to every account, now that everything is installed in
+# it.
+#
+# Each directory gets the sticky bit along with write permission, which is
+# /tmp's arrangement and the one /opt/ms-playwright below uses for the same
+# reason: any account may install a tool, none may remove another's. A shared
+# writable directory is defensible here on the same grounds the permissive agent
+# configuration is -- the VM is the sandbox, single-tenant and disposable, and
+# the accounts inside it are not a security boundary (SECURITY.md). Files keep
+# the modes they were installed with, so no binary in the store is writable by
+# anyone but root.
 RUN set -eu; \
-    mkdir -p /root/.local/share /root/.local/state /root/.config; \
-    cp -a /etc/skel/.local/share/mise /root/.local/share/mise; \
+    chmod -R a+rX /usr/local/lib/mise; \
+    find /usr/local/lib/mise -type d -exec chmod 1777 {} +
+
+# Point every account's mise data directory at the shared store.
+#
+# /etc/skel is what useradd copies into each new home, and it copies a symlink
+# as a symlink -- so the account cloud-init creates gets this link and not 1.7
+# GiB of toolchain. root needs its own because it is created before /etc/skel
+# holds anything and never consults skel.
+#
+# The config and state directories stay per account: the config is what selects
+# a tool version, and an account that runs `mise use -g node@24` must be able to
+# change its own without changing everyone's. Both are a few kilobytes, so
+# copying them costs nothing.
+RUN set -eu; \
+    mkdir -p /etc/skel/.local/share /root/.local/share /root/.local/state /root/.config; \
+    ln -sfn /usr/local/lib/mise /etc/skel/.local/share/mise; \
+    ln -sfn /usr/local/lib/mise /root/.local/share/mise; \
     cp -a /etc/skel/.local/state/mise /root/.local/state/mise; \
     cp -a /etc/skel/.config/mise /root/.config/mise
 
@@ -562,8 +596,10 @@ RUN set -eu; \
     fi; \
     rm -f /tmp/chromium-smoke.log; \
     mise --version >/dev/null || { echo "mise installed but cannot run" >&2; exit 1; }; \
-    [ -d /etc/skel/.local/share/mise/shims ] \
-      || { echo "the mise shims are missing from /etc/skel, so accounts cloud-init creates will not have the agents, java or mvn" >&2; exit 1; }; \
+    [ -d /usr/local/lib/mise/shims ] \
+      || { echo "the mise shims are missing from the shared store, so no account will have the agents, java or mvn" >&2; exit 1; }; \
+    [ -L /etc/skel/.local/share/mise ] \
+      || { echo "/etc/skel/.local/share/mise is not a symlink to the shared store; every account cloud-init creates would copy the whole toolchain at first boot" >&2; exit 1; }; \
     bash -lc 'command -v java' >/dev/null 2>&1 \
       || { echo "no java on the path of a login shell; the shims are not on PATH or the mise java install did not take" >&2; exit 1; }; \
     bash -lc 'java -version' >/dev/null 2>&1 \

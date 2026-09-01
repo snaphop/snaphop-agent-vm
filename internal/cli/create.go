@@ -608,7 +608,18 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 func (a *App) ensureNetwork(ctx context.Context, cfg *config.Config) error {
 	if cfg.BridgeMode() {
 		a.out.Progress("Checking host bridge %s\n", cfg.Bridge)
-		return network.ValidateBridge(ctx, a.runner, cfg.Bridge)
+		warning, err := network.ValidateBridge(ctx, a.runner, cfg.Bridge)
+		if err != nil {
+			return err
+		}
+		// The VM is still created: a bridge that runs the spanning tree
+		// protocol works, it just costs this boot half a minute. Saying so
+		// here is what keeps the operator from reading that wait as a slow
+		// image or a broken guest.
+		if warning != nil {
+			a.out.Warn("Warning: %s\n  %s\n", warning.Detail(), warning.Remedy())
+		}
+		return nil
 	}
 
 	store, err := a.Store()
@@ -762,7 +773,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	}
 
 	if cfg.BridgeMode() {
-		plan("ip", "-json", "link", "show", "type", "bridge")
+		plan("ip", "-d", "-json", "link", "show", "type", "bridge")
 	} else {
 		plan(hostexec.Virsh.Name, "--connect", uri, "net-list", "--all", "--name")
 	}
