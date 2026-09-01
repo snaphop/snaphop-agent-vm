@@ -342,3 +342,54 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 		t.Errorf("resources = %d vcpu / %s / %s", cfg.VCPUs, cfg.Memory, cfg.Disk)
 	}
 }
+
+// The appliance kernel is a host property rather than a per-VM one, so it has
+// no flag: the configuration file and the environment are the whole surface.
+func TestLoad_ApplianceKernelFromTheConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(`appliance_kernel = "/opt/kernels/6.12.4-arch1-1"`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(func(string) string { return "" }, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ApplianceKernel != "/opt/kernels/6.12.4-arch1-1" {
+		t.Errorf("ApplianceKernel = %q, want the configured directory", cfg.ApplianceKernel)
+	}
+}
+
+func TestLoad_ApplianceKernelFromTheEnvironmentExpandsHome(t *testing.T) {
+	env := func(name string) string {
+		switch name {
+		case "HOME":
+			return "/home/operator"
+		case "AGENT_VM_APPLIANCE_KERNEL":
+			return "~/.local/share/agent-vm/appliance-kernel/6.12.4-arch1-1"
+		}
+		return ""
+	}
+
+	cfg, err := Load(env, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := "/home/operator/.local/share/agent-vm/appliance-kernel/6.12.4-arch1-1"
+	if cfg.ApplianceKernel != want {
+		t.Errorf("ApplianceKernel = %q, want %q", cfg.ApplianceKernel, want)
+	}
+}
+
+// A host whose own kernel boots the appliance configures nothing, which is
+// every general-purpose distribution kernel.
+func TestLoad_ApplianceKernelIsUnsetByDefault(t *testing.T) {
+	cfg, err := Load(func(string) string { return "" }, Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ApplianceKernel != "" {
+		t.Errorf("ApplianceKernel = %q, want it empty by default", cfg.ApplianceKernel)
+	}
+}

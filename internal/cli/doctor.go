@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -92,6 +93,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkGroups(ctx, app, cfg, conn)...)
 	report.Checks = append(report.Checks, checkTools(ctx, app)...)
 	report.Checks = append(report.Checks, checkOptionalTools(ctx, app)...)
+	report.Checks = append(report.Checks, checkAppliance(ctx, app, cfg))
 
 	libvirt := checkLibvirt(ctx, app, cfg)
 	report.Checks = append(report.Checks, libvirt)
@@ -639,4 +641,145 @@ func checkBridge(ctx context.Context, app *App, cfg *config.Config) []check {
 		}}
 	}
 	return []check{{Name: name, Status: statusPass, Detail: "exists and is up"}}
+}
+
+// applianceKernelSymbols are the kernel configuration options QEMU's `virt`
+// board depends on. libguestfs builds its appliance around the host's own
+// kernel, so a kernel built for one machine rather than for machines in
+// general can be missing them — and when it is, the appliance boots to silence
+// and every image build fails with libguestfs reporting only that the
+// appliance "closed the connection unexpectedly". Diagnosing that from the
+// failure takes a kernel config and a hand-run QEMU; diagnosing it here takes
+// one line of doctor's output.
+var applianceKernelSymbols = []struct {
+	symbol   string
+	provides string
+}{
+	{"CONFIG_SERIAL_AMBA_PL011", "the PL011 serial port the appliance's console is on"},
+	{"CONFIG_PCI_HOST_GENERIC", "the PCIe host bridge the appliance's disks are behind"},
+}
+
+// applianceRemedy names the way out, and is the same whichever symbol is
+// missing: give libguestfs a general-purpose kernel to build the appliance
+// from. That kernel is never booted by the host, only inside QEMU, so it does
+// not have to support the host's hardware at all.
+const applianceRemedy = "The host kernel cannot boot a libguestfs appliance, so image builds will fail. " +
+	"Unpack a general-purpose kernel package into a directory named after its version, " +
+	"holding the kernel as \"Image\" and a depmod'd module tree as \"modules\", and set " +
+	"appliance_kernel in config.toml (or AGENT_VM_APPLIANCE_KERNEL) to that directory. " +
+	"See docs/host-setup.md, \"Hosts whose kernel cannot boot the appliance\"."
+
+// checkAppliance reports whether libguestfs will be able to boot the appliance
+// it does all of its work in.
+func checkAppliance(ctx context.Context, app *App, cfg *config.Config) check {
+	const name = "libguestfs appliance"
+	if cfg.ApplianceKernel != "" {
+		return checkApplianceKernelDir(ctx, app, name, cfg.ApplianceKernel)
+	}
+
+	// The symbols below are ARM-only, so on any other architecture their
+	// absence says nothing. General-purpose kernels are also the only ones in
+	// practical use there, which is why this check exists for aarch64 alone.
+	arch, err := hostOutput(ctx, app, "uname", "-m")
+	if err != nil {
+		return check{Name: name, Status: statusSkip, Detail: "cannot determine the host architecture: " + err.Error()}
+	}
+	if arch != "aarch64" && arch != "arm64" {
+		return check{Name: name, Status: statusPass, Detail: "the host kernel can boot the appliance"}
+	}
+
+	kernelConfig, err := hostKernelConfig(ctx, app)
+	if err != nil {
+		// A kernel that does not publish its configuration is not a broken
+		// one, and guessing either way would be worse than saying so.
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "cannot read the host kernel configuration: " + err.Error(),
+			Remedy: "If image builds fail with \"the appliance closed the connection unexpectedly\", see " + applianceRemedy,
+		}
+	}
+
+	missing := make([]string, 0, len(applianceKernelSymbols))
+	for _, want := range applianceKernelSymbols {
+		if !kernelConfigEnabled(kernelConfig, want.symbol) {
+			missing = append(missing, want.symbol+" ("+want.provides+")")
+		}
+	}
+	if len(missing) > 0 {
+		return check{
+			Name: name, Status: statusFail,
+			Detail: "the host kernel is missing " + strings.Join(missing, " and "),
+			Remedy: applianceRemedy,
+		}
+	}
+	return check{Name: name, Status: statusPass, Detail: "the host kernel can boot the appliance"}
+}
+
+// checkApplianceKernelDir confirms the configured directory holds what
+// supermin will be pointed at. A path that is merely wrong would otherwise
+// surface as the same silent appliance failure it was configured to fix.
+func checkApplianceKernelDir(ctx context.Context, app *App, name, dir string) check {
+	kernel := filepath.Join(dir, hostexec.ApplianceKernelFile)
+	modules := filepath.Join(dir, hostexec.ApplianceModulesDir)
+
+	probe := func(args ...string) bool {
+		_, err := app.runner.Run(ctx, hostexec.Command{Name: "test", Args: args, Effect: hostexec.Read})
+		return err == nil
+	}
+	switch {
+	case !probe("-f", kernel):
+		return check{
+			Name: name, Status: statusFail,
+			Detail: "appliance_kernel is set but " + kernel + " is not a file",
+			Remedy: "Put the kernel image at that path, or unset appliance_kernel to use the host's own kernel.",
+		}
+	case !probe("-f", filepath.Join(modules, "modules.dep")):
+		return check{
+			Name: name, Status: statusFail,
+			Detail: "appliance_kernel is set but " + modules + " is not a module tree",
+			Remedy: "Unpack the kernel's modules there and index them: depmod -b <the directory holding lib/modules> " +
+				filepath.Base(dir),
+		}
+	}
+	return check{
+		Name: name, Status: statusPass,
+		Detail: "libguestfs builds its appliance from the kernel in " + dir,
+	}
+}
+
+// hostKernelConfig returns the hypervisor kernel's configuration, from
+// whichever of the two places a distribution puts it.
+func hostKernelConfig(ctx context.Context, app *App) (string, error) {
+	if release, err := hostOutput(ctx, app, "uname", "-r"); err == nil {
+		if out, err := hostOutput(ctx, app, "cat", "/boot/config-"+release); err == nil {
+			return out, nil
+		}
+	}
+	// /proc/config.gz is the other convention, and is compressed, which is why
+	// this asks zcat rather than reading the file.
+	return hostOutput(ctx, app, "zcat", "/proc/config.gz")
+}
+
+// hostOutput runs a read-only command on the hypervisor and returns its
+// trimmed standard output. It goes through the runner rather than reading a
+// file directly so that the answer describes the machine libvirt is on, which
+// with a remote URI is not this one (ADR-0010).
+func hostOutput(ctx context.Context, app *App, tool string, args ...string) (string, error) {
+	res, err := app.runner.Run(ctx, hostexec.Command{Name: tool, Args: args, Effect: hostexec.Read})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// kernelConfigEnabled reports whether a symbol is built in or built as a
+// module. Both boot an appliance; only "is not set" does not.
+func kernelConfigEnabled(config, symbol string) bool {
+	for _, line := range strings.Split(config, "\n") {
+		switch strings.TrimSpace(line) {
+		case symbol + "=y", symbol + "=m":
+			return true
+		}
+	}
+	return false
 }

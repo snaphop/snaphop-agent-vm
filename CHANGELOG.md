@@ -17,6 +17,31 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- **`agent-vm` now works on hosts whose own kernel cannot boot a libguestfs
+  appliance.** libguestfs does all of its work — building the base image,
+  writing the cloud-init seed — inside a small VM it boots for the purpose, and
+  `supermin` builds that VM around *the host's own kernel*. A kernel built for
+  one machine rather than for machines in general may not be able to boot it: an
+  Apple Silicon (Asahi) kernel, for instance, has neither the serial port nor
+  the PCIe host bridge QEMU's board provides, so the appliance came up with no
+  console and no disks and every image build died with libguestfs saying only
+  that the appliance "closed the connection unexpectedly" — which names neither
+  the cause nor the fix. Set the new `appliance_kernel` option (or
+  `AGENT_VM_APPLIANCE_KERNEL`) to a directory holding a general-purpose kernel,
+  and libguestfs builds its appliance from that instead. The kernel is never
+  booted by the host, only inside QEMU, so it does not have to support the
+  host's hardware. Hosts with an ordinary distribution kernel need none of this
+  and are unaffected. See "Hosts Whose Kernel Cannot Boot The libguestfs
+  Appliance" in `docs/host-setup.md`.
+
+- `doctor` gained a **libguestfs appliance** check, so the failure above is
+  reported during setup rather than partway through an image build. On aarch64
+  hosts it reads the kernel's configuration and fails when the options the
+  appliance depends on are missing, naming them and the setting that fixes it;
+  where `appliance_kernel` is configured it confirms that directory holds what
+  it should instead. It reports `skip`, not a failure, when the kernel publishes
+  no configuration to read.
+
 - `doctor` and `create` now warn when the configured host bridge runs the
   spanning tree protocol with a non-zero forward delay. Such a bridge holds each
   guest's tap port in listening and learning before it forwards anything, so the
@@ -145,6 +170,16 @@ migration or rebuild step a user has to take.
   images keep the old menu; rebuild with `agent-vm image build <distro> --force`.
 
 ### Fixed
+
+- **`agent-vm create` ignored its own flags.** `--vcpus`, `--memory`, `--disk`,
+  `--max-memory`, `--distro`, `--network`, `--bridge`, and `--ssh-key` were all
+  silently dropped, and every VM was created with the configured defaults
+  instead — at the default size, on the default network, authorizing the default
+  keys. Setting up a run reads configuration before the subcommand does, to work
+  out which machine the hypervisor is on, and the result was cached and handed
+  back to `create` with none of its flags applied. Nothing reported the loss;
+  the VM was simply not the one that was asked for. `--dry-run` showed the same
+  wrong values, so the printed plan matched what would really have run.
 
 - **`create` now works on an aarch64 host.** `virt-install` failed with
   `unsupported configuration: ACPI requires UEFI on this architecture`: it

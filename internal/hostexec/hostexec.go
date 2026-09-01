@@ -81,6 +81,12 @@ type Command struct {
 	Dir      string
 	Timeout  time.Duration
 
+	// Env adds environment variables to the ones this process already has,
+	// each as "KEY=VALUE". It is not the place for anything secret: an
+	// invocation's environment is rendered by String, printed by --dry-run,
+	// and, over the ssh transport, written into the remote command line.
+	Env []string
+
 	// Output, when set, receives stdout and stderr as they are produced, in
 	// addition to the buffers Result carries. It exists for the invocations
 	// whose value is in watching them run: a package upgrade inside a guest
@@ -102,7 +108,14 @@ func (c Command) Argv() []string {
 
 // String renders the invocation in a form an operator can paste into a shell.
 func (c Command) String() string {
-	parts := make([]string, 0, len(c.Args)+1)
+	parts := make([]string, 0, len(c.Env)+len(c.Args)+1)
+	// The environment is rendered as a shell assignment prefix so that what
+	// --dry-run prints is a command an operator can paste and run: an
+	// invocation that depends on SUPERMIN_KERNEL behaves differently without
+	// it, and a plan that omitted it would be misleading rather than terse.
+	for _, e := range c.Env {
+		parts = append(parts, shellQuote(e))
+	}
 	for _, a := range c.Argv() {
 		parts = append(parts, shellQuote(a))
 	}
@@ -199,6 +212,7 @@ func (e *Exec) Run(ctx context.Context, c Command) (*Result, error) {
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
 	cmd.Stdin = c.Stdin
 	cmd.Dir = c.Dir
+	cmd.Env = commandEnv(c)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -272,7 +286,11 @@ func (e *Exec) Become(c Command) error {
 	e.Logger.Debug("replacing this process", "tool", c.Name, "argv", c.Argv())
 
 	// On success this never returns: the process image is gone.
-	if err := syscall.Exec(path, c.Argv(), os.Environ()); err != nil {
+	env := commandEnv(c)
+	if env == nil {
+		env = os.Environ()
+	}
+	if err := syscall.Exec(path, c.Argv(), env); err != nil {
 		return fmt.Errorf("running %s: %w", c.Name, err)
 	}
 	return nil
@@ -285,6 +303,7 @@ func (e *Exec) Start(ctx context.Context, c Command) (*Process, error) {
 		return nil, errors.New("hostexec: command has no tool name")
 	}
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	cmd.Env = commandEnv(c)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -423,6 +442,16 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Write(p)
+}
+
+// commandEnv is the environment a command runs with: this process's own, plus
+// the command's additions. It returns nil when there are none, which is how
+// os/exec is told to pass the parent environment through untouched.
+func commandEnv(c Command) []string {
+	if len(c.Env) == 0 {
+		return nil
+	}
+	return append(os.Environ(), c.Env...)
 }
 
 // excerpt bounds tool stderr so an error stays readable, keeping the tail —

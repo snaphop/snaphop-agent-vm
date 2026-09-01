@@ -213,8 +213,12 @@ func (r *Remote) sshCommand(c Command, remote string, share bool) Command {
 	wrapped.Name = SSH.Name
 	wrapped.Args = args
 	// Dir is expressed in the remote command rather than here: it names a
-	// directory on the hypervisor, which this machine may not even have.
+	// directory on the hypervisor, which this machine may not even have. The
+	// same goes for Env, which remoteCommand has already carried into the
+	// remote command line — leaving it here would set it for ssh itself and
+	// render it twice.
 	wrapped.Dir = ""
+	wrapped.Env = nil
 	return wrapped
 }
 
@@ -234,6 +238,18 @@ func remoteCommand(c Command, withExec bool) string {
 	}
 	if withExec {
 		b.WriteString("exec ")
+	}
+	// Environment additions are carried through `env` rather than as a shell
+	// assignment prefix. A prefix on a special builtin such as `exec` is
+	// specified to modify the shell's own variables, which is not the same as
+	// exporting them to the tool, and the difference is exactly the bug that
+	// would leave a remote libguestfs booting the wrong kernel.
+	if len(c.Env) > 0 {
+		b.WriteString("env ")
+		for _, e := range c.Env {
+			b.WriteString(remoteQuote(e))
+			b.WriteByte(' ')
+		}
 	}
 	for i, arg := range c.Argv() {
 		if i > 0 {

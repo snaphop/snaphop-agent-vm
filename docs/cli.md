@@ -101,6 +101,10 @@ Later sources win:
 state_dir   = "~/.local/share/agent-vm"
 libvirt_uri = "qemu:///system"   # or "qemu+ssh://kvm@hypervisor.lan/system"
 
+# Only needed on a host whose own kernel cannot boot a libguestfs appliance —
+# `doctor` says so if yours cannot. See docs/host-setup.md.
+# appliance_kernel = "~/.local/share/agent-vm/appliance-kernel/6.12.4-arch1-1"
+
 [defaults]
 distro  = "ubuntu"
 vcpus   = 2
@@ -127,6 +131,7 @@ ssh_keys = ["~/.ssh/id_ed25519.pub"]
 | `AGENT_VM_STATE_DIR` | `--state-dir` |
 | `AGENT_VM_LIBVIRT_URI` | `--libvirt-uri` |
 | `AGENT_VM_CONFIG` | `--config` |
+| `AGENT_VM_APPLIANCE_KERNEL` | `appliance_kernel` (no flag) |
 | `AGENT_VM_DISTRO` | `create --distro` |
 | `AGENT_VM_VCPUS` | `create --vcpus` |
 | `AGENT_VM_MEMORY` | `create --memory` |
@@ -146,7 +151,8 @@ remedy. Exits `0` only if every required check passes.
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is not a `/session` one;
 state directory writable with sufficient free space; state directory reachable by
-the account the hypervisor runs as; the configured NAT network is definable; the
+the account the hypervisor runs as; libguestfs can boot its appliance;
+the configured NAT network is definable; the
 host firewall does not drop the guest's forwarded traffic, nor its DHCP and DNS
 requests to the host; and, when a bridge is
 configured, that the bridge exists and is up. Bridged networking on a `/session`
@@ -171,6 +177,24 @@ firewall checks, and whether the account QEMU runs as can traverse to the state
 directory — because they need that machine's configuration files and passwd
 database; they report `skip` and point at running `agent-vm doctor` on the
 hypervisor itself.
+
+The **libguestfs appliance** check exists because libguestfs does all of its
+work — building the base image, writing the cloud-init seed — inside a small VM
+it boots for the purpose, and `supermin` builds that VM around the *host's own
+kernel*. A general-purpose distribution kernel boots it fine. A kernel built for
+one machine rather than for machines in general may not: an Apple Silicon
+(Asahi) kernel, for instance, has neither the PL011 serial port nor the generic
+PCIe host bridge QEMU's `virt` board provides, so the appliance comes up with no
+console and no disks and libguestfs reports only that it "closed the connection
+unexpectedly". The check reads the host kernel's configuration (`/boot/config-$(uname -r)`,
+else `/proc/config.gz`) and fails when `CONFIG_SERIAL_AMBA_PL011` or
+`CONFIG_PCI_HOST_GENERIC` is missing, naming `appliance_kernel` as the remedy.
+It looks only at aarch64 hosts, where those options exist and where such kernels
+are actually in use, and reports `skip` rather than guessing when the kernel
+publishes no configuration. When `appliance_kernel` *is* set, the host kernel
+stops mattering and the check confirms instead that the configured directory
+holds the kernel and module tree supermin will be pointed at. See
+[`docs/host-setup.md`](./host-setup.md#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance).
 
 `gh` is checked too, but only ever reports `pass` or `skip`: it is needed solely
 by `--github-ssh-key`, so a host without it is still a ready host.
@@ -1128,7 +1152,7 @@ any command; the table below is the summary.
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh <destination> -- <argv>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), and — when a bridge is configured — `ip -d -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

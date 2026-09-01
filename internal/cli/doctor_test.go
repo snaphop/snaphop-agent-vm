@@ -39,6 +39,13 @@ func undeterminableHypervisor() (*hypervisorIdentity, error) { return nil, nil }
 // runDoctorWith runs doctor against a fake host and returns its JSON report.
 func runDoctorWith(t *testing.T, fake *hostexec.Fake, extraArgs ...string) (doctorReport, int) {
 	t.Helper()
+	return runDoctorWithEnv(t, fake, nil, extraArgs...)
+}
+
+// runDoctorWithEnv is the same, for the settings that have no flag and reach
+// configuration through the environment instead.
+func runDoctorWithEnv(t *testing.T, fake *hostexec.Fake, env map[string]string, extraArgs ...string) (doctorReport, int) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
 
 	// The hypervisor identity is pinned to "undeterminable" so the traversal
@@ -47,7 +54,7 @@ func runDoctorWith(t *testing.T, fake *hostexec.Fake, extraArgs ...string) (doct
 	// tests run on. TestDoctor_StateDirectory* below cover that check directly.
 	app := &App{
 		Stdout: &stdout, Stderr: &stderr,
-		Env: func(string) string { return "" }, Runner: fake,
+		Env: func(name string) string { return env[name] }, Runner: fake,
 		HypervisorIdentity: undeterminableHypervisor,
 		// The state directory stays on this disk even when the test points at
 		// a hypervisor on another machine, so these tests exercise the remote
@@ -261,5 +268,159 @@ func TestDoctor_AMissingGHIsReportedWithoutFailingTheHost(t *testing.T) {
 	}
 	if got := find(t, report, "gh").Status; got != statusSkip {
 		t.Errorf("gh status = %q, want %q", got, statusSkip)
+	}
+}
+
+// aarch64Host is a host whose kernel doctor will actually look at: the
+// appliance symbols are ARM-only, so the check has nothing to say elsewhere.
+func aarch64Host(kernelConfig string) *hostexec.Fake {
+	fake := healthyHost()
+	fake.Respond("uname -m", hostexec.FakeResponse{Stdout: "aarch64\n"}).
+		Respond("uname -r", hostexec.FakeResponse{Stdout: "6.8.0-31-generic\n"}).
+		Respond("cat /boot/config-6.8.0-31-generic", hostexec.FakeResponse{Stdout: kernelConfig})
+	return fake
+}
+
+// generalPurposeKernelConfig is the shape of a distribution kernel's config:
+// both options the appliance depends on are present, one built in and one a
+// module, which is how they usually differ.
+const generalPurposeKernelConfig = `CONFIG_ARM64=y
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+CONFIG_PCI_HOST_GENERIC=m
+CONFIG_VIRTIO_PCI=m
+`
+
+// hardwareSpecificKernelConfig is the shape that produces the failure this
+// check exists for: a kernel built for one machine, with no PL011 and no
+// generic PCIe host bridge, so QEMU's virt board gives the appliance neither a
+// console nor its disks.
+const hardwareSpecificKernelConfig = `CONFIG_ARM64=y
+CONFIG_ARCH_APPLE=y
+# CONFIG_SERIAL_AMBA_PL011 is not set
+# CONFIG_PCI_HOST_GENERIC is not set
+CONFIG_VIRTIO_PCI=m
+`
+
+func TestDoctor_PassesTheApplianceCheckOnAGeneralPurposeKernel(t *testing.T) {
+	report, code := runDoctorWith(t, aarch64Host(generalPurposeKernelConfig))
+
+	if got := find(t, report, "libguestfs appliance"); got.Status != statusPass {
+		t.Errorf("check = %s (%s), want pass", got.Status, got.Detail)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// Without this check the same host fails much later, inside an image build,
+// with libguestfs reporting only that its appliance "closed the connection
+// unexpectedly" — which names neither the cause nor the fix.
+func TestDoctor_FailsWhenTheHostKernelCannotBootTheAppliance(t *testing.T) {
+	report, code := runDoctorWith(t, aarch64Host(hardwareSpecificKernelConfig))
+
+	got := find(t, report, "libguestfs appliance")
+	if got.Status != statusFail {
+		t.Fatalf("check = %s (%s), want fail", got.Status, got.Detail)
+	}
+	for _, want := range []string{"CONFIG_SERIAL_AMBA_PL011", "CONFIG_PCI_HOST_GENERIC"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q does not name the missing %s", got.Detail, want)
+		}
+	}
+	if !strings.Contains(got.Remedy, "appliance_kernel") {
+		t.Errorf("remedy %q does not name the setting that fixes it", got.Remedy)
+	}
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d", code, ExitHostNotReady)
+	}
+	if report.OK {
+		t.Error("report says the host is ready while no image can be built on it")
+	}
+}
+
+// The symbols are ARM-only, so their absence on any other architecture means
+// nothing at all and must not fail a working host.
+func TestDoctor_SkipsTheKernelSymbolsOnNonARMHosts(t *testing.T) {
+	fake := healthyHost()
+	fake.Respond("uname -m", hostexec.FakeResponse{Stdout: "x86_64\n"})
+
+	report, code := runDoctorWith(t, fake)
+
+	if got := find(t, report, "libguestfs appliance"); got.Status != statusPass {
+		t.Errorf("check = %s (%s), want pass", got.Status, got.Detail)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// A kernel that publishes no configuration is not a broken one. Guessing
+// either way would be worse than saying the question could not be answered.
+func TestDoctor_SkipsTheApplianceCheckWhenTheKernelConfigIsUnreadable(t *testing.T) {
+	fake := healthyHost()
+	fake.Respond("uname -m", hostexec.FakeResponse{Stdout: "aarch64\n"}).
+		Respond("uname -r", hostexec.FakeResponse{Stdout: "6.8.0-31-generic\n"}).
+		Respond("cat /boot/config-6.8.0-31-generic", hostexec.FakeResponse{ExitCode: 1}).
+		Respond("zcat /proc/config.gz", hostexec.FakeResponse{ExitCode: 1})
+
+	report, code := runDoctorWith(t, fake)
+
+	if got := find(t, report, "libguestfs appliance"); got.Status != statusSkip {
+		t.Errorf("check = %s (%s), want skip", got.Status, got.Detail)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+// A configured directory replaces the host kernel entirely, so the host
+// kernel's own shortcomings stop mattering — but a path that is merely wrong
+// must not pass as if it were configured correctly.
+func TestDoctor_ChecksTheConfiguredApplianceKernelInsteadOfTheHostKernel(t *testing.T) {
+	dir := t.TempDir() + "/6.8.0-31-generic"
+	fake := aarch64Host(hardwareSpecificKernelConfig)
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name != "test" {
+			return hostexec.FakeResponse{}, false
+		}
+		// `test -f` is answered for the two paths a correct directory holds.
+		want := map[string]bool{
+			dir + "/Image":               true,
+			dir + "/modules/modules.dep": true,
+		}
+		return hostexec.FakeResponse{ExitCode: 1}, !want[c.Args[len(c.Args)-1]]
+	}
+
+	report, code := runDoctorWithEnv(t, fake, map[string]string{"AGENT_VM_APPLIANCE_KERNEL": dir})
+
+	got := find(t, report, "libguestfs appliance")
+	if got.Status != statusPass {
+		t.Errorf("check = %s (%s), want pass", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, dir) {
+		t.Errorf("detail %q does not name the directory in use", got.Detail)
+	}
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestDoctor_FailsWhenTheConfiguredApplianceKernelIsNotThere(t *testing.T) {
+	dir := t.TempDir() + "/6.8.0-31-generic"
+	fake := aarch64Host(generalPurposeKernelConfig)
+	fake.RespondPrefix("test", hostexec.FakeResponse{ExitCode: 1})
+
+	report, code := runDoctorWithEnv(t, fake, map[string]string{"AGENT_VM_APPLIANCE_KERNEL": dir})
+
+	got := find(t, report, "libguestfs appliance")
+	if got.Status != statusFail {
+		t.Fatalf("check = %s (%s), want fail", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, dir+"/Image") {
+		t.Errorf("detail %q does not name the path that is missing", got.Detail)
+	}
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d", code, ExitHostNotReady)
 	}
 }

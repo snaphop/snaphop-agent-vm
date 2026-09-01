@@ -116,7 +116,7 @@ NAT-only, fully unprivileged use, `qemu:///session` works — set
 are unavailable in that mode.
 
 To drive this host from another machine, see
-[§9](#9-driving-this-host-from-another-machine).
+[§10](#10-driving-this-host-from-another-machine).
 
 ## 4. Storage
 
@@ -467,7 +467,86 @@ sudo dmesg | grep -i apparmor
 
 The fix is to label or allow the state directory, not to turn confinement off.
 
-## 8. Verifying End To End
+## 8. Hosts Whose Kernel Cannot Boot The libguestfs Appliance
+
+Skip this section unless `agent-vm doctor` tells you to. Almost every host is
+fine, and the ones that are not are fine after one directory and one setting.
+
+libguestfs does all of its work — building the base image, writing the
+cloud-init seed — inside a small VM it boots for the purpose, called the
+*appliance*, and `supermin` builds that appliance around **the host's own
+kernel**. That works with any general-purpose distribution kernel. It does not
+necessarily work with a kernel built for one machine rather than for machines in
+general: an Apple Silicon (Asahi) kernel, for instance, is configured for that
+hardware alone and has neither the PL011 serial port nor the generic PCIe host
+bridge that QEMU's `virt` board provides. The appliance then boots with no
+console and no disks, and libguestfs reports only:
+
+```
+libguestfs: error: appliance closed the connection unexpectedly.
+```
+
+`doctor` names this before you hit it, reporting the missing kernel options:
+
+```
+ FAIL  libguestfs appliance   the host kernel is missing CONFIG_SERIAL_AMBA_PL011 … and CONFIG_PCI_HOST_GENERIC …
+```
+
+The fix is to give libguestfs a general-purpose kernel to build the appliance
+from. **That kernel is never booted by the host** — only by QEMU, inside the
+appliance — so it does not have to support this machine's hardware at all, and
+installing it as a *bootable* kernel is neither required nor recommended.
+
+Unpack any general-purpose kernel package for this architecture into a directory
+**named after the kernel's version**, holding the kernel image as `Image` and a
+module tree as `modules`, and index the modules with `depmod`. On Arch ARM, using
+the stock `linux-aarch64` package:
+
+```bash
+version=7.2.2-2-aarch64-ARCH
+dir=~/.local/share/agent-vm/appliance-kernel/$version
+
+# Fetch and unpack the package without installing it.
+curl -sSLo /tmp/kernel.pkg.tar.xz "$(pacman -Sp linux-aarch64)"
+mkdir -p /tmp/unpack "$dir"
+tar -C /tmp/unpack -xf /tmp/kernel.pkg.tar.xz
+
+cp /tmp/unpack/boot/Image "$dir/Image"
+cp -a "/tmp/unpack/usr/lib/modules/$version" "$dir/modules"
+
+# depmod wants a tree rooted at <basedir>/lib/modules/<version>.
+mkdir -p /tmp/depmod/lib/modules
+ln -sfn "$dir/modules" "/tmp/depmod/lib/modules/$version"
+depmod -b /tmp/depmod "$version"
+```
+
+Then point `agent-vm` at it:
+
+```toml
+# ~/.config/agent-vm/config.toml
+appliance_kernel = "~/.local/share/agent-vm/appliance-kernel/7.2.2-2-aarch64-ARCH"
+```
+
+or set `AGENT_VM_APPLIANCE_KERNEL` to the same path. The directory name supplies
+the kernel version, so that one setting is the whole configuration. Run
+`agent-vm doctor` again; the appliance check turns green and names the directory
+in use. The kernel and modules cost roughly 250 MiB and are read-only
+thereafter.
+
+**Clear the appliance cache after changing this.** `supermin` caches the built
+appliance under `/var/tmp/.guestfs-$UID/` and decides whether to rebuild it from
+the age of its *inputs* — which do not include this setting. A cache built
+before you set `appliance_kernel` is therefore reused, and libguestfs goes on
+failing exactly as it did:
+
+```bash
+rm -rf /var/tmp/.guestfs-$(id -u)
+```
+
+With a remote hypervisor the path names a directory on **that** machine, and the
+kernel has to match its architecture, not this one's.
+
+## 9. Verifying End To End
 
 ```bash
 agent-vm doctor
@@ -481,7 +560,7 @@ agent-vm destroy smoke-test --yes
 The first `image build` needs registry access and takes a few minutes. Subsequent
 `create` calls use the cache and should complete in seconds.
 
-## 9. Driving This Host From Another Machine
+## 10. Driving This Host From Another Machine
 
 `agent-vm` can drive a hypervisor over ssh:
 
@@ -562,11 +641,12 @@ agent-vm destroy smoke-test --yes
 | `exit 3`, cannot connect to libvirt | Service down, or user not in `libvirt` | `systemctl status libvirtd`, `id` |
 | `exit 3`, tool missing or too old | Host package missing or below the floor | `agent-vm doctor`, the package table above |
 | A tool failed and you want to reproduce it | — | The error names the tool, argv, exit status, and the machine it ran on; rerun it there, or use `--dry-run` |
-| `cannot reach the hypervisor host … over ssh` | Key-based login is not working non-interactively | `ssh <destination> true` must succeed silently; see [§9](#9-driving-this-host-from-another-machine) |
-| `the tls transport is not supported` | A remote URI that gives no shell on the hypervisor | Use `qemu+ssh://`; see [§9](#9-driving-this-host-from-another-machine) |
+| `cannot reach the hypervisor host … over ssh` | Key-based login is not working non-interactively | `ssh <destination> true` must succeed silently; see [§10](#10-driving-this-host-from-another-machine) |
+| `the tls transport is not supported` | A remote URI that gives no shell on the hypervisor | Use `qemu+ssh://`; see [§10](#10-driving-this-host-from-another-machine) |
 | `exit 3`, `/dev/kvm` unusable | Virtualization disabled, or user not in `kvm` | firmware settings, `ls -l /dev/kvm` |
 | `Cannot access storage file ... Permission denied` on create | The hypervisor's account cannot search a directory above the state directory | `agent-vm doctor` (state directory access), then `setfacl -m u:<qemu user>:x` on the directory it names |
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
+| `the appliance closed the connection unexpectedly`, with no console output at all | The host kernel cannot boot QEMU's `virt` board, or a cached appliance was built before `appliance_kernel` was set | `agent-vm doctor` (libguestfs appliance), then [§8](#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance) |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `podman pull <ref>` by hand; the error names the registry |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
 | VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `agent-vm doctor` (host firewall guest services), `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
