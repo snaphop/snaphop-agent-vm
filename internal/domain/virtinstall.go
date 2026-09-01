@@ -32,6 +32,12 @@ type CreateOptions struct {
 	VCPUs  int
 	Memory config.Size
 
+	// Arch is the architecture libvirt reports for the hypervisor, as `virsh
+	// capabilities` names it. It selects the handful of settings that cannot
+	// be the same everywhere — see featuresArg. An empty value means the
+	// caller did not ask libvirt, and leaves virt-install's defaults alone.
+	Arch string
+
 	// MaxMemory, when greater than Memory, gives the guest a virtio-mem device
 	// covering the difference so its RAM can be grown at runtime without a
 	// reboot. Zero leaves the domain exactly as it was before this existed: a
@@ -78,6 +84,11 @@ const osinfo = "detect=off,name=generic"
 // migrated, so it may as well see the host CPU and its virtualization-friendly
 // features.
 const cpuModel = "host-passthrough"
+
+// Architecture names as `virsh capabilities` reports them. libvirt uses
+// "aarch64"; Go and OCI call the same architecture "arm64", so both are
+// recognised rather than only the one this tool happens to ask for.
+var armArches = map[string]bool{"aarch64": true, "arm64": true}
 
 // memorySlots is the <maxMemory slots=> count declared when memory hotplug is
 // enabled.
@@ -132,10 +143,33 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 		// waits on a console nobody is attached to.
 		"--noautoconsole",
 	}
+	if features, ok := opts.featuresArg(); ok {
+		args = append(args, "--features", features)
+	}
 	if opts.hotplugsMemory() {
 		args = append(args, "--memdev", opts.memdevArg())
 	}
 	return append(args, opts.ExtraArgs...), nil
+}
+
+// featuresArg renders --features, and reports whether the argument is needed
+// at all. It is needed on one architecture only.
+//
+// On aarch64 libvirt refuses a domain that has ACPI but no UEFI firmware
+// ("unsupported configuration: ACPI requires UEFI on this architecture"), and
+// virt-install turns ACPI on by default. A directly booted kernel (ADR-0004)
+// has no firmware to run: QEMU's virt machine hands the guest a device tree
+// instead, which describes the same PCIe, serial and virtio devices ACPI would
+// have. Adding UEFI to get ACPI back would mean a per-VM NVRAM file and a
+// firmware boot on every start, for a guest that already knows exactly which
+// kernel it boots — so ACPI is turned off instead.
+//
+// x86_64 keeps ACPI: there the guest needs it to see its PCI devices at all.
+func (o CreateOptions) featuresArg() (string, bool) {
+	if armArches[o.Arch] {
+		return "acpi=off", true
+	}
+	return "", false
 }
 
 // hotplugsMemory reports whether this VM gets a virtio-mem device. The device

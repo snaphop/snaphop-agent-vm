@@ -324,3 +324,31 @@ func TestConsoleCommand_IsTheVirshInvocationToExec(t *testing.T) {
 		t.Errorf("ConsoleCommand = %q, want %q", got.String(), want)
 	}
 }
+
+func TestHostArch_ReadsTheArchitectureFromRealCapabilities(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" capabilities", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-capabilities.txt"),
+	})
+
+	// The capture comes from libvirt's test driver, which reports a synthetic
+	// i686 host; the formatting around it is the real virsh's.
+	arch, err := manager(fake).HostArch(context.Background())
+	if err != nil {
+		t.Fatalf("HostArch: %v", err)
+	}
+	if arch != "i686" {
+		t.Errorf("HostArch = %q, want the arch named under <host><cpu>", arch)
+	}
+}
+
+func TestHostArch_FailsWhenCapabilitiesNamesNoArchitecture(t *testing.T) {
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" capabilities", hostexec.FakeResponse{
+		Stdout: "<capabilities>\n  <host/>\n</capabilities>\n",
+	})
+
+	if _, err := manager(fake).HostArch(context.Background()); err == nil {
+		t.Fatal("HostArch = nil error, want a failure: the XML names no architecture")
+	}
+}

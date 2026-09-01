@@ -76,9 +76,13 @@ const ModulesDir = "/usr/lib/modules"
 //
 //   - root=/dev/vda1 matches the single partition virt-make-fs --partition
 //     writes; the overlay is attached as the first virtio disk.
-//   - console=ttyS0 is what makes the serial console — and therefore
-//     console.log, the primary artifact for diagnosing a VM that never became
-//     reachable — actually contain the boot.
+//   - console=ttyS0 console=ttyAMA0 is what makes the serial console — and
+//     therefore console.log, the primary artifact for diagnosing a VM that
+//     never became reachable — actually contain the boot. Both are named
+//     because the device differs by architecture: x86_64 guests get an 8250 at
+//     ttyS0, and the aarch64 virt machine a pl011 at ttyAMA0. A kernel ignores
+//     a console it has no driver for, so each architecture uses the one it
+//     has, and the same command line boots on both.
 //   - memhp_default_state=online_movable brings hotplugged memory blocks
 //     online as they arrive, which is what makes a virtio-mem device (see
 //     --max-memory) show up as usable RAM instead of offline blocks nobody
@@ -89,7 +93,7 @@ const ModulesDir = "/usr/lib/modules"
 // already in the cache keep the command line they were built with — a VM boots
 // the cmdline from its own image's manifest — so growing memory on a VM
 // created from an older image needs that image rebuilt.
-const KernelCmdline = "root=/dev/vda1 console=ttyS0 rw memhp_default_state=online_movable"
+const KernelCmdline = "root=/dev/vda1 console=ttyS0 console=ttyAMA0 rw memhp_default_state=online_movable"
 
 // SourceRef is the OCI reference for a tag of this family. It is a starting
 // point only: a build resolves it to a digest and pins that (SECURITY.md,

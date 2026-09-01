@@ -73,6 +73,26 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- **`create` now works on an aarch64 host.** `virt-install` failed with
+  `unsupported configuration: ACPI requires UEFI on this architecture`: it
+  turns ACPI on by default, and libvirt refuses ACPI on aarch64 unless the
+  domain also has UEFI firmware, which a directly booted kernel does not have.
+  `create` now asks libvirt for the hypervisor's architecture (`virsh
+  capabilities` — the hypervisor's, not your machine's, so a `qemu+ssh://`
+  connection to an aarch64 host is answered correctly) and passes
+  `--features acpi=off` there. QEMU's `virt` machine describes the guest's
+  devices with a device tree instead, so nothing is lost. x86_64 guests are
+  unchanged and keep ACPI.
+
+- **The serial console of an aarch64 guest is captured again.** Base images
+  recorded a `console=ttyS0` kernel command line, and the aarch64 `virt`
+  machine has no such device — its serial port is `ttyAMA0` — so `console.log`
+  and `agent-vm console` stayed empty on that architecture. Newly built base
+  images name both consoles (`console=ttyS0 console=ttyAMA0`), which each
+  architecture resolves to the one it actually has. Images already in the cache
+  keep the command line they were built with; rebuild with
+  `agent-vm image build <distro> --force` to pick this up.
+
 - `playwright install` in a guest no longer fails with `EACCES: permission
   denied, mkdir '/opt/ms-playwright/__dirlock'` for every account but root. The
   shared browser directory the image fills at build time was left owned by root

@@ -116,6 +116,7 @@ versions are enforced by `agent-vm doctor`.
 | Define and start a domain | `virt-install --import --boot kernel=…,initrd=…,kernel_args=…` |
 | Domain lifecycle | `virsh start` / `shutdown` / `destroy` / `undefine` |
 | Domain inspection | `virsh list --all --name`, `domstate`, `dumpxml`, `domblklist`, `domiflist` |
+| Hypervisor architecture | `virsh capabilities` |
 | Guest address | `virsh domifaddr --source agent`, fallback `--source lease` |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
@@ -366,9 +367,13 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
    the NoCloud seed.
 7. **Ensure networking.** `virsh net-list`/`net-define`/`net-start` for the NAT
    network, or `ip -json link` validation of the bridge.
-8. **Define and start.** One `virt-install --import --boot kernel=…,initrd=…` run
-   defines and starts the domain, with the serial console logged to `console.log`.
-   The exact argv is logged and recorded.
+8. **Define and start.** Read the hypervisor's architecture with `virsh
+   capabilities` — it decides the arguments that cannot be the same everywhere,
+   currently `--features acpi=off` on aarch64, where libvirt refuses ACPI
+   without UEFI and a directly booted kernel has none. Then one `virt-install
+   --import --boot kernel=…,initrd=…` run defines and starts the domain, with
+   the serial console logged to `console.log`. The exact argv is logged and
+   recorded.
 9. **Record.** Read the MAC with `virsh domiflist`, capture `virsh dumpxml` to
    `domain.xml`, and write `vm.json` (including the `virt-install` version and
    argv). Recording happens *before* the wait, so that a VM left in place by a

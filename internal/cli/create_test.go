@@ -33,6 +33,9 @@ func createHost(t *testing.T) *hostexec.Fake {
 		Stdout: "<domain type='kvm'><name>agent-01</name></domain>\n",
 	})
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name", hostexec.FakeResponse{Stdout: "\n"})
+	fake.Respond("virsh --connect qemu:///system capabilities", hostexec.FakeResponse{
+		Stdout: readToolout(t, "virsh-capabilities.txt"),
+	})
 	return fake
 }
 
