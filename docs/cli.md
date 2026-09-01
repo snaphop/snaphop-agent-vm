@@ -834,11 +834,10 @@ rather than stripped or dropped: the restriction is one the operator wrote down,
 and applying it to a guest or discarding it are both decisions this tool leaves
 to them. Pass such a key explicitly with `--ssh-key` if you want it in the VM.
 
-`--no-start` is rejected rather than approximated. `virt-install` always boots a
-guest that has cloud-init data: it starts the domain with the generated NoCloud
-seed attached, then defines the domain without it, so the seed exists for that
-first boot only. A VM stopped before cloud-init finished would never receive its
-SSH key and could not be reached afterwards. Create the VM and stop it instead:
+`--no-start` is rejected rather than approximated. `virt-install` always boots
+the guest it defines, and a VM stopped before cloud-init finished would never
+receive its SSH key and could not be reached afterwards. Create the VM and stop
+it instead:
 
 ```console
 $ agent-vm create build-01 && agent-vm stop build-01
@@ -1091,7 +1090,7 @@ any command; the table below is the summary.
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --cloud-init user-data=…`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
@@ -1137,7 +1136,10 @@ $STATE_DIR/
 ├── vms/
 │   └── <name>/
 │       ├── root.qcow2          # copy-on-write overlay on base.qcow2
-│       ├── user-data           # cloud-init user-data given to virt-install
+│       ├── seed/               # exactly what cloud-init reads, and nothing else
+│       │   ├── user-data       # generated cloud-init user-data
+│       │   └── meta-data       # instance id and hostname
+│       ├── seed.img            # the NoCloud seed disk built from seed/ (vdb)
 │       ├── domain.xml          # captured `virsh dumpxml` output (a record, not an input)
 │       ├── console.log         # serial console capture
 │       └── vm.json             # VM record incl. virt-install version + argv, schemaVersion
@@ -1191,7 +1193,10 @@ answer that goes stale.
   "paths": {
     "dir": "/home/you/.local/share/agent-vm/vms/agent-01",
     "overlay": "/home/you/.local/share/agent-vm/vms/agent-01/root.qcow2",
-    "userData": "/home/you/.local/share/agent-vm/vms/agent-01/user-data",
+    "seedDir": "/home/you/.local/share/agent-vm/vms/agent-01/seed",
+    "userData": "/home/you/.local/share/agent-vm/vms/agent-01/seed/user-data",
+    "metaData": "/home/you/.local/share/agent-vm/vms/agent-01/seed/meta-data",
+    "seedImage": "/home/you/.local/share/agent-vm/vms/agent-01/seed.img",
     "domainXml": "/home/you/.local/share/agent-vm/vms/agent-01/domain.xml",
     "consoleLog": "/home/you/.local/share/agent-vm/vms/agent-01/console.log"
   },
@@ -1214,7 +1219,7 @@ answer that goes stale.
 | `guest.user` | The account to SSH in as. |
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized. Key material is never recorded. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
-| `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the generated user-data, the captured `domain.xml`, and `console.log`. |
+| `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |
 | `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |
 
 ### `images/<distro>/<tag>/manifest.json`

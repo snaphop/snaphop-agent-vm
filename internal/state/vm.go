@@ -93,10 +93,14 @@ type GitHubSSHKey struct {
 
 // VMPaths are absolute paths inside the state directory.
 type VMPaths struct {
-	Dir        string `json:"dir"`
-	Overlay    string `json:"overlay"`
-	UserData   string `json:"userData"`
-	DomainXML  string `json:"domainXml"`
+	Dir       string `json:"dir"`
+	Overlay   string `json:"overlay"`
+	SeedDir   string `json:"seedDir"`
+	UserData  string `json:"userData"`
+	MetaData  string `json:"metaData"`
+	SeedImage string `json:"seedImage"`
+	DomainXML string `json:"domainXml"`
+	// ConsoleLog is written by QEMU, not by this tool.
 	ConsoleLog string `json:"consoleLog"`
 }
 
@@ -134,7 +138,10 @@ func (s *Store) NewVM(name string) *VM {
 		Paths: VMPaths{
 			Dir:        dir,
 			Overlay:    filepath.Join(dir, OverlayFile),
-			UserData:   filepath.Join(dir, UserDataFile),
+			SeedDir:    filepath.Join(dir, SeedDirectory),
+			UserData:   filepath.Join(dir, SeedDirectory, UserDataFile),
+			MetaData:   filepath.Join(dir, SeedDirectory, MetaDataFile),
+			SeedImage:  filepath.Join(dir, SeedImageFile),
 			DomainXML:  filepath.Join(dir, DomainXMLFile),
 			ConsoleLog: filepath.Join(dir, ConsoleLog),
 		},

@@ -498,7 +498,35 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	if err != nil {
 		return nil, err
 	}
+	metaData, err := guestinit.GenerateMetaData(guestinit.Options{
+		Hostname:       name,
+		User:           cfg.GuestUser,
+		AgentVMVersion: Version,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The seed directory holds exactly what cloud-init reads, because
+	// virt-make-fs copies all of it onto the disk the guest mounts.
+	if err := store.MkdirAll(vm.Paths.SeedDir); err != nil {
+		return nil, err
+	}
 	if err := store.WriteFile(vm.Paths.UserData, userData, userDataPerm); err != nil {
+		return nil, err
+	}
+	if err := store.WriteFile(vm.Paths.MetaData, metaData, userDataPerm); err != nil {
+		return nil, err
+	}
+	// The seed image is created empty and with user-data's mode before
+	// virt-make-fs fills it in: it ends up holding everything user-data holds,
+	// including anything the operator merged in with --cloud-init, and a disk
+	// image written at the ambient umask would be world-readable. virt-make-fs
+	// writes into the existing file and leaves its mode alone.
+	if err := store.WriteFile(vm.Paths.SeedImage, nil, userDataPerm); err != nil {
+		return nil, err
+	}
+	if err := req.manager.CreateSeed(ctx, vm.Paths.SeedDir, vm.Paths.SeedImage); err != nil {
 		return nil, err
 	}
 
@@ -531,7 +559,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		KernelPath:     store.KernelPath(req.manifest.Distro, req.manifest.Tag),
 		InitrdPath:     store.InitrdPath(req.manifest.Distro, req.manifest.Tag),
 		KernelCmdline:  req.manifest.KernelCmdline,
-		UserDataPath:   vm.Paths.UserData,
+		SeedImagePath:  vm.Paths.SeedImage,
 		Network:        cfg.Network,
 		NATNetwork:     cfg.NATNetwork,
 		Bridge:         cfg.Bridge,
@@ -739,6 +767,9 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		plan(hostexec.Virsh.Name, "--connect", uri, "net-list", "--all", "--name")
 	}
 
+	plan(hostexec.VirtMakeFS.Name, "--type=vfat", "--label=cidata", "--size=8M", "--format=raw",
+		vmDir+"/"+state.SeedDirectory, vmDir+"/"+state.SeedImageFile)
+
 	plan(hostexec.QemuImg.Name, "create", "-f", "qcow2", "-F", "qcow2",
 		"-b", layout.BaseDiskPath(ref.Distro.Name, ref.Tag),
 		vmDir+"/"+state.OverlayFile, strconv.FormatInt(int64(cfg.Disk), 10))
@@ -761,7 +792,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		// A plan has no manifest to read — the image may not be built yet — so
 		// it uses the command line every base image is built with.
 		KernelCmdline:  distro.KernelCmdline,
-		UserDataPath:   vmDir + "/" + state.UserDataFile,
+		SeedImagePath:  vmDir + "/" + state.SeedImageFile,
 		Network:        cfg.Network,
 		NATNetwork:     cfg.NATNetwork,
 		Bridge:         cfg.Bridge,
@@ -786,7 +817,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 
 	for _, note := range []string{
 		fmt.Sprintf("create the state directory %s", vmDir),
-		fmt.Sprintf("write the generated cloud-init user-data to %s/%s", vmDir, state.UserDataFile),
+		fmt.Sprintf("write the generated cloud-init user-data and meta-data to %s/%s/", vmDir, state.SeedDirectory),
 		fmt.Sprintf("capture the domain XML to %s/%s and the VM record to %s/%s",
 			vmDir, state.DomainXMLFile, vmDir, state.VMRecordFile),
 		fmt.Sprintf("build the base image %s first if it is not cached", ref),

@@ -114,6 +114,7 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 	rows = append(rows,
 		[]string{"overlay", vm.Paths.Overlay},
 		[]string{"user-data", vm.Paths.UserData},
+		[]string{"seed disk", vm.Paths.SeedImage},
 		[]string{"domain xml", vm.Paths.DomainXML},
 		[]string{"console log", vm.Paths.ConsoleLog},
 		[]string{"created by", "agent-vm " + vm.CreatedBy.AgentVMVersion},
