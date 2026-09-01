@@ -148,3 +148,36 @@ func TestRenderNAT_RejectsANameThatWouldNeedEscaping(t *testing.T) {
 		}
 	}
 }
+
+// TestNATBridge_ReadsTheDeviceLibvirtAllocated covers the lookup doctor's
+// firewall checks depend on: the device is virbr1 here, not virbr0, which is
+// exactly why it is asked for rather than assumed.
+func TestNATBridge_ReadsTheDeviceLibvirtAllocated(t *testing.T) {
+	fake := hostexec.NewFake().
+		Respond(listAll, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"}).
+		Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat",
+			hostexec.FakeResponse{Stdout: toolout(t, "virsh-net-dumpxml.xml")})
+
+	bridge, err := NATBridge(context.Background(), fake, "qemu:///system", "agent-vm-nat")
+	if err != nil {
+		t.Fatalf("NATBridge: %v", err)
+	}
+	if bridge != "virbr1" {
+		t.Errorf("bridge = %q, want %q", bridge, "virbr1")
+	}
+}
+
+// A network that has never been created has no bridge, and that is the normal
+// state of a fresh host rather than an error.
+func TestNATBridge_ReportsNoBridgeForAnUndefinedNetwork(t *testing.T) {
+	fake := hostexec.NewFake().
+		Respond(listAll, hostexec.FakeResponse{Stdout: "default\n"})
+
+	bridge, err := NATBridge(context.Background(), fake, "qemu:///system", "agent-vm-nat")
+	if err != nil {
+		t.Fatalf("NATBridge: %v", err)
+	}
+	if bridge != "" {
+		t.Errorf("bridge = %q, want no bridge", bridge)
+	}
+}

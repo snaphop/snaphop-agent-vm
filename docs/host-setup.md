@@ -249,9 +249,10 @@ hanging rather than by erroring: `apt update` sits at 0% until it times out.
 
 `agent-vm doctor` reports this as the **host firewall forwarding** check.
 
-Forwarding is only half of it. A guest also talks *to* the host — it asks the
-host's dnsmasq for a DHCP lease and for every DNS answer — and ufw defaults to
-`deny (incoming)`. Its `ufw-before-input` chain accepts DHCP *replies*
+Forwarding is only half of it, and `agent-vm doctor` reports the other half as
+the **host firewall guest services** check. A guest also talks *to* the host —
+it asks the host's dnsmasq for a DHCP lease and for every DNS answer — and ufw
+defaults to `deny (incoming)`. Its `ufw-before-input` chain accepts DHCP *replies*
 (`sport 67 → dport 68`, the host acting as a DHCP client) but nothing arriving
 on port 67 or port 53, so on a host with no rules for the bridge a guest never
 gets an address at all. NAT mode therefore needs three rules, all naming the
@@ -527,7 +528,7 @@ agent-vm destroy smoke-test --yes
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `podman pull <ref>` by hand; the error names the registry |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
-| VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
+| VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `agent-vm doctor` (host firewall guest services), `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
 | VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |
 | The same hang, on a host where the ufw rule used to work | libvirt allocated a different `virbrN` and the rule no longer matches | `virsh net-info agent-vm-nat \| grep Bridge`, compare with `sudo ufw status` |
 | Bridged VM has no address | Bridge down, or no DHCP on that VLAN | `ip -br link`, LAN DHCP server |

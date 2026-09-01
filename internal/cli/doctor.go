@@ -99,6 +99,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
 	report.Checks = append(report.Checks, checkForwarding(cfg, conn))
+	report.Checks = append(report.Checks, checkGuestServices(cfg, conn, app.natBridge(ctx, cfg, libvirt.Status == statusPass)))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
 	return app.reportDoctor(report)
@@ -578,6 +579,25 @@ func checkNATNetwork(ctx context.Context, app *App, cfg *config.Config, libvirtO
 	default:
 		return check{Name: name, Status: statusPass, Detail: "not defined yet; agent-vm will define it on the first create"}
 	}
+}
+
+// natBridge is the bridge device libvirt allocated for the NAT network, for
+// the checks that must name an interface. It answers "" rather than an error
+// for every failure: the bridge only sharpens a firewall verdict, and a
+// network that is not defined yet is the normal state of a fresh host.
+func (a *App) natBridge(ctx context.Context, cfg *config.Config, libvirtOK bool) string {
+	if !libvirtOK || cfg.BridgeMode() {
+		return ""
+	}
+	uri, err := a.hypervisorURI()
+	if err != nil {
+		return ""
+	}
+	bridge, err := network.NATBridge(ctx, a.runner, uri, cfg.NATNetwork)
+	if err != nil {
+		return ""
+	}
+	return bridge
 }
 
 // checkBridge validates the configured host bridge, and reports the

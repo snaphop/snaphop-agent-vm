@@ -45,6 +45,10 @@ type ufwState struct {
 	// ForwardPolicy is DEFAULT_FORWARD_POLICY, uppercased, or empty when the
 	// file could not be read or does not set it.
 	ForwardPolicy string
+	// InputPolicy is DEFAULT_INPUT_POLICY, uppercased, under the same rule. It
+	// governs the guest's DHCP and DNS requests, which arrive on the host's
+	// input hook rather than its forward hook.
+	InputPolicy string
 	// RulesReadable is whether the operator's own rules could be read at all.
 	RulesReadable bool
 	// ForwardAccepts are the interfaces named by route rules that accept
@@ -69,6 +73,10 @@ func readUFWState(confPath, defaultsPath, rulesPath string) ufwState {
 	if value, ok := readShellVar(defaultsPath, "DEFAULT_FORWARD_POLICY"); ok {
 		state.Installed = true
 		state.ForwardPolicy = strings.ToUpper(value)
+	}
+	if value, ok := readShellVar(defaultsPath, "DEFAULT_INPUT_POLICY"); ok {
+		state.Installed = true
+		state.InputPolicy = strings.ToUpper(value)
 	}
 	state.ForwardAccepts, state.InputAccepts, state.RulesReadable = readUFWRules(rulesPath)
 	return state
@@ -161,21 +169,17 @@ func (s ufwState) acceptsPort(iface, port string) bool {
 	return false
 }
 
-// missingGuestServices returns the first forwarding interface that cannot
-// answer the guest's DHCP or DNS requests, and which of them are missing.
-func (s ufwState) missingGuestServices() (iface string, missing []string) {
-	for _, forwardIface := range s.ForwardAccepts {
-		var absent []string
-		for _, port := range []string{dhcpServerPort, dnsPort} {
-			if !s.acceptsPort(forwardIface, port) {
-				absent = append(absent, port)
-			}
-		}
-		if len(absent) > 0 {
-			return forwardIface, absent
+// missingGuestServices returns the services a guest on iface cannot reach on
+// the host, in the order an operator meets them: no DHCP lease means the VM
+// never gets an address at all, and no DNS means it resolves nothing.
+func (s ufwState) missingGuestServices(iface string) []string {
+	var missing []string
+	for _, port := range []string{dhcpServerPort, dnsPort} {
+		if !s.acceptsPort(iface, port) {
+			missing = append(missing, port)
 		}
 	}
-	return "", nil
+	return missing
 }
 
 // hasFlag reports whether fields contains flag immediately followed by value.
@@ -284,22 +288,9 @@ func forwardingCheck(cfg *config.Config, state ufwState) check {
 	// they are not, the check says what it could not determine rather than
 	// guessing either way.
 	case len(state.ForwardAccepts) > 0:
-		// Forwarding alone is not enough. The guest also talks *to* the host —
-		// dnsmasq answers its DHCP and DNS — and that traffic is inbound
-		// rather than forwarded, so it is governed by ufw's separate default
-		// of deny (incoming). A host with only the route rule looks configured
-		// and still produces guests that never get an address.
-		if iface, missing := state.missingGuestServices(); len(missing) > 0 {
-			return check{
-				Name: name, Status: statusWarn,
-				Detail: fmt.Sprintf("ufw forwards for %s but does not accept the guest's %s on it, so a guest cannot reach the host's dnsmasq",
-					iface, describePorts(missing)),
-				Remedy: guestServicesRemedy(cfg, iface, missing),
-			}
-		}
 		return check{
 			Name: name, Status: statusPass,
-			Detail: fmt.Sprintf("ufw forwards by rule for %s, and accepts the guest's DHCP and DNS on it", strings.Join(state.ForwardAccepts, ", ")),
+			Detail: fmt.Sprintf("ufw forwards by rule for %s", strings.Join(state.ForwardAccepts, ", ")),
 		}
 	case state.RulesReadable && state.ForwardPolicy != "":
 		return check{
@@ -320,44 +311,6 @@ func forwardingCheck(cfg *config.Config, state ufwState) check {
 			Remedy: forwardingRemedy(cfg),
 		}
 	}
-}
-
-// describePorts names the missing services the way an operator thinks of them,
-// rather than as bare port numbers.
-func describePorts(ports []string) string {
-	names := make([]string, 0, len(ports))
-	for _, port := range ports {
-		switch port {
-		case dhcpServerPort:
-			names = append(names, "DHCP (67/udp)")
-		case dnsPort:
-			names = append(names, "DNS (53)")
-		default:
-			names = append(names, "port "+port)
-		}
-	}
-	return strings.Join(names, " or ")
-}
-
-// guestServicesRemedy prints the rules that let a guest reach the host's
-// dnsmasq. The interface is known here — it came from the forward rule the
-// operator already added — so it is named rather than left as a placeholder.
-func guestServicesRemedy(cfg *config.Config, iface string, missing []string) string {
-	rules := make([]string, 0, len(missing))
-	for _, port := range missing {
-		switch port {
-		case dhcpServerPort:
-			rules = append(rules, fmt.Sprintf("`sudo ufw allow in on %s to any port 67 proto udp`", iface))
-		case dnsPort:
-			rules = append(rules, fmt.Sprintf("`sudo ufw allow in on %s to any port 53`", iface))
-		}
-	}
-	return fmt.Sprintf(
-		"Without this a guest never gets a DHCP lease, and `create` fails waiting for SSH on a VM that has no address. "+
-			"libvirt does not add these rules: it manages its own nftables table and knows nothing about ufw. Add %s. "+
-			"See \"Host Firewalls And The virbrN Bridge\" in docs/host-setup.md. "+
-			"Confirm the interface is still the NAT network's bridge with `virsh --connect %s net-info %s | grep Bridge`.",
-		strings.Join(rules, " and "), cfg.LibvirtURI, cfg.NATNetwork)
 }
 
 // forwardingRemedy names the bridge indirectly: libvirt allocates it (virbrN)
