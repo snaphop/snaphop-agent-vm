@@ -45,7 +45,7 @@ single-host tool with no daemon of its own.
 │  internal/cli        orchestration, confirmation, output, exit codes               │
 │  internal/config     defaults → file → env → flags, validation                     │
 │  internal/image      base image cache: podman → virt-make-fs → virt-copy-out       │
-│  internal/guestinit  cloud-init user-data (hostname, SSH public key)               │
+│  internal/guestinit  cloud-init user-data + meta-data (hostname, SSH public key)   │
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -json link bridge validation         │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
@@ -127,7 +127,7 @@ versions are enforced by `agent-vm doctor`.
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
 | Disk facts | `qemu-img info -U --output=json` |
-| cloud-init seed | `virt-install --cloud-init user-data=…` |
+| cloud-init seed | `virt-make-fs --type=vfat --label=cidata seed/ seed.img` (ADR-0011) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 | Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
@@ -212,12 +212,13 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 
 ### `internal/guestinit`
 
-- **Responsibility:** Generate the cloud-init **user-data** for a VM — hostname,
-  guest user, authorized SSH public keys, and any operator-supplied user-data
-  merged in — and hand it to `virt-install --cloud-init user-data=…`, which builds
-  and attaches the NoCloud seed. We own the content; we do not build ISOs.
-  Because that seed exists for the first boot only, there is no "define without
-  starting" mode: `create --no-start` is rejected rather than approximated
+- **Responsibility:** Generate the two files the NoCloud seed carries — the
+  **user-data** (hostname, guest user, authorized SSH public keys, and any
+  operator-supplied user-data merged in) and the **meta-data** (instance id and
+  hostname). We own the content; writing it onto a filesystem is `virt-make-fs`'s
+  job, driven from `internal/domain` (ADR-0011). `virt-install` always boots the
+  guest it defines, so there is no "define without starting" mode:
+  `create --no-start` is rejected rather than approximated
   ([`cli.md`](./cli.md)).
 - **Public interface:** the guest contract — user name, `sudo` rights, and which
   services are expected up after first boot.
@@ -362,9 +363,11 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 5. **Create the overlay.**
    `qemu-img create -f qcow2 -b <base.qcow2> -F qcow2 root.qcow2 50G`. The base
    file is opened read-only; nothing in this step or later mutates it.
-6. **Generate cloud-init user-data.** Write `user-data` with hostname, guest user,
-   and authorized keys; `virt-install --cloud-init user-data=…` builds and attaches
-   the NoCloud seed.
+6. **Build the cloud-init seed.** Write `seed/user-data` with hostname, guest
+   user and authorized keys, and `seed/meta-data` with the instance id, then
+   `virt-make-fs --type=vfat --label=cidata seed/ seed.img`. The seed is attached
+   as a read-only virtio disk, which is the only kind a guest sees before
+   cloud-init chooses a datasource (ADR-0011).
 7. **Ensure networking.** `virsh net-list`/`net-define`/`net-start` for the NAT
    network, or `ip -json link` validation of the bridge.
 8. **Define and start.** Read the hypervisor's architecture with `virsh
@@ -466,11 +469,11 @@ configuration; the only key material referenced is an SSH public key path.
 |---|---|---|---|---|
 | libvirt (`libvirtd`/`virtqemud`) | 9.0 | Domain and network management | Nothing works; every command fails at readiness check | Exit `3` with the service and group fix; host operator |
 | QEMU/KVM (`/dev/kvm`) | 8.0 | Guest execution | VMs cannot start, or would fall back to unusably slow emulation (refused) | Exit `3`; host operator |
-| `virt-install` (`virtinst`) | 4.0 | Define and start domains; build the cloud-init seed | `create` fails before a domain exists | Exit `3` or the tool's own error with argv; upstream virt-manager |
+| `virt-install` (`virtinst`) | 4.0 | Define and start domains | `create` fails before a domain exists | Exit `3` or the tool's own error with argv; upstream virt-manager |
 | `virsh` | 9.0 | Lifecycle, inspection, addresses, NAT network | Lifecycle and query commands fail | Exit `3`; shipped with libvirt |
 | `qemu-img` | 8.0 | Overlay creation, disk facts | `create` fails before defining a domain | Retry after fixing the host; upstream QEMU |
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
-| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization | `image build` fails; appliance problems are the usual cause | Exit `3` with the libguestfs diagnostic; upstream |
+| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | `agent-vm ssh`, `agent-vm update` | Only those subcommands fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |

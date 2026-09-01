@@ -91,6 +91,7 @@ func TestCreate_RunsTheDocumentedPipeline(t *testing.T) {
 
 	argvs := strings.Join(fake.Argvs(), "\n")
 	for _, want := range []string{
+		"virt-make-fs --type=vfat --label=cidata",
 		"qemu-img create -f qcow2 -F qcow2 ",
 		"virt-install --connect qemu:///system --name agent-01",
 		"virsh --connect qemu:///system dumpxml agent-01",
@@ -131,9 +132,33 @@ func TestCreate_WritesTheVMRecordWithItsProvenance(t *testing.T) {
 		t.Errorf("guest record = %+v, want the user and the key path", vm.Guest)
 	}
 
-	for _, path := range []string{vm.Paths.UserData, vm.Paths.DomainXML} {
+	for _, path := range []string{vm.Paths.UserData, vm.Paths.MetaData, vm.Paths.DomainXML} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s was not written: %v", path, err)
+		}
+	}
+}
+
+// The seed disk carries every byte of the user-data, including anything the
+// operator merged in with --cloud-init, so it must not be left at the mode a
+// disk image would normally get. It is created before virt-make-fs fills it in
+// so there is never a moment when it exists and is world-readable.
+func TestCreate_KeepsTheSeedDiskAsPrivateAsTheUserData(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	for _, path := range []string{vm.Paths.UserData, vm.Paths.MetaData, vm.Paths.SeedImage} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s is mode %o, want 600", filepath.Base(path), perm)
 		}
 	}
 }

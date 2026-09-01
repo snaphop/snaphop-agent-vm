@@ -428,6 +428,8 @@ func TestVMLifecycle(t *testing.T) {
 		for _, path := range []string{
 			created.Paths.Overlay,
 			created.Paths.UserData,
+			created.Paths.MetaData,
+			created.Paths.SeedImage,
 			created.Paths.DomainXML,
 			filepath.Join(created.Paths.Dir, state.VMRecordFile),
 		} {

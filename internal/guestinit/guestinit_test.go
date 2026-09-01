@@ -452,3 +452,52 @@ func TestGenerate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
 		t.Errorf("the error does not name the file: %v", err)
 	}
 }
+
+// TestGenerateMetaData_MatchesTheMetaDataContract pins the second file on the
+// seed. It is a public contract for the same reason user-data is: it is what
+// cloud-init reads to decide the guest is a new instance.
+func TestGenerateMetaData_MatchesTheMetaDataContract(t *testing.T) {
+	got, err := GenerateMetaData(options())
+	if err != nil {
+		t.Fatalf("GenerateMetaData: %v", err)
+	}
+	golden.Assert(t, "meta-data.yaml", got)
+}
+
+// The instance id must be the VM's own name: cloud-init reruns its per-instance
+// modules when the id changes, and two VMs sharing one would each believe they
+// had already been configured as the other.
+func TestGenerateMetaData_NamesTheInstanceAfterTheVM(t *testing.T) {
+	opts := options()
+	opts.Hostname = "agent-42"
+
+	got, err := GenerateMetaData(opts)
+	if err != nil {
+		t.Fatalf("GenerateMetaData: %v", err)
+	}
+	for _, want := range []string{`instance-id: "agent-42"`, `local-hostname: "agent-42"`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("meta-data does not contain %q:\n%s", want, got)
+		}
+	}
+}
+
+// meta-data is written before the keys are known to be usable, so it must not
+// borrow user-data's validation: a VM name is all it needs.
+func TestGenerateMetaData_NeedsNoSSHKeys(t *testing.T) {
+	opts := options()
+	opts.SSHAuthorizedKeys = nil
+
+	if _, err := GenerateMetaData(opts); err != nil {
+		t.Errorf("GenerateMetaData without keys: %v", err)
+	}
+}
+
+func TestGenerateMetaData_RejectsAnInvalidVMName(t *testing.T) {
+	opts := options()
+	opts.Hostname = "../etc/passwd"
+
+	if _, err := GenerateMetaData(opts); err == nil {
+		t.Error("GenerateMetaData accepted a VM name that is not one")
+	}
+}

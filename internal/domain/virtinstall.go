@@ -56,9 +56,11 @@ type CreateOptions struct {
 	InitrdPath    string
 	KernelCmdline string
 
-	// UserDataPath is the generated cloud-init user-data. virt-install builds
-	// the NoCloud seed from it and attaches it for the first boot only.
-	UserDataPath string
+	// SeedImagePath is the cloud-init seed disk built by CreateSeed. It is
+	// attached as a read-only virtio disk that stays with the VM, rather than
+	// as the removable CD-ROM virt-install --cloud-init would have built
+	// (ADR-0011).
+	SeedImagePath string
 
 	Network    config.NetworkMode
 	NATNetwork string
@@ -122,13 +124,18 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 		// system, built from an OCI image (ADR-0003).
 		"--import",
 		"--disk", "path=" + opts.OverlayPath + ",format=qcow2,bus=virtio",
+		// The seed is a virtio disk because it has to be visible before
+		// cloud-init picks a datasource, which a USB CD-ROM is not on a
+		// machine type with no SATA bus (ADR-0011). readonly is both honest —
+		// nothing in the guest may rewrite its own cloud-init data — and what
+		// keeps a second boot reading what the first one did.
+		"--disk", "path=" + opts.SeedImagePath + ",format=raw,bus=virtio,readonly=on",
 		"--boot", strings.Join([]string{
 			"kernel=" + opts.KernelPath,
 			"initrd=" + opts.InitrdPath,
 			"kernel_args=" + opts.KernelCmdline,
 		}, ","),
 		"--network", network,
-		"--cloud-init", "user-data=" + opts.UserDataPath,
 		// The guest agent is how `virsh domifaddr --source agent` learns the
 		// guest's address without waiting for a DHCP lease to appear.
 		"--channel", "unix,target.type=virtio,target.name=org.qemu.guest_agent.0",
@@ -294,7 +301,7 @@ func (o CreateOptions) validate() error {
 		"root disk":   o.OverlayPath,
 		"kernel":      o.KernelPath,
 		"initrd":      o.InitrdPath,
-		"user-data":   o.UserDataPath,
+		"seed disk":   o.SeedImagePath,
 		"console log": o.ConsoleLogPath,
 	}
 	for what, path := range paths {

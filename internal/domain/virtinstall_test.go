@@ -19,7 +19,7 @@ func natOptions() CreateOptions {
 		KernelPath:     "/home/operator/.local/share/agent-vm/images/ubuntu/24.04/vmlinuz",
 		InitrdPath:     "/home/operator/.local/share/agent-vm/images/ubuntu/24.04/initrd",
 		KernelCmdline:  distro.KernelCmdline,
-		UserDataPath:   "/home/operator/.local/share/agent-vm/vms/agent-01/user-data",
+		SeedImagePath:  "/home/operator/.local/share/agent-vm/vms/agent-01/seed.img",
 		Network:        config.NetworkNAT,
 		NATNetwork:     "agent-vm",
 		ConsoleLogPath: "/home/operator/.local/share/agent-vm/vms/agent-01/console.log",
@@ -205,18 +205,36 @@ func TestVirtInstallArgs_BootsTheKernelDirectlyWithItsCommandLine(t *testing.T) 
 	}
 }
 
-func TestVirtInstallArgs_PassesTheGeneratedUserDataAndNothingElse(t *testing.T) {
+// TestVirtInstallArgs_AttachesTheSeedAsAReadOnlyVirtioDisk is the regression
+// for ADR-0011: virt-install --cloud-init attaches its seed as a USB CD-ROM on
+// a machine type with no SATA bus, and USB mass storage is enumerated about a
+// second after cloud-init has already chosen a datasource, so the guest booted
+// with no login user and no authorized key.
+func TestVirtInstallArgs_AttachesTheSeedAsAReadOnlyVirtioDisk(t *testing.T) {
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
 	}
-	want := "user-data=/home/operator/.local/share/agent-vm/vms/agent-01/user-data"
-	if got := flagValue(args, "--cloud-init"); got != want {
-		t.Errorf("--cloud-init = %q, want %q", got, want)
+
+	want := "path=/home/operator/.local/share/agent-vm/vms/agent-01/seed.img,format=raw,bus=virtio,readonly=on"
+	var found bool
+	for i, arg := range args {
+		if arg == "--disk" && i+1 < len(args) && args[i+1] == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no --disk %q in %v", want, args)
+	}
+
+	joined := strings.Join(args, " ")
+	// The seed is ours now, so virt-install must not be asked to build one of
+	// its own — a second cidata filesystem would race the first.
+	if strings.Contains(joined, "--cloud-init") {
+		t.Errorf("virt-install must not build a seed of its own: %v", args)
 	}
 	// root-password-generate and root-ssh-key would put credentials in the seed;
 	// the generated user-data is the only channel into the guest.
-	joined := strings.Join(args, " ")
 	for _, forbidden := range []string{"root-password", "root-ssh-key", "clouduser-ssh-key"} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("virt-install must not be asked to inject credentials (%s): %v", forbidden, args)

@@ -121,9 +121,16 @@ func (s *Store) FS() FS { return s.fsys }
 func (s *Store) Host() string { return s.fsys.Describe() }
 
 // Paths within a VM directory, named once so no caller spells them again.
+//
+// SeedDirectory holds exactly the files cloud-init's NoCloud datasource reads,
+// because everything in it is copied onto the seed disk verbatim: user-data
+// and meta-data, and nothing else.
 const (
 	OverlayFile   = "root.qcow2"
+	SeedDirectory = "seed"
 	UserDataFile  = "user-data"
+	MetaDataFile  = "meta-data"
+	SeedImageFile = "seed.img"
 	DomainXMLFile = "domain.xml"
 	ConsoleLog    = "console.log"
 	VMRecordFile  = "vm.json"

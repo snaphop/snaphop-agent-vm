@@ -15,12 +15,12 @@ detect=off,name=generic
 --import
 --disk
 path=/home/operator/.local/share/agent-vm/vms/agent-01/root.qcow2,format=qcow2,bus=virtio
+--disk
+path=/home/operator/.local/share/agent-vm/vms/agent-01/seed.img,format=raw,bus=virtio,readonly=on
 --boot
 kernel=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/vmlinuz,initrd=/home/operator/.local/share/agent-vm/images/ubuntu/24.04/initrd,kernel_args=root=/dev/vda1 console=ttyS0 console=ttyAMA0 rw memhp_default_state=online_movable
 --network
 network=agent-vm,model=virtio
---cloud-init
-user-data=/home/operator/.local/share/agent-vm/vms/agent-01/user-data
 --channel
 unix,target.type=virtio,target.name=org.qemu.guest_agent.0
 --serial

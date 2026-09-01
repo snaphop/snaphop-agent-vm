@@ -64,6 +64,27 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- **The cloud-init seed is now built by `agent-vm` and attached as a read-only
+  virtio disk**, instead of being built and attached by
+  `virt-install --cloud-init` (ADR-0011). This fixes VMs on ARM64 hosts, where
+  every `create` produced a guest that booted and could never be logged into:
+  virt-install attaches its seed as a USB CD-ROM on a machine type with no SATA
+  bus, and USB storage is enumerated about a second after cloud-init has already
+  chosen its datasource, so the guest came up with no login user and no
+  authorized key and `create` failed at `Waiting for SSH` with
+  `Permission denied (publickey)`. A virtio disk is probed with the root disk,
+  long before cloud-init looks for it.
+
+  Visible effects: a VM's state directory gains a `seed/` directory holding the
+  `user-data` (moved there from the top level) and a new `meta-data`, plus the
+  `seed.img` built from them; `vm.json` records all four paths; the guest has a
+  second, read-only virtio disk (`vdb`) that stays attached for the life of the
+  VM rather than vanishing after the first boot; and `virt-make-fs` — already
+  required for building base images — is now also used by `create`. Existing VMs
+  are unaffected. Nothing secret belongs on a seed, which was already true and
+  is unchanged.
+
+
 - A failing tool now says which machine it ran on, so an error from a remote
   hypervisor cannot be mistaken for one from your own host. ssh failing to
   connect is reported separately from a tool failing on the far side, because

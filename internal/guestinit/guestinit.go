@@ -1,7 +1,10 @@
-// Package guestinit generates the cloud-init user-data a VM receives on its
-// first boot. That is the whole of its job: building the NoCloud seed image is
-// `virt-install --cloud-init`'s work, not ours (ADR-0009), and meta-data —
-// instance id and local hostname — is filled in by virt-install as well.
+// Package guestinit generates the cloud-init files a VM receives on its first
+// boot: the user-data, and the meta-data that names the instance. Writing them
+// onto a filesystem the guest can read is virt-make-fs's work, not ours
+// (ADR-0009); this package only decides what they say.
+//
+// meta-data used to be virt-install's to fill in, and stopped being so when the
+// seed moved to a virtio disk this tool builds (ADR-0011).
 //
 // Everything here crosses the trust boundary in the outbound direction: it is
 // read by an untrusted guest and it must never carry anything the host cares
@@ -71,6 +74,10 @@ var userDataTemplate = template.Must(template.New("user-data.tmpl").
 	Funcs(template.FuncMap{"yaml": yamlString}).
 	ParseFS(templates.FS, "cloud-init/user-data.tmpl"))
 
+var metaDataTemplate = template.Must(template.New("meta-data.tmpl").
+	Funcs(template.FuncMap{"yaml": yamlString}).
+	ParseFS(templates.FS, "cloud-init/meta-data.tmpl"))
+
 // Generate renders the user-data for one VM. When the operator supplied their
 // own user-data, the result is a MIME multipart document holding theirs and
 // ours; otherwise it is a plain `#cloud-config` document.
@@ -99,6 +106,32 @@ func Generate(opts Options) ([]byte, error) {
 		return generated.Bytes(), nil
 	}
 	return combine(opts.ExtraUserData, opts.ExtraSource, generated.Bytes())
+}
+
+// GenerateMetaData renders the NoCloud meta-data for one VM.
+//
+// NoCloud requires this file to exist, even nearly empty: a seed without it is
+// not a datasource, and the guest falls back to DataSourceNone with no user
+// account and no authorized key. The instance id is the VM name, which is
+// unique among VMs on a host and stable across reboots — cloud-init reruns its
+// per-instance modules when the id changes, and a VM that reran them on every
+// boot would rewrite the account it is being used from.
+func GenerateMetaData(opts Options) ([]byte, error) {
+	// Only the hostname reaches this file, so only the hostname is checked
+	// here: the full validation belongs to Generate, and running it twice
+	// would make meta-data fail with an error about SSH keys.
+	if err := config.ValidateVMName(opts.Hostname); err != nil {
+		return nil, err
+	}
+	if strings.ContainsAny(opts.AgentVMVersion, "\r\n") {
+		return nil, fmt.Errorf("agent-vm version %q contains a line break", opts.AgentVMVersion)
+	}
+
+	var out bytes.Buffer
+	if err := metaDataTemplate.Execute(&out, opts); err != nil {
+		return nil, fmt.Errorf("rendering cloud-init meta-data: %w", err)
+	}
+	return out.Bytes(), nil
 }
 
 func (o Options) validate() error {
