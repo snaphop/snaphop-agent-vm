@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"regexp"
 	"strings"
@@ -148,4 +149,37 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// NATBridge returns the bridge device libvirt allocated for the network, or an
+// empty name when the network is not defined yet.
+//
+// The device is not knowable from configuration: libvirt picks the next free
+// virbrN when the network is first started, so a check or a remedy that named
+// virbr0 would send an operator to the wrong interface on any host that has
+// more than one network. net-dumpxml is used rather than net-info because it
+// is the machine-readable form of the same answer.
+func NATBridge(ctx context.Context, runner hostexec.Runner, libvirtURI, name string) (string, error) {
+	defined, err := networkNames(ctx, runner, libvirtURI, true)
+	if err != nil {
+		return "", err
+	}
+	if !contains(defined, name) {
+		return "", nil
+	}
+
+	res, err := runner.Run(ctx, virsh(libvirtURI, hostexec.Read, "net-dumpxml", name))
+	if err != nil {
+		return "", fmt.Errorf("reading the definition of the %s network: %w", name, err)
+	}
+
+	var network struct {
+		Bridge struct {
+			Name string `xml:"name,attr"`
+		} `xml:"bridge"`
+	}
+	if err := xml.Unmarshal(res.Stdout, &network); err != nil {
+		return "", fmt.Errorf("reading the definition of the %s network: %w", name, err)
+	}
+	return network.Bridge.Name, nil
 }

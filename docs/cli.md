@@ -147,7 +147,8 @@ Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is not a `/session` one;
 state directory writable with sufficient free space; state directory reachable by
 the account the hypervisor runs as; the configured NAT network is definable; the
-host firewall does not drop the guest's forwarded traffic; and, when a bridge is
+host firewall does not drop the guest's forwarded traffic, nor its DHCP and DNS
+requests to the host; and, when a bridge is
 configured, that the bridge exists and is up. Bridged networking on a `/session`
 connection is reported as unsupported rather than attempted.
 
@@ -155,9 +156,9 @@ With a [remote URI](#remote-hypervisors), the checks describe the hypervisor
 rather than this machine: `/dev/kvm` and group membership are that host's, asked
 over the transport, and a `hypervisor host <destination>` check runs first. If
 that check fails nothing else is reported, because everything below it would fail
-for the same reason. Two checks cannot be answered from here at all — the host
-firewall, and whether the account QEMU runs as can traverse to the state
-directory — because both need that machine's configuration files and passwd
+for the same reason. Some checks cannot be answered from here at all — the two host
+firewall checks, and whether the account QEMU runs as can traverse to the state
+directory — because they need that machine's configuration files and passwd
 database; they report `skip` and point at running `agent-vm doctor` on the
 hypervisor itself.
 
@@ -184,29 +185,36 @@ DNS, because the resolver is dnsmasq on the host bridge and that traffic is
 delivered locally rather than forwarded — while every outbound connection hangs
 rather than failing, because the packets are dropped rather than rejected.
 
-Forwarding is only half of what NAT mode needs, and the check covers both
-halves. The guest also talks *to* the host — it asks the host's dnsmasq for a
-DHCP lease and for every DNS answer — and that traffic is inbound rather than
-forwarded, so `ufw`'s separate `deny (incoming)` default governs it. A host
-carrying only the route rule looks configured and still produces guests that
-never get an address, so the check reports it when an interface is allowed to
-forward but is not allowed to answer DHCP (67/udp) or DNS (53); the remedy names
-that interface directly, because the forward rule already established it.
+Forwarding is only half of what NAT mode needs, and the **host firewall guest
+services** check is the other half. The guest also talks *to* the host — it asks
+the host's dnsmasq for a DHCP lease and for every DNS answer — and that traffic
+is inbound rather than forwarded, so `ufw`'s separate `deny (incoming)` default
+governs it. `ufw` accepts DHCP *replies* (`sport 67 → dport 68`, the host acting
+as a DHCP client) and drops anything arriving on port 67 or 53, so unless the
+operator added a rule for the bridge, the guest's `DHCPDISCOVER` never reaches
+dnsmasq.
 
-The check reads `ufw`'s configuration only; it never runs `ufw` and never
-changes a rule. It reports `pass` when `ufw` is absent, disabled, forwarding by
-default, or has rules accepting forwarded traffic *and* the guest's DHCP and DNS
-(naming the interfaces those rules cover, so you can confirm the right bridge is
-among them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
-them never match on an IPv4-only NAT network. It reports
+That failure is total rather than partial, which is why it is reported
+separately: the guest boots, waits in `systemd-networkd-wait-online` forever,
+and never gets an address, so `create` fails at `Waiting for the guest to boot`
+on a host `doctor` had called ready. The check reports the missing services by
+name — DHCP (67/udp), DNS (53), or both — and asks libvirt for the bridge
+(`virsh net-dumpxml`), so when the network already exists the remedy is a rule
+that can be run as printed; before the first `create` there is no bridge yet, so
+it prints the lookup instead of guessing `virbr0`. It is skipped in bridged
+mode, where the guest gets its lease and resolver from the LAN.
+
+Both checks read `ufw`'s configuration only; neither ever runs `ufw` and
+neither ever changes a rule. They report `pass` when `ufw` is absent, disabled, permissive by
+default on the hook in question, or carries rules covering it (naming the
+interfaces those rules cover, so you can confirm the right bridge is among
+them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
+them never match on an IPv4-only NAT network. They report
 `warn` — never `fail` — when `ufw` is enabled and dropping, because the live
 ruleset cannot be read without root and a false failure would exit non-zero on a
-working host. The remedy names the NAT network to look the bridge up with, since
-libvirt allocates the bridge (`virbrN`) and its name is not knowable from
-configuration alone. The check is skipped in bridged mode, where a guest sits on the LAN
-directly and its traffic never reaches the host's forward hook, and for a
+working host. Both are skipped for a
 [remote hypervisor](#remote-hypervisors), whose firewall is the one that matters
-and is not this machine's. It asks about
+and is not this machine's, and both ask about
 the network *mode*, not whether a bridge is configured, so a host that sets a
 default `[network.bridge] interface` and still creates NAT VMs is checked. Only `ufw` is understood, so a pass means
 "no `ufw` problem" rather than "no firewall problem";

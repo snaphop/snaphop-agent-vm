@@ -1,0 +1,17 @@
+<network connections='1'>
+  <name>agent-vm-nat</name>
+  <uuid>672ff035-3e87-42bf-a314-b7babec23d07</uuid>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='virbr1' stp='on' delay='0'/>
+  <mac address='52:54:00:3d:af:bb'/>
+  <ip address='192.168.171.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.171.2' end='192.168.171.254'/>
+    </dhcp>
+  </ip>
+</network>
+

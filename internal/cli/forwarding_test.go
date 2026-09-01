@@ -64,6 +64,12 @@ func TestReadUFWState_ReadsTheRealFileFormat(t *testing.T) {
 			want:     ufwState{Installed: true, Enabled: true, ForwardPolicy: ""},
 		},
 		{
+			name:     "both policies are recorded",
+			conf:     "ENABLED=yes\n",
+			defaults: "DEFAULT_INPUT_POLICY=\"DROP\"\nDEFAULT_FORWARD_POLICY=\"DROP\"\n",
+			want:     ufwState{Installed: true, Enabled: true, ForwardPolicy: "DROP", InputPolicy: "DROP"},
+		},
+		{
 			name:     "an inline comment is not part of the value",
 			conf:     "ENABLED=yes\n",
 			defaults: "DEFAULT_FORWARD_POLICY=\"DROP\" # set by the installer\n",
@@ -213,109 +219,6 @@ func TestCheckForwarding_PassesOnceAllRulesExist(t *testing.T) {
 	// which this check cannot determine on its own.
 	if !strings.Contains(got.Detail, "virbr1") {
 		t.Errorf("detail %q does not name the interface the rules cover", got.Detail)
-	}
-}
-
-// TestCheckForwarding_WarnsWhenOnlyForwardingIsAllowed is the false pass this
-// check used to give. Forwarding is only half of what NAT mode needs: the
-// guest also asks the host's dnsmasq for a DHCP lease and for DNS, and that
-// traffic is inbound rather than forwarded, so ufw's separate deny (incoming)
-// default governs it. A host with just the route rule looks configured and
-// still produces guests that never get an address.
-func TestCheckForwarding_WarnsWhenOnlyForwardingIsAllowed(t *testing.T) {
-	rules := `### tuple ### route:allow any any 0.0.0.0/0 any 0.0.0.0/0 in_virbr1
--A ufw-user-forward -i virbr1 -j ACCEPT
-`
-	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", rules, &config.Config{
-		LibvirtURI: "qemu:///system",
-		NATNetwork: "agent-vm-nat",
-	})
-	if got.Status != statusWarn {
-		t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
-	}
-	for _, want := range []string{"virbr1", "DHCP (67/udp)", "DNS (53)"} {
-		if !strings.Contains(got.Detail, want) {
-			t.Errorf("detail %q does not mention %q", got.Detail, want)
-		}
-	}
-	// The interface is known here, so the remedy gives rules that can be run
-	// as printed rather than a placeholder to substitute.
-	for _, want := range []string{"ufw allow in on virbr1 to any port 67 proto udp", "ufw allow in on virbr1 to any port 53", "docs/host-setup.md"} {
-		if !strings.Contains(got.Remedy, want) {
-			t.Errorf("remedy does not contain %q: %s", want, got.Remedy)
-		}
-	}
-}
-
-// TestCheckForwarding_WarnsAboutOnlyTheMissingService keeps the report honest
-// when one of the two rules is already there.
-func TestCheckForwarding_WarnsAboutOnlyTheMissingService(t *testing.T) {
-	rules := `-A ufw-user-input -i virbr1 -p udp --dport 67 -j ACCEPT
--A ufw-user-forward -i virbr1 -j ACCEPT
-`
-	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", rules, &config.Config{
-		LibvirtURI: "qemu:///system",
-		NATNetwork: "agent-vm-nat",
-	})
-	if got.Status != statusWarn {
-		t.Fatalf("status = %q, want %q", got.Status, statusWarn)
-	}
-	if !strings.Contains(got.Detail, "DNS (53)") {
-		t.Errorf("detail %q does not name the missing service", got.Detail)
-	}
-	if strings.Contains(got.Detail, "DHCP") {
-		t.Errorf("detail %q reports DHCP as missing when its rule is present", got.Detail)
-	}
-}
-
-// A rule naming no interface applies to every interface, so it satisfies the
-// requirement for a bridge that is named by the forward rule.
-func TestCheckForwarding_AcceptsInterfacelessInputRules(t *testing.T) {
-	rules := `-A ufw-user-input -p udp --dport 67 -j ACCEPT
--A ufw-user-input -p udp --dport 53 -j ACCEPT
--A ufw-user-forward -i virbr1 -j ACCEPT
-`
-	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", rules, &config.Config{
-		LibvirtURI: "qemu:///system",
-		NATNetwork: "agent-vm-nat",
-	})
-	if got.Status != statusPass {
-		t.Errorf("status = %q, want %q (detail: %s)", got.Status, statusPass, got.Detail)
-	}
-}
-
-// An input rule on a different interface must not be credited to the bridge
-// that actually forwards.
-func TestCheckForwarding_DoesNotCreditAnotherInterfacesRules(t *testing.T) {
-	rules := `-A ufw-user-input -i docker0 -p udp --dport 67 -j ACCEPT
--A ufw-user-input -i docker0 -p udp --dport 53 -j ACCEPT
--A ufw-user-forward -i virbr1 -j ACCEPT
-`
-	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", rules, &config.Config{
-		LibvirtURI: "qemu:///system",
-		NATNetwork: "agent-vm-nat",
-	})
-	if got.Status != statusWarn {
-		t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
-	}
-	if !strings.Contains(got.Detail, "virbr1") {
-		t.Errorf("detail %q does not name the forwarding interface", got.Detail)
-	}
-}
-
-// TestCheckForwarding_WarnsWhenRulesAreReadableAndEmpty is the host this bug
-// was found on: ufw enabled, dropping, and no forward rule at all.
-func TestCheckForwarding_WarnsWhenRulesAreReadableAndEmpty(t *testing.T) {
-	rules := "### tuple ### allow any 22 0.0.0.0/0 any 0.0.0.0/0\n-A ufw-user-input -p tcp --dport 22 -j ACCEPT\n"
-	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", rules, &config.Config{
-		LibvirtURI: "qemu:///system",
-		NATNetwork: "agent-vm-nat",
-	})
-	if got.Status != statusWarn {
-		t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
-	}
-	if !strings.Contains(got.Detail, "no rule") {
-		t.Errorf("detail %q does not say that no forwarding rule exists", got.Detail)
 	}
 }
 

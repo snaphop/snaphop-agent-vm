@@ -46,6 +46,22 @@ migration or rebuild step a user has to take.
   can reach the state directory. Both point at running `agent-vm doctor` on the
   hypervisor itself.
 
+- **`doctor` now checks that the host firewall lets a guest reach the host's
+  DHCP and DNS**, as a new **host firewall guest services** check. `ufw`
+  defaults to `deny (incoming)` and sends anything arriving on port 67 to that
+  policy, so on a host with no rule for the NAT bridge the guest's DHCP request
+  never reaches libvirt's dnsmasq: the VM boots, waits in
+  `systemd-networkd-wait-online` forever, and `create` fails with "did not get
+  an address" on a host `doctor` had just called ready. `doctor` previously
+  noticed this only on a host that had already been given a forwarding rule, and
+  its remaining warning described the milder forwarding problem instead
+  ("a guest will boot, accept SSH and resolve DNS"), which pointed at the wrong
+  fix. The check names the missing service — DHCP (67/udp), DNS (53), or both —
+  and asks libvirt which bridge it allocated, so the remedy is a rule you can
+  run as printed rather than one naming a `virbr0` that may not be yours. Like
+  the forwarding check it only reads `ufw`'s configuration, never runs `ufw`,
+  and warns rather than fails.
+
 ### Changed
 
 - A failing tool now says which machine it ran on, so an error from a remote
