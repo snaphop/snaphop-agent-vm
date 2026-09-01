@@ -85,6 +85,11 @@ migration or rebuild step a user has to take.
   is unchanged.
 
 
+- `create --no-start`'s refusal message no longer says the seed is attached only
+  to the first boot; since ADR-0011 the seed disk stays attached for the life of
+  the VM. The flag is still rejected, for the reason that still holds:
+  `virt-install` always boots the guest it defines.
+
 - A failing tool now says which machine it ran on, so an error from a remote
   hypervisor cannot be mistaken for one from your own host. ssh failing to
   connect is reported separately from a tool failing on the far side, because

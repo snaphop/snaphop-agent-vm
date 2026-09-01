@@ -21,6 +21,8 @@
 | [0007](./decisions/0007-default-vm-resource-profile.md) | Default to 2 vCPU, 4 GiB RAM, 50 GiB thin disk |
 | [0008](./decisions/0008-go-single-binary-cli-with-no-daemon.md) | Implement the tool as a single Go binary with no daemon |
 | [0009](./decisions/0009-orchestrate-existing-host-cli-tools.md) | Orchestrate existing host CLI tools instead of reimplementing them (amends 0002, 0008) |
+| [0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md) | Drive a remote hypervisor by running host tools over ssh |
+| [0011](./decisions/0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md) | Build the cloud-init seed and attach it as a virtio disk (narrows 0009) |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.

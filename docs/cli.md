@@ -729,7 +729,7 @@ On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
 
 `create` is transactional. If a step through "define and start" fails, the tool
-removes the domain, the overlay, the generated user-data, and the state directory
+removes the domain, the overlay, the generated seed, and the state directory
 it created, and reports both the original failure and any cleanup problem.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
 files after verifying they are inside the state directory.
@@ -998,7 +998,7 @@ reason, and an optional `error`.
 
 This updates the software **inside** a guest's overlay only. Guests boot the
 kernel and initramfs from their base image on the host ([direct kernel
-boot](./decisions/0004-direct-kernel-boot.md)), so a kernel package upgraded
+boot](./decisions/0004-direct-kernel-boot-with-copy-on-write-overlays.md)), so a kernel package upgraded
 here is not the kernel the VM boots next time: a newer guest kernel comes from
 `agent-vm image build <distro> --force` and a VM created from the rebuilt image.
 Nothing is rebooted, and no base image is modified — an update lives and dies
@@ -1007,7 +1007,7 @@ with the VM it ran in.
 ### `agent-vm destroy <name>`
 
 Powers off the VM, undefines the domain, and deletes its state directory,
-overlay, and generated user-data. Prompts for confirmation unless `--yes` is given.
+overlay, and generated seed. Prompts for confirmation unless `--yes` is given.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -1099,7 +1099,7 @@ any command; the table below is the summary.
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh <destination> -- <argv>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list` and — when a bridge is configured — `ip -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), and — when a bridge is configured — `ip -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

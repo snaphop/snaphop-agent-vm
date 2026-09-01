@@ -12,6 +12,12 @@ mandated the libvirt Go bindings) and
 build). The libvirt/QEMU and single-binary decisions stand; how we talk to them
 changes.
 
+Narrowed in one place by
+[ADR-0011](./0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md):
+`virt-install --cloud-init` could not be told which bus to attach the seed to,
+so we build the seed filesystem with `virt-make-fs` and attach it ourselves. The
+rest of this record stands.
+
 ## Context
 
 The virtualization ecosystem already ships mature, well-documented, widely
@@ -64,7 +70,7 @@ bind libvirt directly.
 | Generalize the base image | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
 | Disk facts | `qemu-img info --output=json` |
-| cloud-init seed | `virt-install --cloud-init user-data=…` (fallback `cloud-localds`) |
+| cloud-init seed | `virt-make-fs --type=vfat --label=cidata` ([ADR-0011](./0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md); originally `virt-install --cloud-init`) |
 | Shell into a guest | `ssh` (exec'd, with the recorded key and address) |
 
 Rules that follow from this decision:

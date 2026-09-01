@@ -111,11 +111,13 @@ A base image is not a bare distro: it carries the tools an agent expects to
 find already installed, so `create` stays fast and a guest works offline.
 Beyond what makes a container image boot as a VM (kernel, `systemd`,
 `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every image ships
-`git`, a C toolchain, Python, Go, Rust, a JDK with Maven (via mise), Docker, `gh` and
-`tea`, `wrangler`, Playwright with a headless Chromium, `tmux` with a session
-menu at login, and five coding agents — `claude`, `codex`, `opencode`, `pi`,
-and `agy` — each configured in its most permissive mode, because the VM is the
-sandbox. Guests can also run VMs of their own.
+`git`, a C toolchain, Python, Node.js, Go, Rust, a JDK with Maven (via mise),
+Docker, `gh` and `tea`, `wrangler` and `cf`, Playwright with a headless
+Chromium, `tmux` with a session menu at login, the
+[Herdr](https://herdr.dev) terminal workspace, and five coding agents —
+`claude`, `codex`, `opencode`, `pi`, and `agy` — each configured in its most
+permissive mode, because the VM is the sandbox. Guests can also run VMs of
+their own.
 
 **No credentials are baked in.** The agents ship configured but
 unauthenticated; logins arrive per VM. The full inventory, and why each piece
@@ -148,7 +150,7 @@ flattened rootfs + kernel packages ──────► base.qcow2 + vmlinuz + 
                                                           │
 agent-vm create ◄─────────────────────────────────────────┘
    │   qemu-img create -b base.qcow2 …        (copy-on-write overlay)
-   │   cloud-init user-data                   (hostname, SSH key)
+   │   virt-make-fs --label=cidata seed/      (NoCloud seed: hostname, SSH key)
    │   virt-install --import --boot kernel=…  (direct kernel boot)
    ▼
 running VM ──► NAT network or host bridge      (virsh from here on)
@@ -171,7 +173,7 @@ make per-task VMs practical
 | Lifecycle, inspection, addresses, console, NAT network | `virsh` |
 | Copy-on-write overlays | `qemu-img` |
 | Pull, build, and flatten OCI images | `podman` |
-| Root filesystem, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| Root filesystem, cloud-init seed, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | Host bridge validation | `ip -json link` |
 | Guest shell, and the package and tooling updates `agent-vm update` runs in a guest | `ssh` |
 

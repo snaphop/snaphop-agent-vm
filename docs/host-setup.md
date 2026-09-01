@@ -77,8 +77,8 @@ Minimum versions, all checked by `agent-vm doctor`:
 |---|---|---|
 | libvirt / `virsh` | 9.0 | domain and network management |
 | QEMU / `qemu-img` | 8.0 | guest execution, overlays |
-| `virt-install` | 4.0 | defining domains, cloud-init seeds |
-| libguestfs | 1.50 | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| `virt-install` | 4.0 | defining and starting domains |
+| libguestfs | 1.50 | `virt-make-fs` (base images and the cloud-init seed), `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `podman` | 4.0 | OCI pull, build, flatten |
 | `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub |
 
@@ -87,7 +87,9 @@ are `Containerfile`s, and `podman build` is what runs them. `skopeo` appears as
 a possible alternative in
 [ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md) but nothing
 invokes it, and `doctor` does not look for it. No separate cloud-init tooling is
-needed on the host either: `virt-install --cloud-init` builds the NoCloud seed.
+needed on the host either: the NoCloud seed is written by `virt-make-fs`, which
+libguestfs already provides for building base images
+([ADR-0011](./decisions/0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md)).
 
 Because the tool orchestrates these programs rather than reimplementing them
 ([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md)), a missing or

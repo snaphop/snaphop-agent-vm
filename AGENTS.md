@@ -15,10 +15,11 @@
   network-isolated machine with root access instead of running on the host.
 - **Primary language / runtime:** Go 1.22+ (single static binary, `agent-vm`).
 - **Key dependencies / frameworks:** existing host CLI tools, orchestrated rather
-  than reimplemented (ADR-0009) — `virt-install` (defines domains and builds the
-  cloud-init seed), `virsh` (lifecycle, inspection, NAT network, addresses,
-  console), QEMU/KVM, `qemu-img` (copy-on-write overlays), `podman` (OCI
-  pull, build, flatten), libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`,
+  than reimplemented (ADR-0009) — `virt-install` (defines domains), `virsh`
+  (lifecycle, inspection, NAT network, addresses, console), QEMU/KVM,
+  `qemu-img` (copy-on-write overlays), `podman` (OCI
+  pull, build, flatten), libguestfs (`virt-make-fs`, which writes both the base
+  image and the cloud-init seed, plus `virt-ls`, `virt-copy-out`,
   `virt-sysprep`), `ip` (bridge validation), and `ssh`. The Go code is pure Go —
   no cgo, no libvirt bindings.
 - **Deployment target:** A single Linux host with hardware virtualization
@@ -84,14 +85,14 @@ path documented.
 │   ├── image/              # base image cache: podman + libguestfs pipeline
 │   ├── domain/             # virt-install argv, virsh lifecycle and queries
 │   ├── network/            # virsh net-* for NAT, ip -json bridge validation
-│   ├── guestinit/          # cloud-init user-data generation
+│   ├── guestinit/          # cloud-init user-data and meta-data generation
 │   ├── state/              # state directory, vm.json, locking
 │   ├── github/             # gh api calls for --github-ssh-key, host-side only
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
 ├── templates/              # embedded: per-distro Containerfiles, cloud-init
-│                           # user-data, NAT network XML
+│                           # user-data and meta-data, NAT network XML
 ├── test/
 │   ├── golden/             # golden tool argv and cloud-init user-data fixtures
 │   ├── toolout/            # output captured from real tools, for parser tests
@@ -188,9 +189,10 @@ aligned. `scripts/check.sh` runs the full pre-handoff verification and
 `scripts/build-release.sh` builds the release binaries; where a script does not
 exist yet, create it rather than substituting an ad hoc invocation for it. The
 `Makefile` is a convenience wrapper around those scripts — `make check`, `make
-release`, `make build`, `make test`, `make clean` — and adds the one step with no
-script of its own, `make install`, which installs this host's binary into
-`$(BINDIR)` (default `~/.local/bin`). The scripts stay the source of truth.
+release`, `make build`, `make test`, `make clean` — and adds the two steps with no
+script of their own: `make install`, which installs this host's binary into
+`$(BINDIR)` (default `~/.local/bin`), and `make uninstall`, which removes it.
+The scripts stay the source of truth.
 
 | Task | Command |
 |---|---|
@@ -249,9 +251,11 @@ Major modules and responsibilities:
   `virt-make-fs`, `virt-ls`/`virt-copy-out`, and `virt-sysprep`, then writing a
   `manifest.json` recording the source digest, kernel version, kernel command line,
   and builder tool versions.
-- `internal/guestinit` — generates the cloud-init **user-data** (hostname, SSH
-  public key, agent user, optional user-supplied user-data). Seed construction is
-  `virt-install --cloud-init`'s job, not ours.
+- `internal/guestinit` — generates the two files the NoCloud seed carries: the
+  **user-data** (hostname, SSH public key, agent user, optional user-supplied
+  user-data) and the **meta-data** (instance id and hostname). We own their
+  content; writing them onto a `cidata`-labelled filesystem is `virt-make-fs`'s
+  job, driven from `internal/domain` (ADR-0011).
 - `internal/domain` — builds the `virt-install` argument vector and drives
   `virsh` for lifecycle and inspection.
 - `internal/network` — ensures the NAT network exists via `virsh net-*`, or
@@ -277,9 +281,11 @@ Major modules and responsibilities:
 
 Flow for `agent-vm create`: resolve config → check host readiness → ensure base
 image (build if the cache misses) → allocate the VM's state directory under a lock
-→ `qemu-img create` the overlay with the base as backing file → generate
-cloud-init user-data → ensure the network → one `virt-install --import --boot
-kernel=…` run to define and start the domain → poll `virsh domifaddr` and wait for
+→ `qemu-img create` the overlay with the base as backing file → generate the
+cloud-init user-data and meta-data and build the NoCloud seed with `virt-make-fs`
+→ ensure the network → one `virt-install --import --boot
+kernel=…` run to define and start the domain, with the seed attached as a
+read-only virtio disk (ADR-0011) → poll `virsh domifaddr` and wait for
 SSH → capture `virsh dumpxml` and write `vm.json`. Every step is idempotent or
 fully rolled back; a failed `create` must not leave a defined domain or a
 half-written state directory behind.
