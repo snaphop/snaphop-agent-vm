@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -510,10 +511,19 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		return nil, err
 	}
 
+	// The hypervisor's architecture decides a couple of the virt-install
+	// arguments, and it is not necessarily this machine's: a qemu+ssh:// URI
+	// defines the domain on another host (ADR-0010).
+	arch, err := req.manager.HostArch(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	a.out.Progress("Defining and starting domain %s\n", name)
 	argv, err := req.manager.Create(ctx, domain.CreateOptions{
 		Name:           name,
 		LibvirtURI:     req.manager.LibvirtURI(),
+		Arch:           arch,
 		VCPUs:          cfg.VCPUs,
 		Memory:         cfg.Memory,
 		MaxMemory:      cfg.MaxMemory,
@@ -733,9 +743,15 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		"-b", layout.BaseDiskPath(ref.Distro.Name, ref.Tag),
 		vmDir+"/"+state.OverlayFile, strconv.FormatInt(int64(cfg.Disk), 10))
 
+	plan(hostexec.Virsh.Name, "--connect", uri, "capabilities")
+
 	args, err := domain.VirtInstallArgs(domain.CreateOptions{
-		Name:        name,
-		LibvirtURI:  uri,
+		Name:       name,
+		LibvirtURI: uri,
+		// A plan runs nothing, so it cannot ask libvirt what a create asks it:
+		// this machine's architecture stands in. The two differ only when the
+		// hypervisor is another host, and then only in the --features argument.
+		Arch:        runtime.GOARCH,
 		VCPUs:       cfg.VCPUs,
 		Memory:      cfg.Memory,
 		MaxMemory:   cfg.MaxMemory,

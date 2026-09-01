@@ -30,6 +30,7 @@ holds the output of `virsh --version`.
 | `podman-image-inspect.json` | `podman image inspect --format json docker.io/library/busybox:latest` | podman 6.1.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domstate.txt` | `virsh -c test:///default domstate test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-list-all-name.txt` | `virsh -c test:///default list --all --name` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
+| `virsh-capabilities.txt` | `virsh -c test:///default capabilities` | libvirt 12.6.0 (Arch Linux) | 2026-08-31 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
 | `posix-acl-access-search-grant.bin` | `getxattr(dir, "system.posix_acl_access")` after `setfacl -m u:libvirt-qemu:x` | Linux 7.1.8, Btrfs, acl 2.3.2 (Arch Linux) | 2026-08-17 |
 

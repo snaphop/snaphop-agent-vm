@@ -341,3 +341,31 @@ func contains(args []string, want string) bool {
 	}
 	return false
 }
+
+// An aarch64 host is the one architecture that needs a --features argument:
+// libvirt refuses ACPI without UEFI there, and a directly booted kernel has no
+// UEFI (featuresArg).
+func TestVirtInstallArgs_AArch64TurnsOffACPI(t *testing.T) {
+	opts := natOptions()
+	opts.Arch = "aarch64"
+
+	args, err := VirtInstallArgs(opts)
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	golden.Assert(t, "virt-install-aarch64.argv", []byte(strings.Join(args, "\n")+"\n"))
+}
+
+func TestVirtInstallArgs_KeepsACPIOnX8664(t *testing.T) {
+	opts := natOptions()
+	opts.Arch = "x86_64"
+
+	args, err := VirtInstallArgs(opts)
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	if flagValue(args, "--features") != "" {
+		t.Errorf("--features = %q, want no --features: x86_64 guests need ACPI",
+			flagValue(args, "--features"))
+	}
+}

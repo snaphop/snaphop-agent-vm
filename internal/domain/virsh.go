@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"net"
@@ -525,4 +526,44 @@ func parseVirshTable(out []byte, columns int) ([][]string, error) {
 		rows = append(rows, fields[:columns])
 	}
 	return rows, nil
+}
+
+// HostArch returns the architecture libvirt reports for the machine it runs
+// on, as `virsh capabilities` names it ("x86_64", "aarch64").
+//
+// It is asked of libvirt rather than taken from runtime.GOARCH because the
+// hypervisor may not be this machine: with a qemu+ssh:// URI the domain is
+// defined on another host (ADR-0010), and the guest's architecture is that
+// host's — every guest here runs under KVM, which cannot emulate a foreign one.
+func (m *Manager) HostArch(ctx context.Context) (string, error) {
+	res, err := m.run(ctx, hostexec.Read, "capabilities")
+	if err != nil {
+		return "", fmt.Errorf("reading the capabilities of %s: %w", m.libvirtURI, err)
+	}
+	arch, err := parseCapabilitiesArch(res.Stdout)
+	if err != nil {
+		return "", fmt.Errorf("reading the capabilities of %s: %w", m.libvirtURI, err)
+	}
+	return arch, nil
+}
+
+// parseCapabilitiesArch pulls the host CPU architecture out of the XML `virsh
+// capabilities` prints. Only that one element is read; the rest of the
+// document describes guests and CPU features this tool has no use for.
+func parseCapabilitiesArch(out []byte) (string, error) {
+	var caps struct {
+		Host struct {
+			CPU struct {
+				Arch string `xml:"arch"`
+			} `xml:"cpu"`
+		} `xml:"host"`
+	}
+	if err := xml.Unmarshal(out, &caps); err != nil {
+		return "", fmt.Errorf("parsing the XML virsh capabilities printed: %w", err)
+	}
+	arch := strings.TrimSpace(caps.Host.CPU.Arch)
+	if arch == "" {
+		return "", fmt.Errorf("virsh capabilities named no host architecture")
+	}
+	return arch, nil
 }
