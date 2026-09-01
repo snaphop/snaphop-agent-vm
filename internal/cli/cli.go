@@ -396,16 +396,23 @@ func (a *App) hypervisorURI() (string, error) {
 // Config resolves configuration on first use. Flags beat environment variables,
 // which beat the configuration file, which beats the built-in defaults.
 func (a *App) Config() (*config.Config, error) {
+	if a.cfg != nil {
+		return a.cfg, nil
+	}
 	return a.ConfigWith(config.Overrides{})
 }
 
 // ConfigWith resolves configuration with a command's own flags applied on top
 // of the global ones. Commands that take resource or network flags use it;
 // everything else uses Config.
+//
+// It always resolves rather than returning what Config may already have
+// cached, and replaces the cache with the result. Setting up a run reads
+// configuration before any subcommand does — deciding which machine the
+// hypervisor is on needs the libvirt URI — so a cache returned here would be
+// one resolved without this command's own flags, and every `create` flag would
+// be silently ignored.
 func (a *App) ConfigWith(overrides config.Overrides) (*config.Config, error) {
-	if a.cfg != nil {
-		return a.cfg, nil
-	}
 	overrides.ConfigFile = a.configFile
 	overrides.StateDir = a.stateDir
 	overrides.LibvirtURI = a.libvirtURI

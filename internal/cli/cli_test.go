@@ -192,3 +192,36 @@ func TestCleanupError_ListsWhatRemainsOnTheHost(t *testing.T) {
 		}
 	}
 }
+
+// Setting up a run reads configuration before any subcommand does — deciding
+// which machine the hypervisor is on needs the libvirt URI — so a config
+// resolved and cached at that point has none of the running command's flags in
+// it. Handing that cache back is how every `create` flag came to be silently
+// ignored: the VM was created, and at the default size whatever was asked for.
+func TestConfigWith_ResolvesAgainAfterConfigHasAlreadyCachedOne(t *testing.T) {
+	app := &App{Env: func(string) string { return "" }}
+
+	if _, err := app.Config(); err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg, err := app.ConfigWith(config.Overrides{VCPUs: "8", Memory: "2G"})
+	if err != nil {
+		t.Fatalf("ConfigWith: %v", err)
+	}
+
+	if cfg.VCPUs != 8 {
+		t.Errorf("VCPUs = %d, want the flag's 8", cfg.VCPUs)
+	}
+	if cfg.Memory != 2*config.GiB {
+		t.Errorf("Memory = %v, want the flag's 2G", cfg.Memory)
+	}
+	// Later lookups see what the command actually ran with, not the earlier
+	// flagless resolution.
+	again, err := app.Config()
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	if again.VCPUs != 8 {
+		t.Errorf("Config() after ConfigWith gave VCPUs = %d, want 8", again.VCPUs)
+	}
+}

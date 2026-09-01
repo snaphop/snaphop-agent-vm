@@ -146,6 +146,16 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- **`agent-vm create` ignored its own flags.** `--vcpus`, `--memory`, `--disk`,
+  `--max-memory`, `--distro`, `--network`, `--bridge`, and `--ssh-key` were all
+  silently dropped, and every VM was created with the configured defaults
+  instead — at the default size, on the default network, authorizing the default
+  keys. Setting up a run reads configuration before the subcommand does, to work
+  out which machine the hypervisor is on, and the result was cached and handed
+  back to `create` with none of its flags applied. Nothing reported the loss;
+  the VM was simply not the one that was asked for. `--dry-run` showed the same
+  wrong values, so the printed plan matched what would really have run.
+
 - **`create` now works on an aarch64 host.** `virt-install` failed with
   `unsupported configuration: ACPI requires UEFI on this architecture`: it
   turns ACPI on by default, and libvirt refuses ACPI on aarch64 unless the
