@@ -63,7 +63,7 @@ bind libvirt directly.
 | Guest address | `virsh domifaddr --source agent` (fallback `--source lease`) |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-define/net-start/net-autostart/net-list/net-dhcp-leases` |
-| Host bridge check | `ip -json link show type bridge` |
+| Host bridge check | `ip -d -json link show type bridge` |
 | Pull / build / flatten OCI images | `podman pull`, `podman build`, `podman create`, `podman export` (or `skopeo copy`) |
 | Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
 | Locate and extract kernel/initrd | `virt-ls`, `virt-copy-out` |

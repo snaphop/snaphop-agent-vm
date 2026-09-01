@@ -7,11 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
-const bridgeArgv = "ip -json link show type bridge"
+const bridgeArgv = "ip -d -json link show type bridge"
 
 // toolout reads output captured from a real tool. See test/toolout/README.md.
 func toolout(t *testing.T, name string) string {
@@ -26,20 +27,49 @@ func toolout(t *testing.T, name string) string {
 func bridgeFake(t *testing.T) *hostexec.Fake {
 	t.Helper()
 	return hostexec.NewFake().Respond(bridgeArgv, hostexec.FakeResponse{
-		Stdout: toolout(t, "ip-json-link-show-type-bridge.txt"),
+		Stdout: toolout(t, "ip-d-json-link-show-type-bridge.txt"),
 	})
 }
 
 func TestValidateBridge_AcceptsABridgeThatIsUp(t *testing.T) {
-	if err := ValidateBridge(context.Background(), bridgeFake(t), "br40"); err != nil {
+	// docker0 is up and has STP turned off, which is the shape a bridge should
+	// have: nothing to report at all.
+	warning, err := ValidateBridge(context.Background(), bridgeFake(t), "docker0")
+	if err != nil {
+		t.Fatalf("ValidateBridge(docker0) = %v, want nil", err)
+	}
+	if warning != nil {
+		t.Errorf("ValidateBridge(docker0) warned about %s, and STP is off on it", warning)
+	}
+}
+
+// A bridge running STP holds a guest's tap port in listening and learning for
+// the forward delay each, so the guest cannot finish DHCP for twice that time
+// and every boot on it is about 30 seconds longer. The bridge still works, so
+// this is a warning the operator can act on and not a refusal.
+func TestValidateBridge_WarnsAboutASpanningTreeForwardDelay(t *testing.T) {
+	warning, err := ValidateBridge(context.Background(), bridgeFake(t), "br40")
+	if err != nil {
 		t.Fatalf("ValidateBridge(br40) = %v, want nil", err)
+	}
+	if warning == nil {
+		t.Fatal("br40 runs STP with a 15s forward delay and drew no warning")
+	}
+	if warning.ForwardDelay != 15*time.Second {
+		t.Errorf("ForwardDelay = %s, want 15s", warning.ForwardDelay)
+	}
+	if !strings.Contains(warning.Detail(), "30s") {
+		t.Errorf("detail %q does not say how much boot time this costs", warning.Detail())
+	}
+	if !strings.Contains(warning.Remedy(), "ip link set br40 type bridge stp_state 0") {
+		t.Errorf("remedy %q does not name the command that fixes it", warning.Remedy())
 	}
 }
 
 func TestValidateBridge_RejectsABridgeThatIsDown(t *testing.T) {
-	// docker0 exists in the capture but has no carrier and reports operstate
+	// virbr1 exists in the capture but has no carrier and reports operstate
 	// DOWN. A guest attached to it would not reach anything.
-	err := ValidateBridge(context.Background(), bridgeFake(t), "docker0")
+	_, err := ValidateBridge(context.Background(), bridgeFake(t), "virbr1")
 
 	var berr *BridgeError
 	if !errors.As(err, &berr) {
@@ -51,7 +81,7 @@ func TestValidateBridge_RejectsABridgeThatIsDown(t *testing.T) {
 }
 
 func TestValidateBridge_RejectsAMissingBridgeAndListsWhatExists(t *testing.T) {
-	err := ValidateBridge(context.Background(), bridgeFake(t), "br0")
+	_, err := ValidateBridge(context.Background(), bridgeFake(t), "br0")
 
 	var berr *BridgeError
 	if !errors.As(err, &berr) {
@@ -69,7 +99,7 @@ func TestValidateBridge_RejectsAMissingBridgeAndListsWhatExists(t *testing.T) {
 func TestValidateBridge_NeverModifiesTheHost(t *testing.T) {
 	// This package must not create, change, or bring up a host bridge.
 	fake := bridgeFake(t)
-	_ = ValidateBridge(context.Background(), fake, "br0")
+	_, _ = ValidateBridge(context.Background(), fake, "br0")
 
 	for _, call := range fake.Calls() {
 		if call.Effect != hostexec.Read {

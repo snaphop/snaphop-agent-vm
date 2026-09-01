@@ -18,6 +18,13 @@ set -eu
 # truth.
 groups='docker libvirt kvm'
 
+# The mise store every account shares. An account created from /etc/skel
+# already has the symlink below; this is for the ones that were not -- an
+# operator's own --cloud-init user with no_create_home undone by hand, or any
+# account made with `useradd --skel`. Without it that account has no toolchain
+# at all, because there is no per-account copy any more.
+mise_store='/usr/local/lib/mise'
+
 while IFS=: read -r name _pw uid gid _gecos home _shell; do
     # Interactive accounts only. System accounts and nobody are left alone.
     case "$uid" in "" | *[!0-9]*) continue ;; esac
@@ -28,6 +35,23 @@ while IFS=: read -r name _pw uid gid _gecos home _shell; do
         gpasswd -a "${name}" "${group}" >/dev/null
     done
 
+    # Everything below writes into the account's home, so an account that has
+    # none is done with here.
+    if [ ! -d "${home}" ]; then
+        continue
+    fi
+
+    # The mise data directory, as a symlink to the shared store. An existing
+    # one is left alone whatever it is: on a VM created from a base image that
+    # predates the shared store it is a real directory holding that account's
+    # own copy of the toolchain, and replacing it would throw away whatever the
+    # account has installed since.
+    if [ -d "${mise_store}" ] && [ ! -e "${home}/.local/share/mise" ]; then
+        install -d -m 0755 -o "${uid}" -g "${gid}" "${home}/.local" "${home}/.local/share"
+        ln -sfn "${mise_store}" "${home}/.local/share/mise"
+        chown -h "${uid}:${gid}" "${home}/.local/share/mise"
+    fi
+
     # An SSH key pair for the account, so an agent can authenticate to a git
     # forge or reach a nested VM without a key being pasted in by hand.
     #
@@ -35,9 +59,6 @@ while IFS=: read -r name _pw uid gid _gecos home _shell; do
     # key is ever placed in a base image or a cloud-init seed (SECURITY.md).
     # An existing key is left exactly as it is -- the operator may have
     # supplied their own through --cloud-init.
-    if [ ! -d "${home}" ]; then
-        continue
-    fi
     if [ -e "${home}/.ssh/id_ed25519" ]; then
         continue
     fi

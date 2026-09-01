@@ -483,11 +483,53 @@ func TestCreate_WaitingCanBeDisabled(t *testing.T) {
 	}
 }
 
+// A bridge running the spanning tree protocol holds a guest's tap port in
+// listening and learning for the forward delay each, so the guest cannot
+// finish DHCP for twice that time and the boot takes about 30 seconds longer.
+// The VM is still created — the bridge works — but create says why the wait is
+// long, because otherwise it reads as a slow image or a broken guest.
+func TestCreate_WarnsAboutASpanningTreeForwardDelayAndStillCreatesTheVM(t *testing.T) {
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
+		Stdout: readToolout(t, "ip-d-json-link-show-type-bridge.txt"),
+	})
+
+	code, stdout, stderr := cliRun(t, fake, stateDir,
+		createArgs(keyPath, "--network", "bridge", "--bridge", "br40")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	out := stdout + stderr
+	if !strings.Contains(out, "stp_state 0") {
+		t.Errorf("create did not tell the operator how to remove the boot delay:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01", "vm.json")); err != nil {
+		t.Errorf("a warning must not stop the create: %v", err)
+	}
+
+	// --quiet suppresses progress, not findings: a host misconfiguration that
+	// costs every VM half a minute is not noise to be silenced.
+	quiet := createHost(t)
+	quiet.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
+		Stdout: readToolout(t, "ip-d-json-link-show-type-bridge.txt"),
+	})
+	quietDir, quietKey := createEnv(t)
+	code, _, stderr = cliRun(t, quiet, quietDir,
+		append([]string{"--quiet"}, createArgs(quietKey, "--network", "bridge", "--bridge", "br40")...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "stp_state 0") {
+		t.Errorf("--quiet hid the boot-delay warning:\n%s", stderr)
+	}
+}
+
 func TestCreate_BridgeModeValidatesTheBridgeAndCreatesNothing(t *testing.T) {
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
-	fake.Respond("ip -json link show type bridge", hostexec.FakeResponse{
-		Stdout: readToolout(t, "ip-json-link-show-type-bridge.txt"),
+	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
+		Stdout: readToolout(t, "ip-d-json-link-show-type-bridge.txt"),
 	})
 
 	code, _, stderr := cliRun(t, fake, stateDir,
@@ -497,7 +539,7 @@ func TestCreate_BridgeModeValidatesTheBridgeAndCreatesNothing(t *testing.T) {
 	}
 
 	argvs := strings.Join(fake.Argvs(), "\n")
-	if !strings.Contains(argvs, "ip -json link show type bridge") {
+	if !strings.Contains(argvs, "ip -d -json link show type bridge") {
 		t.Errorf("the bridge was not validated:\n%s", argvs)
 	}
 	// Host networking belongs to the operator: a bridge is checked, never made.

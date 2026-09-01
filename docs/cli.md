@@ -23,7 +23,7 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 | `--libvirt-uri <uri>` | `qemu:///system` | libvirt connection URI. `qemu+ssh://[user@]host[:port]/system` drives a hypervisor on another machine — see [Remote Hypervisors](#remote-hypervisors). |
 | `--output <text\|json>` | `text` | Output format. `json` is machine-readable and stable. |
 | `--verbose` | off | Debug-level logging to stderr. |
-| `--quiet` | off | Suppress progress output; errors still go to stderr. |
+| `--quiet` | off | Suppress progress output; errors and warnings still go to stderr. |
 | `--yes` | off | Skip interactive confirmation for destructive operations. |
 | `--dry-run` | off | Print the exact tool invocations the operation would run, and exit 0 without changing anything. |
 | `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. |
@@ -151,6 +151,16 @@ host firewall does not drop the guest's forwarded traffic, nor its DHCP and DNS
 requests to the host; and, when a bridge is
 configured, that the bridge exists and is up. Bridged networking on a `/session`
 connection is reported as unsupported rather than attempted.
+
+The bridge check also warns about a bridge running the spanning tree protocol
+with a non-zero forward delay. Such a bridge holds each guest's tap port in
+listening and learning before it forwards anything, so the guest cannot finish
+DHCP for twice the delay — about 30 seconds with the default — and every
+`create` on that bridge waits that much longer for SSH. It is a warning rather
+than a failure because the VM does come up, and the remedy names the exact
+command (`ip link set <bridge> type bridge stp_state 0`); see
+[`docs/host-setup.md`](./host-setup.md#turn-off-the-spanning-tree-forward-delay).
+`create` prints the same warning and carries on.
 
 With a [remote URI](#remote-hypervisors), the checks describe the hypervisor
 rather than this machine: `/dev/kvm` and group membership are that host's, asked
@@ -367,9 +377,8 @@ image was built, and rebuilding the image is how a guest gets newer ones.
 `claude`, `opencode`, and `pi` are installed with `mise` (`mise use -g claude
 opencode pi`), the same tool-version manager the JDK and Maven come from; those
 registry names resolve to each vendor's own release archive. The install lands
-in `/etc/skel`, so each account cloud-init creates inherits its own copy and can
-move an agent to another release with `mise use -g claude@<version>` without
-root. Each of the three also has a symlink in `/usr/local/bin` pointing
+in the shared `mise` store described below, and an account can still move an
+agent to another release with `mise use -g claude@<version>` without root. Each of the three also has a symlink in `/usr/local/bin` pointing
 at the `mise` binary — a shim, which resolves the version from the calling
 account's own configuration — so `ssh <vm> claude -p '…'` finds the command
 even though an ssh command runs no login shell.
@@ -414,11 +423,10 @@ a server that will not start reports why. An account that would rather not have
 one runs `sudo systemctl stop agent-vm-herdr@<account>`.
 
 Accounts without a `herdr` of their own are skipped, with a line in
-`agent-vm-herdr.service`'s journal saying so: an account the distribution baked
-into its own image — Ubuntu's `ubuntu` — predates the `/etc/skel` the `mise`
-install lands in, so it has no `mise` data directory at all. Running
-`mise use -g herdr` as that account and then
-`sudo systemctl start agent-vm-herdr@<account>` gives it one.
+`agent-vm-herdr.service`'s journal saying so: an account that has neither the
+`~/.local/share/mise` link to the shared store nor a store of its own has no
+`mise` data directory at all. Running `mise use -g herdr` as that account and
+then `sudo systemctl start agent-vm-herdr@<account>` gives it one.
 
 #### Forge CLIs, wrangler, browsers, and the JVM toolchain
 
@@ -461,13 +469,30 @@ profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 
 The JVM toolchain — and `claude`, `opencode`, `pi`, and `herdr`, described
-above — comes from [mise](https://mise.jdx.dev). The `mise` binary itself is shared, in
-`/usr/local/bin`, so every account has the command; what it installs is per
-account, into `/etc/skel` so each account cloud-init creates gets its own copy. Installing a tool writes into mise's data directory, so one
-shared copy would have every user on the VM writing to the same place.
+above — comes from [mise](https://mise.jdx.dev). The `mise` binary itself is in
+`/usr/local/bin`, so every account has the command, and what it installs goes
+into `/usr/local/lib/mise`, one store every account shares. Each account's
+`~/.local/share/mise` is a symlink to it: from `/etc/skel` for an account
+cloud-init creates, and from `agent-vm-user-setup.service` for one that was
+created without skel.
 
-The newest Temurin JDK mise offers and Maven are installed into that copy during
-the build, so every account has `java` and `mvn` without downloading anything —
+The store holds tool *installs*, keyed by name and version, while *which*
+version an account uses is its own `~/.config/mise` — so two accounts wanting
+different Node releases get two directories in the store and one config file
+each, and never contend. Every directory in the store is writable with the
+sticky bit, the way `/tmp` and the Playwright browser directory are: any account
+may install a tool, none may remove another's. That is defensible for the same
+reason those are — the VM is the sandbox, single-tenant and disposable, and the
+accounts inside it are not a security boundary.
+
+Sharing the store is also what keeps first boot fast. The toolchain is around
+1.7 GiB, and when it lived in `/etc/skel` `useradd` copied all of it into the
+new account before cloud-init could get to the SSH keys: about nine seconds
+added to every VM's first boot, and 1.7 GiB written into its copy-on-write
+overlay. A symlink costs neither.
+
+The newest Temurin JDK mise offers and Maven are installed into that store
+during the build, so every account has `java` and `mvn` without downloading anything —
 which a network-isolated guest could not do anyway. Neither version is pinned:
 they are whatever was current when the image was built. The JDK is requested as
 `java@temurin` rather than `java@latest`, which would be an Oracle build of
@@ -487,8 +512,9 @@ configuration — so `ssh <vm> claude -p '…'` works without a login shell.
 
 To use a different version inside a guest, run `mise use java@21` in a project
 or `mise use -g java@21` for the account, and likewise `mise use -g claude@2.1.0`
-for an agent. Those write to that account's own mise directory, so they need no
-`sudo` and affect no other user.
+for an agent. Those need no `sudo`: the new version lands beside the existing
+one in the shared store, and the choice is recorded in that account's own
+configuration, so no other account's `java` changes.
 
 #### Go and Rust
 
@@ -513,8 +539,8 @@ Rust is shared rather than per account: it is installed once into
 its own toolchain at first use, and `rustup update` needs `sudo`. It is
 deliberately not managed by `mise` — `mise`'s `rust` is `rustup` underneath and
 re-reads `RUSTUP_HOME`/`CARGO_HOME` from the environment of whoever runs
-`cargo`, so a shared installation makes it re-run `rustup-init` as each account
-and fail, and a per-account one costs roughly 1.5 GiB per account.
+`cargo`, so it would re-run `rustup-init` as each account rather than use what the
+shared store already holds, at roughly 1.5 GiB per account.
 `RUSTUP_HOME` is set in `/etc/environment` for the same reason
 `PLAYWRIGHT_BROWSERS_PATH` is: the rustup proxies find their toolchain through
 it, and a non-interactive command reads that file but no profile script.
@@ -957,9 +983,12 @@ Then the rest of what a guest carries, in this order:
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
 `claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and
 `golangci-lint`, and the npm-backed `wrangler`, `playwright` and `cf`. It is run
-for both accounts because `mise` is per account by design — root's installation
-and the guest user's are separate, and both are in use. `codex` and Rust are
-shared, root-owned installations, so each is updated once for the whole VM.
+for both accounts because `mise`'s configuration is per account — the installs
+are in one shared store, but which version each account uses is recorded under
+its own home, and both accounts are in use. The second run is cheap: whatever
+the first one installed is already in the store, so only the configuration
+moves. `codex` and Rust are shared, root-owned installations, so each is updated
+once for the whole VM.
 
 Steps run as root go through `sudo -n` as the guest user, which cloud-init grants
 passwordless sudo, and the guest's own output is streamed to stderr as it runs.
@@ -1090,7 +1119,7 @@ any command; the table below is the summary.
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
@@ -1099,7 +1128,7 @@ any command; the table below is the summary.
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh <destination> -- <argv>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), and — when a bridge is configured — `ip -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), and — when a bridge is configured — `ip -d -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

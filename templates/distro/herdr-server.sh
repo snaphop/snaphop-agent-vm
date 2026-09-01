@@ -26,11 +26,13 @@ start_for_account() {
     [ -d "${home}" ] || return 0
 
     # An account with no herdr of its own gets no server. The image installs
-    # herdr with mise into /etc/skel, so every account cloud-init creates has
-    # one -- but an account the distro baked into its own image, Ubuntu's
-    # `ubuntu`, predates that skel and has no mise data directory at all.
-    # /usr/local/bin/herdr is a mise shim, so for exactly those accounts it
-    # exits at once with "herdr is not a valid shim".
+    # herdr into the shared mise store, and every account reaches it through
+    # the ~/.local/share/mise symlink -- from /etc/skel when cloud-init creates
+    # the account, or from agent-vm-user-setup.service for one the distro baked
+    # into its own image, like Ubuntu's `ubuntu`. An account that has neither
+    # has no mise data directory at all, and /usr/local/bin/herdr is a mise
+    # shim, so for exactly those accounts it exits at once with "herdr is not a
+    # valid shim".
     if [ ! -x "${home}/.local/share/mise/shims/herdr" ]; then
         echo "herdr: no herdr installed for ${name} (run 'mise use -g herdr' as ${name}, then: systemctl start agent-vm-herdr@${name})" >&2
         return 0

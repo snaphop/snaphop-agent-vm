@@ -174,7 +174,7 @@ make per-task VMs practical
 | Copy-on-write overlays | `qemu-img` |
 | Pull, build, and flatten OCI images | `podman` |
 | Root filesystem, cloud-init seed, kernel extraction, image generalization | `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
-| Host bridge validation | `ip -json link` |
+| Host bridge validation | `ip -d -json link` |
 | Guest shell, and the package and tooling updates `agent-vm update` runs in a guest | `ssh` |
 
 Two consequences worth knowing:

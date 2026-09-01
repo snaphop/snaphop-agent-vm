@@ -17,7 +17,7 @@ holds the output of `virsh --version`.
 | `ssh-V.txt` | `ssh -V` (stderr) | OpenSSH 10.5p1 (Arch Linux) | 2026-08-17 |
 | `gh--version.txt` | `gh --version` | gh 2.97.0 (mise) | 2026-08-18 |
 | `gh-auth-status.txt` | `gh auth status --hostname github.com` | gh 2.97.0 (mise) | 2026-08-18 |
-| `ip-json-link-show-type-bridge.txt` | `ip -json link show type bridge` | iproute2 7.1.0 (Arch Linux) | 2026-08-17 |
+| `ip-d-json-link-show-type-bridge.txt` | `ip -d -json link show type bridge` | iproute2 7.2.0 (Arch Linux) | 2026-09-01 |
 | `podman--version.txt` | `podman --version` | podman 6.1.0 (Arch Linux) | 2026-08-17 |
 | `virt-make-fs--version.txt` | `virt-make-fs --version` | libguestfs 1.56.0 (Arch Linux) | 2026-08-17 |
 | `virt-ls--version.txt` | `virt-ls --version` | libguestfs 1.56.0 (Arch Linux) | 2026-08-17 |
@@ -34,6 +34,13 @@ holds the output of `virsh --version`.
 | `virsh-net-dumpxml.xml` | `virsh -c qemu:///system net-dumpxml agent-vm-nat` | libvirt 12.6.0 (Arch Linux) | 2026-08-31 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
 | `posix-acl-access-search-grant.bin` | `getxattr(dir, "system.posix_acl_access")` after `setfacl -m u:libvirt-qemu:x` | Linux 7.1.8, Btrfs, acl 2.3.2 (Arch Linux) | 2026-08-17 |
+
+The bridge listing is captured with `-d` because that is the only way `ip`
+reports a bridge's `stp_state` and `forward_delay`, and those decide whether
+every guest on that bridge waits half a minute for its tap port to start
+forwarding. The capture is from a host with all three shapes in it: `br40` and
+its siblings run STP with the 15-second default delay, `virbr1` is a bridge
+that exists but has no carrier, and `docker0` has STP turned off.
 
 Most `virsh-*` captures come from libvirt's built-in `test:///default`
 driver. The data in them is synthetic, but the formatting is produced by the

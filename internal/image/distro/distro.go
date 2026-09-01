@@ -190,12 +190,14 @@ const rootMiseTmpDir = "/root/.cache/mise-tmp"
 // manager knows about and which therefore stays at the version the image was
 // built with unless something updates it explicitly.
 //
-// user is the account the update connects as. It matters because mise is
-// per account by design (see templates/distro/mise.sh): root's tools and the
-// guest user's tools are separate installations under separate homes, and both
-// are in use — an agent supervisor runs commands as the guest user, while the
-// boot-time services run as root. Both are upgraded, unless the guest user is
-// root and they are the same installation.
+// user is the account the update connects as. It matters because mise's
+// configuration is per account (see templates/distro/mise.sh): the installs
+// live in one shared store, but which version each account uses is recorded
+// under its own home, and both accounts are in use — an agent supervisor runs
+// commands as the guest user, while the boot-time services run as root. So
+// both are upgraded, unless the guest user is root and there is only one
+// configuration to bump. The second run is cheap: the version the first one
+// installed is already in the shared store, and only the config moves.
 //
 // Not covered: agy, which self-updates in the background and cannot write
 // /usr/local/bin as a non-root user, and the Playwright browser downloads,
@@ -222,9 +224,9 @@ func ToolingUpdate(user string) []UpdateStep {
 		},
 	}
 	if user != "root" {
-		// Unelevated on purpose: this is the account's own mise data directory,
-		// and running it through sudo would upgrade root's copy twice and leave
-		// this account on the versions the image shipped.
+		// Unelevated on purpose: this bumps the account's own mise
+		// configuration, and running it through sudo would bump root's twice
+		// and leave this account on the versions the image shipped.
 		steps = append(steps, UpdateStep{
 			Name:     "upgrading " + user + "'s mise-managed tools",
 			Requires: "mise",

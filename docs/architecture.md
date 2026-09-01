@@ -47,7 +47,7 @@ single-host tool with no daemon of its own.
 │  internal/image      base image cache: podman → virt-make-fs → virt-copy-out       │
 │  internal/guestinit  cloud-init user-data + meta-data (hostname, SSH public key)   │
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
-│  internal/network    virsh net-* for NAT | ip -json link bridge validation         │
+│  internal/network    virsh net-* for NAT | ip -d -json link bridge validation      │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
 │  internal/github     gh api calls for --github-ssh-key, on the host only           │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
@@ -120,7 +120,7 @@ versions are enforced by `agent-vm doctor`.
 | Guest address | `virsh domifaddr --source agent`, fallback `--source lease` |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
-| Host bridge validation | `ip -json link show type bridge` |
+| Host bridge validation | `ip -d -json link show type bridge` |
 | OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` |
 | Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
 | Kernel/initrd extraction | `virt-ls`, `virt-copy-out` |
@@ -260,7 +260,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 
 - **Responsibility:** NAT mode — ensure the libvirt `agent-vm-nat` network exists and
   is active (`virsh net-list`, then `net-define` from the embedded network XML,
-  `net-start`, `net-autostart`). Bridge mode — validate with `ip -json link show
+  `net-start`, `net-autostart`). Bridge mode — validate with `ip -d -json link show
   type bridge` that the named bridge exists and is up, then pass
   `--network bridge=<iface>` to `virt-install`. MAC allocation is left to
   `virt-install`/libvirt and read back from `virsh dumpxml` into `vm.json`.
@@ -369,7 +369,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
    as a read-only virtio disk, which is the only kind a guest sees before
    cloud-init chooses a datasource (ADR-0011).
 7. **Ensure networking.** `virsh net-list`/`net-define`/`net-start` for the NAT
-   network, or `ip -json link` validation of the bridge.
+   network, or `ip -d -json link` validation of the bridge.
 8. **Define and start.** Read the hypervisor's architecture with `virsh
    capabilities` — it decides the arguments that cannot be the same everywhere,
    currently `--features acpi=off` on aarch64, where libvirt refuses ACPI

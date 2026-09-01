@@ -46,6 +46,13 @@ func (o *output) Progress(format string, args ...any) {
 	_, _ = fmt.Fprintf(o.stderr, format, args...)
 }
 
+// Warn writes something the operator should act on to stderr. Unlike Progress
+// it survives --quiet, which suppresses progress and not findings: a host
+// misconfiguration that costs every VM half a minute is not noise.
+func (o *output) Warn(format string, args ...any) {
+	_, _ = fmt.Fprintf(o.stderr, format, args...)
+}
+
 // Table writes aligned columns to stdout. Header cells are given as the first
 // row.
 func (o *output) Table(rows [][]string) {
