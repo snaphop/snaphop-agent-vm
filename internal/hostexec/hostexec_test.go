@@ -139,3 +139,39 @@ func TestToolError_StderrExcerptIsBounded(t *testing.T) {
 		t.Error("excerpt dropped the tail, which is where the diagnostic is")
 	}
 }
+
+// A command's environment additions layer over this process's own rather than
+// replacing it: libguestfs still needs PATH, HOME, and TMPDIR to work.
+func TestRun_EnvironmentAddsToTheInheritedOne(t *testing.T) {
+	t.Setenv("AGENT_VM_TEST_INHERITED", "from-the-parent")
+	runner := New(quietLogger())
+
+	res, err := runner.Run(context.Background(), Command{
+		Name:   "env",
+		Effect: Read,
+		Env:    []string{"AGENT_VM_TEST_ADDED=from-the-command"},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	out := string(res.Stdout)
+	for _, want := range []string{"AGENT_VM_TEST_INHERITED=from-the-parent", "AGENT_VM_TEST_ADDED=from-the-command"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("environment does not contain %q", want)
+		}
+	}
+}
+
+func TestCommandString_RendersTheEnvironmentAsAPastableAssignmentPrefix(t *testing.T) {
+	c := Command{
+		Name: "virt-make-fs",
+		Args: []string{"--type=ext4", "/tmp/a b.tar", "/tmp/base.qcow2"},
+		Env:  []string{"SUPERMIN_KERNEL=/opt/k/Image"},
+	}
+
+	want := "SUPERMIN_KERNEL=/opt/k/Image virt-make-fs --type=ext4 '/tmp/a b.tar' /tmp/base.qcow2"
+	if got := c.String(); got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}

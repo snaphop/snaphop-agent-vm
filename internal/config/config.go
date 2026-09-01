@@ -84,6 +84,14 @@ type Config struct {
 	// says nothing about where it is (ADR-0010).
 	StateDirIsDefault bool
 	LibvirtURI        string
+	// ApplianceKernel is a directory on the hypervisor holding a
+	// general-purpose kernel for libguestfs to build its appliance from, named
+	// after that kernel's version and containing an "Image" and a "modules"
+	// tree. It is empty on a host whose own kernel can boot QEMU's virt board,
+	// which is every general-purpose distribution kernel; it is needed on a
+	// host running a hardware-specific one, where the appliance would
+	// otherwise boot to silence (docs/host-setup.md).
+	ApplianceKernel string
 
 	Distro distro.Ref
 	VCPUs  int
@@ -110,6 +118,8 @@ type Overrides struct {
 	ConfigFile string
 	StateDir   string
 	LibvirtURI string
+
+	ApplianceKernel string
 
 	Distro     string
 	VCPUs      string
@@ -208,13 +218,16 @@ func environOverrides(env Environ) Overrides {
 		ConfigFile: env("AGENT_VM_CONFIG"),
 		StateDir:   env("AGENT_VM_STATE_DIR"),
 		LibvirtURI: env("AGENT_VM_LIBVIRT_URI"),
-		Distro:     env("AGENT_VM_DISTRO"),
-		VCPUs:      env("AGENT_VM_VCPUS"),
-		Memory:     env("AGENT_VM_MEMORY"),
-		MaxMemory:  env("AGENT_VM_MAX_MEMORY"),
-		Disk:       env("AGENT_VM_DISK"),
-		Network:    env("AGENT_VM_NETWORK"),
-		Bridge:     env("AGENT_VM_BRIDGE"),
+
+		ApplianceKernel: env("AGENT_VM_APPLIANCE_KERNEL"),
+
+		Distro:    env("AGENT_VM_DISTRO"),
+		VCPUs:     env("AGENT_VM_VCPUS"),
+		Memory:    env("AGENT_VM_MEMORY"),
+		MaxMemory: env("AGENT_VM_MAX_MEMORY"),
+		Disk:      env("AGENT_VM_DISK"),
+		Network:   env("AGENT_VM_NETWORK"),
+		Bridge:    env("AGENT_VM_BRIDGE"),
 	}
 	if key := env("AGENT_VM_SSH_KEY"); key != "" {
 		o.SSHKeys = []string{key}
@@ -235,6 +248,17 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 	}
 	if o.LibvirtURI != "" {
 		cfg.LibvirtURI = o.LibvirtURI
+	}
+	if o.ApplianceKernel != "" {
+		// "~" is expanded against this machine's home even when the directory
+		// lives on a remote hypervisor, for the same reason the state
+		// directory is: nothing here can know the remote account's home, so an
+		// operator naming a remote path writes it out in full.
+		path, err := expandPath(env, o.ApplianceKernel)
+		if err != nil {
+			return err
+		}
+		cfg.ApplianceKernel = path
 	}
 	if o.Distro != "" {
 		ref, err := distro.ParseRef(o.Distro)

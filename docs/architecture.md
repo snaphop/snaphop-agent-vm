@@ -330,7 +330,13 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   commands are wrapped in ssh here rather than at each call site (ADR-0010). That
   wrapping is the one place an argument vector becomes text, because ssh has no
   way to pass one through untouched, so every argument is quoted such that the
-  remote shell interprets nothing.
+  remote shell interprets nothing. It owns one other cross-cutting concern for
+  the same reason: which kernel libguestfs builds its appliance from. `supermin`
+  takes that from the host's own kernel, which a hardware-specific kernel cannot
+  always supply, so where `appliance_kernel` is configured the `SUPERMIN_*`
+  environment naming a general-purpose one is attached to every libguestfs
+  invocation here — a property of the host rather than of any call site, and one
+  the ssh wrapping below it then carries to the far side.
 - **Public interface:** internal only, but its behavior is visible in two public
   ways: `--dry-run` output and the logged argv.
 - **Failure behavior:** a non-zero exit becomes an error carrying the tool name,
@@ -473,7 +479,7 @@ configuration; the only key material referenced is an SSH public key path.
 | `virsh` | 9.0 | Lifecycle, inspection, addresses, NAT network | Lifecycle and query commands fail | Exit `3`; shipped with libvirt |
 | `qemu-img` | 8.0 | Overlay creation, disk facts | `create` fails before defining a domain | Retry after fixing the host; upstream QEMU |
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
-| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause | Exit `3` with the libguestfs diagnostic; upstream |
+| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause, and a host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel` | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | `agent-vm ssh`, `agent-vm update` | Only those subcommands fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |

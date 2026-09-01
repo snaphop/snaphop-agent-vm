@@ -264,7 +264,7 @@ func (a *App) newRunner() error {
 	// A substituted Runner is a test standing in for the whole process
 	// boundary, including the transport, so it is never wrapped.
 	if a.Runner != nil {
-		a.runner = runner
+		a.runner = a.withApplianceKernel(runner)
 		return nil
 	}
 
@@ -278,7 +278,7 @@ func (a *App) newRunner() error {
 		return nil
 	}
 	if !conn.Remote {
-		a.runner = runner
+		a.runner = a.withApplianceKernel(runner)
 		return nil
 	}
 
@@ -292,8 +292,28 @@ func (a *App) newRunner() error {
 	remote.Port = conn.SSHPort
 	remote.IdentityFile = conn.IdentityFile
 	remote.NoVerify = conn.NoVerify
-	a.runner = remote
+	a.runner = a.withApplianceKernel(remote)
 	return nil
+}
+
+// withApplianceKernel adds the configured appliance kernel to libguestfs
+// invocations. It wraps outermost so that the transport underneath renders the
+// environment into the remote command line, and so that --dry-run prints the
+// libguestfs commands exactly as they would run.
+func (a *App) withApplianceKernel(runner hostexec.Runner) hostexec.Runner {
+	return hostexec.NewApplianceKernel(runner, func() string {
+		// Resolved when a libguestfs command is actually built, never here:
+		// the runner exists before flags are parsed, and resolving
+		// configuration this early would cache it without the running
+		// command's own flags applied.
+		cfg, err := a.Config()
+		if err != nil {
+			// An unresolvable configuration is reported as a usage error by
+			// the command itself, before it runs anything.
+			return ""
+		}
+		return cfg.ApplianceKernel
+	})
 }
 
 // become replaces this process with cmd, after releasing what the run holds.

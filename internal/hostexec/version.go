@@ -152,6 +152,22 @@ func libguestfsTool(name string) Tool {
 	}
 }
 
+// LibguestfsTools are the tools that boot a libguestfs appliance to do their
+// work, and so are the ones the appliance kernel environment applies to.
+func LibguestfsTools() []Tool {
+	return []Tool{VirtMakeFS, VirtLs, VirtCopyOut, VirtSysprep}
+}
+
+// IsLibguestfsTool reports whether name is one of them.
+func IsLibguestfsTool(name string) bool {
+	for _, t := range LibguestfsTools() {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // RequiredTools are checked by doctor and resolved once per run. Every one of
 // them is a thing we deliberately do not implement ourselves (ADR-0009).
 func RequiredTools() []Tool {

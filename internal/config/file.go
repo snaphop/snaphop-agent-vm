@@ -14,8 +14,9 @@ import (
 // converted to the string form Overrides carries, so one parser handles a
 // value however it arrived.
 type fileConfig struct {
-	StateDir   string `toml:"state_dir"`
-	LibvirtURI string `toml:"libvirt_uri"`
+	StateDir        string `toml:"state_dir"`
+	LibvirtURI      string `toml:"libvirt_uri"`
+	ApplianceKernel string `toml:"appliance_kernel"`
 
 	Defaults struct {
 		Distro    string `toml:"distro"`
@@ -66,17 +67,18 @@ func loadFile(path string) (Overrides, bool, error) {
 	}
 
 	o := Overrides{
-		StateDir:   file.StateDir,
-		LibvirtURI: file.LibvirtURI,
-		Distro:     file.Defaults.Distro,
-		Memory:     file.Defaults.Memory,
-		MaxMemory:  file.Defaults.MaxMemory,
-		Disk:       file.Defaults.Disk,
-		Network:    file.Defaults.Network,
-		Bridge:     file.Network.Bridge.Interface,
-		NATNetwork: file.Network.NAT.Name,
-		GuestUser:  file.Guest.User,
-		SSHKeys:    file.Guest.SSHKeys,
+		StateDir:        file.StateDir,
+		LibvirtURI:      file.LibvirtURI,
+		ApplianceKernel: file.ApplianceKernel,
+		Distro:          file.Defaults.Distro,
+		Memory:          file.Defaults.Memory,
+		MaxMemory:       file.Defaults.MaxMemory,
+		Disk:            file.Defaults.Disk,
+		Network:         file.Defaults.Network,
+		Bridge:          file.Network.Bridge.Interface,
+		NATNetwork:      file.Network.NAT.Name,
+		GuestUser:       file.Guest.User,
+		SSHKeys:         file.Guest.SSHKeys,
 	}
 	if file.Defaults.VCPUs != 0 {
 		o.VCPUs = strconv.Itoa(file.Defaults.VCPUs)
