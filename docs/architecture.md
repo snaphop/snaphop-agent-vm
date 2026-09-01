@@ -388,7 +388,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
     the same evidence. Then print the result.
 
 Rollback: steps 4–9 are undone in reverse on failure — `virsh destroy`, `virsh
-undefine`, then delete the overlay, user-data, and state directory. Step 10 is the
+undefine`, then delete the overlay, the seed, and the state directory. Step 10 is the
 deliberate exception noted above: a boot-wait timeout preserves the VM and its
 console log rather than destroying the evidence. `undefine` is
 never given `--remove-all-storage`; the tool deletes its own files after the

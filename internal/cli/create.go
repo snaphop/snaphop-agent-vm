@@ -245,9 +245,9 @@ func jumpArgs(jump string) string {
 // must not be handed a running one.
 func errNoStart(name string) error {
 	return exitf(ExitUsage,
-		"--no-start cannot be honored: virt-install always boots a guest that has cloud-init data,\n"+
-			"  and the seed is attached only to that first boot. A VM stopped before cloud-init finished\n"+
-			"  would never receive its SSH key.\n"+
+		"--no-start cannot be honored: virt-install always boots the guest it defines,\n"+
+			"  and a VM stopped before cloud-init finished would never receive its SSH key,\n"+
+			"  so it could not be reached afterwards.\n"+
 			"  Create the VM and stop it: agent-vm create %s && agent-vm stop %s", name, name)
 }
 
