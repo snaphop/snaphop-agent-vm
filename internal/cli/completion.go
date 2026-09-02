@@ -40,7 +40,7 @@ func runCompletion(_ context.Context, app *App, args []string) error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return flags.usagef("usage: %s", flags.usage)
+		return flags.usagef("missing argument")
 	}
 
 	script, ok := completionScripts[flags.Arg(0)]

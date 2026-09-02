@@ -29,23 +29,25 @@ const (
 type ExitError struct {
 	Code int
 	Err  error
-	// Help is the command whose --help answers this error, "agent-vm image
-	// build" rather than "agent-vm". It is set for a usage error raised by a
-	// subcommand, so the operator is sent to the flags that command has.
-	Help string
+	// Usage is the rendered usage listing of the command that raised this
+	// error — its documented invocation and its own flags — printed with the
+	// error so a rejected flag is answered by the flags the command does take.
+	// It is empty for a usage error raised outside a subcommand's flag
+	// parsing, which is answered by a pointer to `agent-vm --help` instead.
+	Usage string
 }
 
 func (e *ExitError) Error() string { return e.Err.Error() }
 func (e *ExitError) Unwrap() error { return e.Err }
 
-// helpCommandFor names the command whose --help explains this error. It is the
-// tool itself unless a subcommand said otherwise.
-func helpCommandFor(err error) string {
+// usageTextFor returns the usage listing an error carries, or "" when it
+// carries none.
+func usageTextFor(err error) string {
 	var exit *ExitError
-	if errors.As(err, &exit) && exit.Help != "" {
-		return exit.Help
+	if errors.As(err, &exit) {
+		return exit.Usage
 	}
-	return "agent-vm"
+	return ""
 }
 
 // exitf builds an ExitError with a formatted message.

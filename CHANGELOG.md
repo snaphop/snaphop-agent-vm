@@ -171,6 +171,14 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- **A rejected flag no longer takes the command's flag listing with it.**
+  Reporting a bad flag in the tool's own spelling also stopped printing the
+  usage listing that came with it, so `agent-vm create --test` answered with one
+  line and a pointer to `--help`. The error is now followed by that command's
+  invocation and every flag it takes, with each flag's default where it has one
+  — the detail the flag package's listing used to carry, spelled the way this
+  tool accepts. A wrong or missing argument prints the same listing.
+
 - **A rejected flag was reported in a spelling `agent-vm` does not accept.**
   `agent-vm image build --test` answered `flag provided but not defined:
   -test` — one dash, and printed twice, once by Go's flag package and once by
@@ -178,8 +186,7 @@ migration or rebuild step a user has to take.
   flag with one dash as well. None of those are flags this tool takes, so the
   message quietly disagreed with `docs/cli.md`, `--help`, and the shell
   completions. A bad flag is now reported once, named the way it was typed and
-  the way it is documented (`--test`), and the operator is pointed at that
-  command's own help rather than the global one.
+  the way it is documented (`--test`).
 
 - **`agent-vm <command> --help` failed instead of helping.** It printed the
   flag package's usage dump and then exited `2` with `flag: help requested`.

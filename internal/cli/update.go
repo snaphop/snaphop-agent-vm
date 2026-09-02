@@ -61,9 +61,9 @@ func runUpdate(ctx context.Context, app *App, args []string) error {
 
 	switch {
 	case *all && len(names) > 0:
-		return flags.usagef("usage: %s: --all takes no VM names", usage)
+		return flags.usagef("--all takes no VM names")
 	case !*all && len(names) == 0:
-		return flags.usagef("usage: %s", usage)
+		return flags.usagef("name a VM to update, or pass --all")
 	}
 
 	targets, err := app.updateTargets(names, *all)

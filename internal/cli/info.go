@@ -40,7 +40,7 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return flags.usagef("usage: %s", flags.usage)
+		return flags.usagef("missing argument")
 	}
 
 	store, err := app.Store()
