@@ -34,8 +34,11 @@ Human-readable progress and logs go to **stderr**. Command results go to
 
 Every flag is spelled with two dashes, and that is the spelling `agent-vm` uses
 when it rejects one: an unknown or malformed flag is reported once, on stderr,
-naming the flag as `--flag` and the command whose `--help` lists the flags that
-would have worked.
+naming the flag as `--flag` and followed by that command's own usage listing —
+its documented invocation and every flag it takes, with defaults — so the flags
+that would have worked are on screen already. A missing or unexpected argument
+is answered the same way. A value the command cannot use — an invalid VM name,
+an unparsable size — is reported on its own and points at `agent-vm --help`.
 
 ## Remote Hypervisors
 

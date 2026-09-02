@@ -166,7 +166,7 @@ func (f *flagSet) parseNamed(args []string) (string, error) {
 		return "", f.fail(err)
 	}
 	if f.NArg() == 0 {
-		return "", f.usagef("usage: %s", f.usage)
+		return "", f.usagef("missing argument")
 	}
 	name := f.Arg(0)
 
@@ -175,7 +175,7 @@ func (f *flagSet) parseNamed(args []string) (string, error) {
 			return "", f.fail(err)
 		}
 		if f.NArg() != 0 {
-			return "", f.usagef("usage: %s: unexpected argument %q", f.usage, f.Arg(0))
+			return "", f.usagef("unexpected argument %q", f.Arg(0))
 		}
 	}
 	return name, nil
@@ -200,28 +200,35 @@ func (f *flagSet) parseNames(args []string) ([]string, error) {
 
 // fail turns a parse failure into what the operator sees: the usage listing
 // when help was asked for, and otherwise a usage error spelled the way this
-// tool accepts flags, pointing at this command's help rather than the global
-// one.
+// tool accepts flags, carrying that same listing so the operator is told which
+// flags the command does take rather than only which one it does not.
 func (f *flagSet) fail(err error) error {
 	if errors.Is(err, flag.ErrHelp) {
 		f.printUsage()
 		return errUsagePrinted
 	}
-	return &ExitError{Code: ExitUsage, Err: respellFlags(err), Help: f.helpCommand()}
+	return &ExitError{Code: ExitUsage, Err: respellFlags(err), Usage: f.usageText()}
 }
 
 // usagef builds a usage error for a wrong argument rather than a wrong flag,
-// pointing at the same help.
+// carrying the same listing.
 func (f *flagSet) usagef(format string, args ...any) error {
-	return &ExitError{Code: ExitUsage, Err: fmt.Errorf(format, args...), Help: f.helpCommand()}
+	return &ExitError{Code: ExitUsage, Err: fmt.Errorf(format, args...), Usage: f.usageText()}
 }
 
-func (f *flagSet) helpCommand() string { return "agent-vm " + f.Name() }
-
-// printUsage prints the command's documented invocation and its own flags,
-// spelled with the two dashes the tool accepts.
+// printUsage prints the command's documented invocation and its own flags.
 func (f *flagSet) printUsage() {
-	_, _ = fmt.Fprintf(f.out, "Usage:\n  %s\n", f.usage)
+	_, _ = fmt.Fprint(f.out, f.usageText())
+}
+
+// usageText renders the command's documented invocation and its own flags,
+// spelled with the two dashes the tool accepts, and with each flag's default
+// where it has one. It is what both --help and a usage error print: an
+// operator who mistyped a flag needs the list of flags that would have worked
+// just as much as one who asked for it.
+func (f *flagSet) usageText() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage:\n  %s\n", f.usage)
 
 	// VisitAll yields a flag set's flags in lexical order, which is the order
 	// a listing wants.
@@ -233,10 +240,13 @@ func (f *flagSet) printUsage() {
 			spelled += " <" + valueName + ">"
 		}
 		names = append(names, spelled)
+		if def := defaultText(fl); def != "" {
+			usage += " (default " + def + ")"
+		}
 		help = append(help, usage)
 	})
 	if len(names) == 0 {
-		return
+		return b.String()
 	}
 
 	width := 0
@@ -245,10 +255,22 @@ func (f *flagSet) printUsage() {
 			width = len(name)
 		}
 	}
-	_, _ = fmt.Fprint(f.out, "\nFlags:\n")
+	b.WriteString("\nFlags:\n")
 	for i, name := range names {
-		_, _ = fmt.Fprintf(f.out, "  %-*s  %s\n", width, name, help[i])
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, name, help[i])
 	}
+	return b.String()
+}
+
+// defaultText is a flag's default as a listing should show it, or "" for a
+// flag with nothing worth showing: a zero value, or one this tool resolves
+// from configuration rather than from the flag itself.
+func defaultText(fl *flag.Flag) string {
+	switch fl.DefValue {
+	case "", "false", "0s":
+		return ""
+	}
+	return fl.DefValue
 }
 
 // goFlagSpelling matches how the flag package writes a flag name in its own
@@ -291,7 +313,14 @@ func (a *App) Main(ctx context.Context, args []string) int {
 	code := exitCodeFor(err)
 	_, _ = fmt.Fprintf(a.Stderr, "agent-vm: %v\n", err)
 	if code == ExitUsage {
-		_, _ = fmt.Fprintf(a.Stderr, "Run `%s --help` for usage.\n", helpCommandFor(err))
+		// A subcommand's usage error carries that command's flags; printing
+		// them answers the question "then what may I pass?" on the spot. Only
+		// an error without them sends the operator off to --help.
+		if usage := usageTextFor(err); usage != "" {
+			_, _ = fmt.Fprint(a.Stderr, "\n", usage)
+		} else {
+			_, _ = fmt.Fprint(a.Stderr, "Run `agent-vm --help` for usage.\n")
+		}
 	}
 	return code
 }

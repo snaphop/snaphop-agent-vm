@@ -245,10 +245,49 @@ func TestRun_UnknownFlagIsReportedOnceWithTwoDashes(t *testing.T) {
 	if got := strings.Count(stderr, "not defined"); got != 1 {
 		t.Errorf("the message appears %d times, want 1:\n%s", got, stderr)
 	}
-	// The flags that would have worked belong to that command, so its own help
-	// is what the operator is sent to.
-	if !strings.Contains(stderr, "Run `agent-vm image build --help` for usage.") {
-		t.Errorf("stderr does not point at the command's help:\n%s", stderr)
+	// The flags that would have worked belong to that command, so they are
+	// listed with the error rather than left behind a second invocation.
+	for _, want := range []string{
+		"agent-vm image build <distro>[:<tag>] [flags]",
+		"--force",
+		"--platform <string>",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not list the command's flags (%q missing):\n%s", want, stderr)
+		}
+	}
+}
+
+// A wrong argument gets the same listing: the operator is told what the
+// command takes, not only that what they typed was wrong.
+func TestRun_UsageErrorListsTheCommandsFlags(t *testing.T) {
+	code, _, stderr := run(t, "destroy")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	for _, want := range []string{
+		"agent-vm destroy <name>",
+		"--keep-disk",
+		"--timeout <duration>",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not list the command's flags (%q missing):\n%s", want, stderr)
+		}
+	}
+}
+
+// A flag with a real default says so, the way the flag package's own listing
+// did; one whose value this tool resolves from configuration does not, because
+// its flag default is the empty string and "(default )" says nothing.
+func TestCommandHelp_ShowsDefaultsOnlyWhereThereIsOne(t *testing.T) {
+	_, _, stderr := run(t, "stop", "--help")
+
+	if !strings.Contains(stderr, "(default 1m0s)") {
+		t.Errorf("--timeout does not show its default:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "(default )") {
+		t.Errorf("a flag with no default still claims one:\n%s", stderr)
 	}
 }
 

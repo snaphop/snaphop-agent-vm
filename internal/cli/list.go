@@ -37,7 +37,7 @@ func runList(ctx context.Context, app *App, args []string) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return flags.usagef("usage: %s: unexpected argument %q", flags.usage, flags.Arg(0))
+		return flags.usagef("unexpected argument %q", flags.Arg(0))
 	}
 
 	store, err := app.Store()
