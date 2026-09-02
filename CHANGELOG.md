@@ -171,6 +171,22 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- **A rejected flag was reported in a spelling `agent-vm` does not accept.**
+  `agent-vm image build --test` answered `flag provided but not defined:
+  -test` — one dash, and printed twice, once by Go's flag package and once by
+  `agent-vm` — followed by a `Usage of image build:` listing that spelled every
+  flag with one dash as well. None of those are flags this tool takes, so the
+  message quietly disagreed with `docs/cli.md`, `--help`, and the shell
+  completions. A bad flag is now reported once, named the way it was typed and
+  the way it is documented (`--test`), and the operator is pointed at that
+  command's own help rather than the global one.
+
+- **`agent-vm <command> --help` failed instead of helping.** It printed the
+  flag package's usage dump and then exited `2` with `flag: help requested`.
+  Asking for help now prints the command's documented invocation and its own
+  flags, with two dashes, and exits `0` — the way the global `--help` already
+  did.
+
 - **`agent-vm create` ignored its own flags.** `--vcpus`, `--memory`, `--disk`,
   `--max-memory`, `--distro`, `--network`, `--bridge`, and `--ssh-key` were all
   silently dropped, and every VM was created with the configured defaults

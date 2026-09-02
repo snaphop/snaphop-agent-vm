@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"sort"
 	"strings"
 
@@ -36,18 +35,17 @@ func completeCommand() *command {
 }
 
 func runCompletion(_ context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("completion", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("completion", "agent-vm completion <bash|zsh|fish>", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 	if flags.NArg() != 1 {
-		return exitf(ExitUsage, "usage: agent-vm completion <bash|zsh|fish>")
+		return flags.usagef("usage: %s", flags.usage)
 	}
 
 	script, ok := completionScripts[flags.Arg(0)]
 	if !ok {
-		return exitf(ExitUsage, "unsupported shell %q: expected one of %s", flags.Arg(0), completionScriptNames())
+		return flags.usagef("unsupported shell %q: expected one of %s", flags.Arg(0), completionScriptNames())
 	}
 	app.out.Printf("%s", script)
 	return nil

@@ -29,10 +29,24 @@ const (
 type ExitError struct {
 	Code int
 	Err  error
+	// Help is the command whose --help answers this error, "agent-vm image
+	// build" rather than "agent-vm". It is set for a usage error raised by a
+	// subcommand, so the operator is sent to the flags that command has.
+	Help string
 }
 
 func (e *ExitError) Error() string { return e.Err.Error() }
 func (e *ExitError) Unwrap() error { return e.Err }
+
+// helpCommandFor names the command whose --help explains this error. It is the
+// tool itself unless a subcommand said otherwise.
+func helpCommandFor(err error) string {
+	var exit *ExitError
+	if errors.As(err, &exit) && exit.Help != "" {
+		return exit.Help
+	}
+	return "agent-vm"
+}
 
 // exitf builds an ExitError with a formatted message.
 func exitf(code int, format string, args ...any) error {

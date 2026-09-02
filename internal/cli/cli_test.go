@@ -225,3 +225,112 @@ func TestConfigWith_ResolvesAgainAfterConfigHasAlreadyCachedOne(t *testing.T) {
 		t.Errorf("Config() after ConfigWith gave VCPUs = %d, want 8", again.VCPUs)
 	}
 }
+
+// A rejected flag must be named the way docs/cli.md spells it and the operator
+// typed it. Go's flag package writes "-test", and writes it itself as well as
+// through the error returned to us, so an unknown flag used to be reported
+// twice in a spelling this tool does not accept.
+func TestRun_UnknownFlagIsReportedOnceWithTwoDashes(t *testing.T) {
+	code, _, stderr := run(t, "image", "build", "--test")
+
+	if code != ExitUsage {
+		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(stderr, "not defined: --test") {
+		t.Errorf("stderr does not spell the flag as --test:\n%s", stderr)
+	}
+	if strings.Contains(stderr, " -test") {
+		t.Errorf("stderr still spells the flag with one dash:\n%s", stderr)
+	}
+	if got := strings.Count(stderr, "not defined"); got != 1 {
+		t.Errorf("the message appears %d times, want 1:\n%s", got, stderr)
+	}
+	// The flags that would have worked belong to that command, so its own help
+	// is what the operator is sent to.
+	if !strings.Contains(stderr, "Run `agent-vm image build --help` for usage.") {
+		t.Errorf("stderr does not point at the command's help:\n%s", stderr)
+	}
+}
+
+// The same respelling applies to the flag package's other complaints.
+func TestRun_FlagValueErrorsAreSpelledWithTwoDashes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"a missing value", []string{"stop", "agent-01", "--timeout"}, "flag needs an argument: --timeout"},
+		{"an unparsable value", []string{"stop", "agent-01", "--timeout=soon"}, `invalid value "soon" for flag --timeout`},
+		{"a global flag", []string{"--output"}, "flag needs an argument: --output"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := run(t, tc.args...)
+
+			if code != ExitUsage {
+				t.Errorf("exit code = %d, want %d", code, ExitUsage)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("stderr does not carry %q:\n%s", tc.want, stderr)
+			}
+		})
+	}
+}
+
+// A quoted value keeps whatever dashes it was given: only the flag's own name
+// is respelled.
+func TestRespellFlags_LeavesAValueAlone(t *testing.T) {
+	got := respellFlags(errors.New(`invalid value "-1s" for flag -timeout: parse error`))
+
+	if want := `invalid value "-1s" for flag --timeout: parse error`; got.Error() != want {
+		t.Errorf("respellFlags = %q, want %q", got.Error(), want)
+	}
+}
+
+// --help is an answer, not a failure: it prints the command's documented
+// invocation and its own flags, and exits 0.
+func TestRun_CommandHelpPrintsThatCommandsFlagsAndExitsZero(t *testing.T) {
+	code, _, stderr := run(t, "image", "build", "--help")
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want %d:\n%s", code, ExitOK, stderr)
+	}
+	for _, want := range []string{
+		"agent-vm image build <distro>[:<tag>] [flags]",
+		"--force",
+		"--platform <string>",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("help does not carry %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "Usage of image build") {
+		t.Errorf("help still uses the flag package's own heading:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "agent-vm: ") {
+		t.Errorf("asking for help was reported as an error:\n%s", stderr)
+	}
+}
+
+// Help works after the positional argument too, the way the flags themselves
+// do (parseNamed).
+func TestRun_CommandHelpWorksAfterTheName(t *testing.T) {
+	code, _, stderr := run(t, "create", "agent-01", "--help")
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want %d:\n%s", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stderr, "agent-vm create <name> [flags]") {
+		t.Errorf("help does not show the command's usage:\n%s", stderr)
+	}
+}
+
+func TestRun_GlobalHelpPrintsUsageAndExitsZero(t *testing.T) {
+	code, _, stderr := run(t, "--help")
+
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want %d:\n%s", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stderr, "Commands:") || !strings.Contains(stderr, "--dry-run") {
+		t.Errorf("stderr is not the usage message:\n%s", stderr)
+	}
+}

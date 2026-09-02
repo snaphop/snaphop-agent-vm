@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"time"
 
@@ -21,13 +20,12 @@ func destroyCommand() *command {
 }
 
 func runDestroy(ctx context.Context, app *App, args []string) (err error) {
-	flags := flag.NewFlagSet("destroy", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("destroy", "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]", app.Stderr)
 	keepDisk := flags.Bool("keep-disk", false, "keep the overlay and state directory; only remove the libvirt domain")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "also remove this VM's SSH key from your GitHub account, using gh")
-	name, err := parseNamed(flags, args, "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}

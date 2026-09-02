@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -109,6 +110,47 @@ func commands() map[string]*command {
 	return byName
 }
 
+// errUsagePrinted reports that the operator asked a command for its usage and
+// got it. Nothing failed, so it exits 0; it is an error only so that a command
+// can stop parsing and return.
+var errUsagePrinted = errors.New("usage printed")
+
+// flagSet is one subcommand's flags.
+//
+// Go's flag package spells a flag with a single dash, prints its own message
+// when parsing fails, and then prints "Usage of <name>:". docs/cli.md, the
+// help text, and every example spell flags with two dashes, and App.Main is
+// what reports an error to the operator. So the flag package is kept silent
+// here and this package renders both the message and the usage listing
+// itself — otherwise `agent-vm image build --test` answers with "flag
+// provided but not defined: -test", twice, in a spelling the tool does not
+// accept.
+type flagSet struct {
+	*flag.FlagSet
+	// usage is the documented invocation this command answers to — the same
+	// string its command.usage field carries.
+	usage string
+	out   io.Writer
+}
+
+// newFlagSet builds the flag set for one subcommand. name is the command as an
+// operator types it ("image build"), so that a usage error can point at that
+// command's own --help rather than the global one.
+func newFlagSet(name, usage string, out io.Writer) *flagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
+	return &flagSet{FlagSet: flags, usage: usage, out: out}
+}
+
+// parse parses a command that takes flags and no positional arguments.
+func (f *flagSet) parse(args []string) error {
+	if err := f.Parse(args); err != nil {
+		return f.fail(err)
+	}
+	return nil
+}
+
 // parseNamed parses a command that takes exactly one name plus flags — a VM
 // name for most commands, a distro reference for the image ones. Go's flag
 // package stops at the first non-flag argument, so flags written after the
@@ -119,21 +161,21 @@ func commands() map[string]*command {
 // Parsing directly leaves `agent-vm <verb> <name> --flag` failing with "flag
 // provided but not defined", which is the documented spelling and the one
 // operators reach for.
-func parseNamed(flags *flag.FlagSet, args []string, usage string) (string, error) {
-	if err := flags.Parse(args); err != nil {
-		return "", &ExitError{Code: ExitUsage, Err: err}
+func (f *flagSet) parseNamed(args []string) (string, error) {
+	if err := f.Parse(args); err != nil {
+		return "", f.fail(err)
 	}
-	if flags.NArg() == 0 {
-		return "", exitf(ExitUsage, "usage: %s", usage)
+	if f.NArg() == 0 {
+		return "", f.usagef("usage: %s", f.usage)
 	}
-	name := flags.Arg(0)
+	name := f.Arg(0)
 
-	if flags.NArg() > 1 {
-		if err := flags.Parse(flags.Args()[1:]); err != nil {
-			return "", &ExitError{Code: ExitUsage, Err: err}
+	if f.NArg() > 1 {
+		if err := f.Parse(f.Args()[1:]); err != nil {
+			return "", f.fail(err)
 		}
-		if flags.NArg() != 0 {
-			return "", exitf(ExitUsage, "usage: %s: unexpected argument %q", usage, flags.Arg(0))
+		if f.NArg() != 0 {
+			return "", f.usagef("usage: %s: unexpected argument %q", f.usage, f.Arg(0))
 		}
 	}
 	return name, nil
@@ -141,19 +183,90 @@ func parseNamed(flags *flag.FlagSet, args []string, usage string) (string, error
 
 // parseNames parses a command that takes any number of names plus flags,
 // with the same tolerance for flags written after a name that parseNamed has.
-func parseNames(flags *flag.FlagSet, args []string, usage string) ([]string, error) {
-	if err := flags.Parse(args); err != nil {
-		return nil, &ExitError{Code: ExitUsage, Err: err}
+func (f *flagSet) parseNames(args []string) ([]string, error) {
+	if err := f.Parse(args); err != nil {
+		return nil, f.fail(err)
 	}
 
 	names := []string{}
-	for flags.NArg() > 0 {
-		names = append(names, flags.Arg(0))
-		if err := flags.Parse(flags.Args()[1:]); err != nil {
-			return nil, &ExitError{Code: ExitUsage, Err: err}
+	for f.NArg() > 0 {
+		names = append(names, f.Arg(0))
+		if err := f.Parse(f.Args()[1:]); err != nil {
+			return nil, f.fail(err)
 		}
 	}
 	return names, nil
+}
+
+// fail turns a parse failure into what the operator sees: the usage listing
+// when help was asked for, and otherwise a usage error spelled the way this
+// tool accepts flags, pointing at this command's help rather than the global
+// one.
+func (f *flagSet) fail(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		f.printUsage()
+		return errUsagePrinted
+	}
+	return &ExitError{Code: ExitUsage, Err: respellFlags(err), Help: f.helpCommand()}
+}
+
+// usagef builds a usage error for a wrong argument rather than a wrong flag,
+// pointing at the same help.
+func (f *flagSet) usagef(format string, args ...any) error {
+	return &ExitError{Code: ExitUsage, Err: fmt.Errorf(format, args...), Help: f.helpCommand()}
+}
+
+func (f *flagSet) helpCommand() string { return "agent-vm " + f.Name() }
+
+// printUsage prints the command's documented invocation and its own flags,
+// spelled with the two dashes the tool accepts.
+func (f *flagSet) printUsage() {
+	_, _ = fmt.Fprintf(f.out, "Usage:\n  %s\n", f.usage)
+
+	// VisitAll yields a flag set's flags in lexical order, which is the order
+	// a listing wants.
+	var names, help []string
+	f.VisitAll(func(fl *flag.Flag) {
+		valueName, usage := flag.UnquoteUsage(fl)
+		spelled := "--" + fl.Name
+		if valueName != "" {
+			spelled += " <" + valueName + ">"
+		}
+		names = append(names, spelled)
+		help = append(help, usage)
+	})
+	if len(names) == 0 {
+		return
+	}
+
+	width := 0
+	for _, name := range names {
+		if len(name) > width {
+			width = len(name)
+		}
+	}
+	_, _ = fmt.Fprint(f.out, "\nFlags:\n")
+	for i, name := range names {
+		_, _ = fmt.Fprintf(f.out, "  %-*s  %s\n", width, name, help[i])
+	}
+}
+
+// goFlagSpelling matches how the flag package writes a flag name in its own
+// error messages — "…: -name", "… for -name", "… for flag -name" — which is
+// the one spelling docs/cli.md never uses. The value in an "invalid value"
+// message is quoted, so a leading dash inside it is not matched.
+var goFlagSpelling = regexp.MustCompile(`(: |for (?:flag )?)-(\w)`)
+
+// respellFlags rewrites the flag package's single-dash flag names as the
+// double-dash ones this tool documents and accepts, so an operator is not told
+// about a flag in a spelling they did not type and cannot use.
+func respellFlags(err error) error {
+	msg := err.Error()
+	respelled := goFlagSpelling.ReplaceAllString(msg, "${1}--${2}")
+	if respelled == msg {
+		return err
+	}
+	return errors.New(respelled)
 }
 
 // Run parses global flags, dispatches to a subcommand, and returns the process
@@ -170,22 +283,25 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 func (a *App) Main(ctx context.Context, args []string) int {
 	defer a.finish()
 	err := a.run(ctx, args)
-	if err == nil {
+	// A command asked for its usage and printed it. Nothing failed.
+	if err == nil || errors.Is(err, errUsagePrinted) {
 		return ExitOK
 	}
 
 	code := exitCodeFor(err)
 	_, _ = fmt.Fprintf(a.Stderr, "agent-vm: %v\n", err)
 	if code == ExitUsage {
-		_, _ = fmt.Fprintf(a.Stderr, "Run `agent-vm --help` for usage.\n")
+		_, _ = fmt.Fprintf(a.Stderr, "Run `%s --help` for usage.\n", helpCommandFor(err))
 	}
 	return code
 }
 
 func (a *App) run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("agent-vm", flag.ContinueOnError)
-	flags.SetOutput(a.Stderr)
-	flags.Usage = func() { a.printUsage() }
+	// The flag package prints nothing for itself: a bad global flag is
+	// reported once, by Main, and --help prints the usage below.
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
 
 	flags.StringVar(&a.configFile, "config", "", "configuration file (default ~/.config/agent-vm/config.toml)")
 	flags.StringVar(&a.stateDir, "state-dir", "", "root of all VM and image state (default ~/.local/share/agent-vm)")
@@ -199,9 +315,10 @@ func (a *App) run(ctx context.Context, args []string) error {
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			a.printUsage()
 			return nil
 		}
-		return &ExitError{Code: ExitUsage, Err: err}
+		return &ExitError{Code: ExitUsage, Err: respellFlags(err)}
 	}
 
 	format := OutputFormat(a.format)
@@ -568,6 +685,7 @@ Global flags:
   --yes                  skip confirmation for destructive operations
   --dry-run              print the tool invocations this would run, without running them
   --version              print agent-vm and host tool versions
+  --help                 print this message; after a command, that command's flags
 
 The full command-line contract is documented in docs/cli.md.
 `)

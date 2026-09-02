@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"os"
 	"strings"
 
@@ -33,9 +32,8 @@ func runSSH(ctx context.Context, app *App, args []string) error {
 	// flags of ours: `agent-vm ssh web -- ls -la` runs `ls -la` in the guest.
 	args, remote := splitRemoteCommand(args)
 
-	flags := flag.NewFlagSet("ssh", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	name, err := parseNamed(flags, args, "agent-vm ssh <name> [-- <command>...]")
+	flags := newFlagSet("ssh", "agent-vm ssh <name> [-- <command>...]", app.Stderr)
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}
@@ -66,9 +64,8 @@ func runSSH(ctx context.Context, app *App, args []string) error {
 }
 
 func runConsole(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("console", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	name, err := parseNamed(flags, args, "agent-vm console <name>")
+	flags := newFlagSet("console", "agent-vm console <name>", app.Stderr)
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}

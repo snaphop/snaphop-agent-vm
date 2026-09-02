@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"time"
 
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
@@ -58,9 +57,8 @@ func (a *App) vmTarget(name string) (*state.VM, *domain.Manager, error) {
 }
 
 func runStart(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("start", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	name, err := parseNamed(flags, args, "agent-vm start <name>")
+	flags := newFlagSet("start", "agent-vm start <name>", app.Stderr)
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}
@@ -76,11 +74,10 @@ func runStart(ctx context.Context, app *App, args []string) error {
 }
 
 func runStop(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("stop", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("stop", "agent-vm stop <name> [--timeout <duration>] [--force]", app.Stderr)
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
-	name, err := parseNamed(flags, args, "agent-vm stop <name> [--timeout <duration>] [--force]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}
@@ -96,11 +93,10 @@ func runStop(ctx context.Context, app *App, args []string) error {
 }
 
 func runRestart(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("restart", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("restart", "agent-vm restart <name> [--timeout <duration>] [--force]", app.Stderr)
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
-	name, err := parseNamed(flags, args, "agent-vm restart <name> [--timeout <duration>] [--force]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}

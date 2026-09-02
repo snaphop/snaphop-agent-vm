@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os/user"
 	"path/filepath"
@@ -59,13 +58,12 @@ func doctorCommand() *command {
 // Because this tool delegates almost everything to host tools, this check is
 // load-bearing rather than a nicety.
 func runDoctor(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("doctor", "agent-vm doctor [--output json]", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 	if flags.NArg() > 0 {
-		return exitf(ExitUsage, "doctor takes no arguments, got %q", flags.Arg(0))
+		return flags.usagef("doctor takes no arguments, got %q", flags.Arg(0))
 	}
 
 	cfg, err := app.Config()

@@ -183,8 +183,9 @@ func TestCompletion_DocumentsTheHiddenHelper(t *testing.T) {
 	}
 }
 
-// helpFlagPattern matches the flag names in a flag package usage dump.
-var helpFlagPattern = regexp.MustCompile(`(?m)^\s+-([a-z][a-z0-9-]*)`)
+// helpFlagPattern matches the flag names in a command's usage listing, which
+// spells them the way the tool accepts them: with two dashes.
+var helpFlagPattern = regexp.MustCompile(`(?m)^\s+--([a-z][a-z0-9-]*)`)
 
 // TestCompletionSpecs_MatchTheFlagsCommandsRegister is the guard that keeps the
 // completion table honest: it asks each command for its own help and compares

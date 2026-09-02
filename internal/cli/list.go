@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"sort"
 
@@ -33,13 +32,12 @@ type vmStatus struct {
 }
 
 func runList(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("list", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("list", "agent-vm list", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 	if flags.NArg() != 0 {
-		return exitf(ExitUsage, "usage: agent-vm list")
+		return flags.usagef("usage: %s: unexpected argument %q", flags.usage, flags.Arg(0))
 	}
 
 	store, err := app.Store()
