@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"flag"
 	"fmt"
 	"sort"
 	"strings"
@@ -74,12 +73,11 @@ func (a *App) buildProgress() image.Progress {
 }
 
 func runImageBuild(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("image build", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("image build", "agent-vm image build <distro>[:<tag>] [flags]", app.Stderr)
 	from := flags.String("from", "", "override the source OCI reference")
 	platform := flags.String("platform", "", "image platform to pull (default: the host platform)")
 	force := flags.Bool("force", false, "rebuild even if a cached image already exists")
-	name, err := parseNamed(flags, args, "agent-vm image build <distro>[:<tag>] [flags]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}
@@ -153,10 +151,9 @@ func sourceOf(ref distro.Ref, from string) string {
 }
 
 func runImageList(_ context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("image list", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("image list", "agent-vm image list", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 
 	store, err := app.Store()
@@ -209,13 +206,12 @@ func shortDigest(digest string) string {
 }
 
 func runImageInspect(_ context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("image inspect", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("image inspect", "agent-vm image inspect <distro>[:<tag>]", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 	if flags.NArg() != 1 {
-		return exitf(ExitUsage, "usage: agent-vm image inspect <distro>[:<tag>]")
+		return flags.usagef("usage: %s", flags.usage)
 	}
 
 	ref, err := distro.ParseRef(flags.Arg(0))
@@ -266,10 +262,9 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 func runImageRemove(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("image rm", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("image rm", "agent-vm image rm <distro>[:<tag>] [--force]", app.Stderr)
 	force := flags.Bool("force", false, "remove even while VMs still use it as a backing file; their disks become unreadable")
-	name, err := parseNamed(flags, args, "agent-vm image rm <distro>[:<tag>] [--force]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}

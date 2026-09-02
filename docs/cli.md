@@ -26,10 +26,16 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 | `--quiet` | off | Suppress progress output; errors and warnings still go to stderr. |
 | `--yes` | off | Skip interactive confirmation for destructive operations. |
 | `--dry-run` | off | Print the exact tool invocations the operation would run, and exit 0 without changing anything. |
+| `--help` | — | Print usage and exit `0`. After a command — `agent-vm create --help` — print that command's invocation and its own flags instead. |
 | `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. |
 
 Human-readable progress and logs go to **stderr**. Command results go to
 **stdout**, so `--output json` can be piped safely.
+
+Every flag is spelled with two dashes, and that is the spelling `agent-vm` uses
+when it rejects one: an unknown or malformed flag is reported once, on stderr,
+naming the flag as `--flag` and the command whose `--help` lists the flags that
+would have worked.
 
 ## Remote Hypervisors
 

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"sort"
@@ -52,20 +51,19 @@ type updateResult struct {
 func runUpdate(ctx context.Context, app *App, args []string) error {
 	const usage = "agent-vm update <name>... | --all [--timeout <duration>]"
 
-	flags := flag.NewFlagSet("update", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("update", usage, app.Stderr)
 	all := flags.Bool("all", false, "update every running VM in this state directory")
 	timeout := flags.Duration("timeout", defaultUpdateTimeout, "how long one VM's update may take")
-	names, err := parseNames(flags, args, usage)
+	names, err := flags.parseNames(args)
 	if err != nil {
 		return err
 	}
 
 	switch {
 	case *all && len(names) > 0:
-		return exitf(ExitUsage, "usage: %s: --all takes no VM names", usage)
+		return flags.usagef("usage: %s: --all takes no VM names", usage)
 	case !*all && len(names) == 0:
-		return exitf(ExitUsage, "usage: %s", usage)
+		return flags.usagef("usage: %s", usage)
 	}
 
 	targets, err := app.updateTargets(names, *all)

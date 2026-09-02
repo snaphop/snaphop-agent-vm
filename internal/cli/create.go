@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,8 +50,7 @@ func (r *repeatedFlag) Set(value string) error {
 }
 
 func runCreate(ctx context.Context, app *App, args []string) (err error) {
-	flags := flag.NewFlagSet("create", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
+	flags := newFlagSet("create", "agent-vm create <name> [flags]", app.Stderr)
 	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; built automatically if not cached")
 	vcpus := flags.String("vcpus", "", "virtual CPUs")
 	memory := flags.String("memory", "", "guest RAM, for example 512M or 4G")
@@ -67,11 +65,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
 	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
-	flags.Var(&sshKeys, "ssh-key", "SSH public key to authorize; repeatable (default: this account's ~/.ssh identities)")
+	flags.Var(&sshKeys, "ssh-key", "SSH public `key` to authorize; repeatable (default: this account's ~/.ssh identities)")
 	var virtInstallArgs repeatedFlag
-	flags.Var(&virtInstallArgs, "virt-install-arg", "extra argument passed through to virt-install; repeatable")
+	flags.Var(&virtInstallArgs, "virt-install-arg", "extra `argument` passed through to virt-install; repeatable")
 
-	name, err := parseNamed(flags, args, "agent-vm create <name> [flags]")
+	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
 	}

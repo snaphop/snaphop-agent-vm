@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"strings"
 
@@ -36,13 +35,12 @@ type diskDetail struct {
 }
 
 func runInfo(ctx context.Context, app *App, args []string) error {
-	flags := flag.NewFlagSet("info", flag.ContinueOnError)
-	flags.SetOutput(app.Stderr)
-	if err := flags.Parse(args); err != nil {
-		return &ExitError{Code: ExitUsage, Err: err}
+	flags := newFlagSet("info", "agent-vm info <name>", app.Stderr)
+	if err := flags.parse(args); err != nil {
+		return err
 	}
 	if flags.NArg() != 1 {
-		return exitf(ExitUsage, "usage: agent-vm info <name>")
+		return flags.usagef("usage: %s", flags.usage)
 	}
 
 	store, err := app.Store()
