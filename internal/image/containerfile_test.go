@@ -1383,7 +1383,7 @@ func TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount(t *testing
 //
 // It has to be chrony specifically. systemd-timesyncd was observed wedging on
 // this exact path — started before resolved could answer, it never acquired a
-// server and never retried — and Fedora does not package it at all.
+// server and never retried — and Fedora ships its unit disabled.
 func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
@@ -1426,6 +1426,23 @@ func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
 		// turning a wrong clock into a failed create.
 		if !strings.Contains(recipe, "TimeoutStartSec=30") {
 			t.Errorf("%s leaves chrony-wait's 180s timeout in place while ordering sshd behind it; a guest with no route to an NTP server would not become reachable before create stops waiting", d.Containerfile)
+		}
+
+		// That 30s bound only means anything if chrony can synchronize inside
+		// it. chronyd resolves its pool once at startup, and started before a
+		// name can be resolved it backs off and selects a source around 33
+		// seconds in — past the bound, which then releases sshd on a timeout
+		// instead of on a correct clock. Ordering it behind network-online.target
+		// moved that to 4.9s on Fedora and Arch.
+		if !strings.Contains(recipe, "After=network-online.target") {
+			t.Errorf("%s does not order chronyd after network-online.target; its first pool lookup fails, the retry backs off past chrony-wait's 30s bound, and sshd is released on a timeout rather than a synchronized clock", d.Containerfile)
+		}
+
+		// One clock, one client. Arch enables systemd-timesyncd by default, and
+		// running it alongside chrony made chronyd report "System clock
+		// interference detected (another NTP client?)".
+		if !strings.Contains(recipe, "mask systemd-timesyncd.service") {
+			t.Errorf("%s does not mask systemd-timesyncd; on a family that enables it by default two NTP clients step the same clock", d.Containerfile)
 		}
 	}
 }

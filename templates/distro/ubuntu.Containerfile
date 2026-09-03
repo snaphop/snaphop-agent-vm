@@ -924,7 +924,8 @@ RUN systemctl --root=/ enable \
 # later synchronized instantly. chrony retries name resolution, carries several
 # pools instead of one name, and its default `makestep 1 3` steps the first
 # updates however large the offset is, which is what a guest this far out needs.
-# Fedora also does not package timesyncd at all.
+# Fedora ships the timesyncd unit but leaves it disabled, so it was never a
+# candidate there either.
 #
 # chrony-wait is what gives time-sync.target a meaning: it holds the target
 # until the clock is actually correct. sshd is ordered behind that target below,
@@ -940,6 +941,41 @@ RUN set -eu; \
     done; \
     test -n "${units}"; \
     systemctl --root=/ enable ${units}
+
+# chronyd resolves its pool address once at startup, and at boot it starts
+# before a name can be resolved. The failed lookup is retried with a backoff, so
+# a guest that could have synchronized five seconds in instead selects a source
+# at about thirty-three -- past the bound set below, which then releases sshd on
+# a timeout rather than on a clock that is actually right. Measured on x86_64:
+# 33s from boot, against 4.9s for the same chronyd restarted once the network
+# was up.
+#
+# Ordering chronyd behind network-online.target makes the first lookup the one
+# that succeeds. That target is already reached early here --
+# systemd-networkd-wait-online is enabled in these images and finishes about
+# eight seconds in -- and a guest that never reaches it has no address at all,
+# so it was never going to be reachable, or synchronized, either way.
+RUN set -eu; \
+    dropins=""; \
+    for unit in chrony.service chronyd.service; do \
+      if [ -f "/usr/lib/systemd/system/${unit}" ]; then \
+        mkdir -p "/etc/systemd/system/${unit}.d"; \
+        printf '[Unit]\nAfter=network-online.target nss-lookup.target\nWants=network-online.target\n' \
+          > "/etc/systemd/system/${unit}.d/20-agent-vm-resolve-after-the-network.conf"; \
+        dropins="${dropins} ${unit}"; \
+      fi; \
+    done; \
+    test -n "${dropins}"
+
+# Two NTP clients stepping one clock is a fight rather than redundancy. Arch
+# enables systemd-timesyncd by default, and alongside chrony it produced
+# "System clock interference detected (another NTP client?)" in chronyd's log.
+# Masking rather than disabling is what stops another unit pulling it back in as
+# a dependency; on a family that does not ship timesyncd this is a no-op.
+RUN set -eu; \
+    if [ -f /usr/lib/systemd/system/systemd-timesyncd.service ]; then \
+      systemctl --root=/ mask systemd-timesyncd.service; \
+    fi
 
 # Ordering sshd after time-sync.target is what stops a VM being handed over with
 # a clock that is still wrong.
