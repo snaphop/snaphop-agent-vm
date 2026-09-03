@@ -171,6 +171,37 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- **Guests no longer come up with a clock weeks in the past.** On aarch64 —
+  which in practice means an Apple Silicon host running Asahi Linux — the VM had
+  no working real-time clock: QEMU's `virt` machine provides a PL031, but
+  Ubuntu's `linux-image-virtual` ships `rtc-pl031` only in
+  `linux-modules-extra`, which it does not install, so `/dev/rtc0` never
+  appeared and nothing set the clock from hardware at boot. systemd fell back to
+  its own build date and the guest started weeks behind its host (37 days, on
+  the host this was found on), with nothing running afterwards to correct it.
+  The consequences looked unrelated to time: `apt-get update` rejected
+  repository metadata as "not valid yet", TLS handshakes failed against
+  certificates that had not started yet, and build tools wrote timestamps from
+  the wrong month. x86_64 hosts were unaffected, because the CMOS driver is
+  built in there. The base images now ship and enable `chrony`, so a guest
+  corrects its clock within seconds of the network coming up.
+  `systemd-timesyncd` was tried first and rejected: started at boot before
+  `systemd-resolved` could answer, it never acquired a server address and never
+  retried, leaving a guest 37 days behind with the service reported "active" —
+  chrony retries, carries several pools rather than one name, and steps the
+  clock however large the offset is. This needs a rebuilt base image: run `agent-vm image
+  build <distro> --force`, or `agent-vm image rm <distro>` and let the next
+  `create` rebuild it. Existing VMs keep the old behavior until they are
+  recreated on a rebuilt image. `chrony-wait` is enabled too and `sshd` is
+  ordered behind `time-sync.target`, so a VM is not handed over until its clock
+  has been stepped — `create` calls a VM ready when SSH answers, and without
+  this it answered about five seconds into a boot while chrony stepped the clock
+  at about seven, leaving an agent working against a clock weeks out for the two
+  seconds in between. `chrony-wait`'s start timeout is shortened from three
+  minutes to thirty seconds so that a guest with no route to an NTP server
+  becomes reachable half a minute late with a wrong clock, rather than not
+  before `create` stops waiting for it.
+
 - **A rejected flag no longer takes the command's flag listing with it.**
   Reporting a bad flag in the tool's own spelling also stopped printing the
   usage listing that came with it, so `agent-vm create --test` answered with one

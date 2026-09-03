@@ -1366,3 +1366,66 @@ func TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount(t *testing
 		}
 	}
 }
+
+// TestContainerfiles_SynchronizeTheGuestClock guards the fix for guests that
+// came up weeks in the past.
+//
+// On aarch64 the guest has no real-time clock it can read: QEMU's virt machine
+// provides a PL031, but the kernel flavours these images ship do not carry the
+// driver — Ubuntu keeps rtc-pl031 in linux-modules-extra, which
+// linux-image-virtual does not pull in — so /dev/rtc0 never appears and nothing
+// sets the clock from hardware. systemd then falls back to its own build date,
+// and the guest starts weeks behind its host with nothing to correct it: apt
+// rejects repository metadata as "not valid yet", TLS handshakes fail against
+// certificates that have not started yet, and build tools write timestamps from
+// the wrong month. An NTP client is the only thing standing between a guest and
+// that, so it has to be installed *and* enabled in every family.
+//
+// It has to be chrony specifically. systemd-timesyncd was observed wedging on
+// this exact path — started before resolved could answer, it never acquired a
+// server and never retried — and Fedora does not package it at all.
+func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+
+		contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		recipe := string(contents)
+
+		if !strings.Contains(recipe, "chrony") {
+			t.Errorf("%s does not install chrony; guests built from it have no way to learn the time", d.Containerfile)
+		}
+
+		// Installed and not enabled is the same as absent. The families spell
+		// the daemon differently, so the recipe enables whichever unit it
+		// finds; what must be true everywhere is that it looks for both and
+		// for the wait unit that makes time-sync.target mean something.
+		for _, unit := range []string{"chrony.service", "chronyd.service", "chrony-wait.service"} {
+			if !strings.Contains(recipe, unit) {
+				t.Errorf("%s never enables %s; guests built from it boot with systemd's build date as the time and keep it", d.Containerfile, unit)
+			}
+		}
+
+		// sshd behind time-sync.target is what makes create's readiness wait —
+		// which is "does SSH answer" and nothing else — also mean "is the clock
+		// right". Without it a VM is handed over some five seconds into its
+		// boot, two seconds before chrony steps the clock, and whatever the
+		// agent runs first meets a clock weeks out.
+		if !strings.Contains(recipe, "After=time-sync.target") {
+			t.Errorf("%s does not order sshd after time-sync.target; create will hand over VMs whose clock has not been stepped yet", d.Containerfile)
+		}
+
+		// The ordering must not be able to outlast create's own budget: chrony-wait
+		// ships TimeoutStartSec=180 and retries forever, so a guest that cannot
+		// reach an NTP server would hold sshd past the point create gives up,
+		// turning a wrong clock into a failed create.
+		if !strings.Contains(recipe, "TimeoutStartSec=30") {
+			t.Errorf("%s leaves chrony-wait's 180s timeout in place while ordering sshd behind it; a guest with no route to an NTP server would not become reachable before create stops waiting", d.Containerfile)
+		}
+	}
+}
