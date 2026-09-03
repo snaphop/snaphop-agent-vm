@@ -200,7 +200,17 @@ migration or rebuild step a user has to take.
   seconds in between. `chrony-wait`'s start timeout is shortened from three
   minutes to thirty seconds so that a guest with no route to an NTP server
   becomes reachable half a minute late with a wrong clock, rather than not
-  before `create` stops waiting for it.
+  before `create` stops waiting for it. `chronyd` is ordered behind
+  `network-online.target` so that it can synchronize inside that thirty seconds:
+  started earlier, its one attempt to resolve a pool address failed and the
+  retry backed off, so on Fedora and Arch a source was not selected until about
+  thirty-three seconds in — past the bound, which released `sshd` on a timeout
+  rather than on a correct clock, and added about twenty seconds to every boot.
+  Ordering it behind the network moved that to about five seconds. Finally,
+  `systemd-timesyncd` is masked wherever a family enables it by default (Arch
+  does), so that two NTP clients no longer step the same clock — `chronyd`
+  reported `System clock interference detected (another NTP client?)` when they
+  ran together.
 
 - **A rejected flag no longer takes the command's flag listing with it.**
   Reporting a bad flag in the tool's own spelling also stopped printing the
