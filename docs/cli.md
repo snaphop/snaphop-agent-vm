@@ -301,7 +301,8 @@ agent-vm doctor --output json
 Builds (or rebuilds) the cached base image for a distro. Each step is an existing
 tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
-(kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`)
+(kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`,
+and `chrony` — see “Guest clock” below)
 along with the tooling an agent expects to already be there (`ping`, `curl`,
 `wget`, `git`, a C toolchain, Python, Docker, and the coding agents themselves
 — see “Guest tooling” below),
@@ -397,6 +398,32 @@ round trip and its registration lasts only until the VM reboots. Multi-platform
 manifests in a single build (`docker buildx build --platform
 linux/amd64,linux/arm64`) still need a `docker-container` builder, which
 `docker buildx create --use --bootstrap` sets up by pulling BuildKit.
+
+#### Guest clock
+
+Every base image ships and enables `chrony`. It is not a convenience. On
+aarch64 the guest has no real-time clock it can read — QEMU's `virt` machine provides a PL031, but the
+kernel flavours these images ship do not carry the driver, so `/dev/rtc0` never
+appears — and systemd falls back to its own build date, starting the guest weeks
+behind its host. What that breaks does not look like a clock problem: package
+managers reject repository metadata as "not valid yet", TLS handshakes fail
+against certificates that have not started yet, and build tools record
+timestamps from the wrong month.
+
+`chrony-wait` is enabled alongside it, so `time-sync.target` is reached only
+once the clock is actually correct, and `sshd` is ordered behind that target.
+That matters for more than tidiness: `create` calls a VM ready when SSH answers,
+so ordering `sshd` there makes the readiness wait mean "the clock is right" too.
+Without it a VM is handed over about five seconds into its boot and chrony steps
+the clock at about seven, leaving an agent logged in and working against a clock
+weeks out.
+
+The ordering is `After=`, never `Requires=`, and `chrony-wait`'s start timeout is
+shortened to 30 seconds. A guest whose network has no route to an NTP server
+therefore becomes reachable half a minute later than it otherwise would, with
+the same wrong clock it would have had anyway — rather than being held for
+`chrony-wait`'s stock three minutes, which is longer than `create` waits at all.
+A guest that can never reach an NTP server never synchronizes.
 
 #### Coding agents
 

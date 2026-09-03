@@ -30,6 +30,7 @@ RUN apt-get update \
       systemd \
       systemd-sysv \
       systemd-resolved \
+      chrony \
       cloud-init \
       openssh-server \
       sudo \
@@ -901,6 +902,89 @@ RUN systemctl --root=/ enable \
       ssh.service \
       systemd-networkd.service \
       systemd-resolved.service
+
+# A time synchronization client is not optional here, because on aarch64 a
+# guest has no clock to start from. QEMU's virt machine provides a PL031 RTC,
+# but the kernel flavours these images ship do not carry the driver -- Ubuntu
+# keeps rtc-pl031 in linux-modules-extra, which linux-image-virtual does not
+# pull in -- so /dev/rtc0 never appears and nothing sets the clock from
+# hardware. systemd falls back to its own build date, and the guest comes up
+# weeks in the past: measured on an Asahi Linux host, 37 days behind.
+#
+# What that breaks does not look like a clock problem. apt rejects repository
+# metadata as "not valid yet", TLS handshakes fail against certificates that
+# have not started yet, and build tools record timestamps from the wrong month.
+# x86_64 hides all of it, since the CMOS driver is built in there and hctosys
+# gets boot approximately right, so it surfaces only on ARM hosts.
+#
+# chrony rather than systemd-timesyncd, for two reasons. timesyncd was observed
+# wedging on exactly this path: started at boot before resolved could answer, it
+# never acquired a server address and never retried, so a guest sat 37 days
+# behind with the service reported "active" -- and a manual restart minutes
+# later synchronized instantly. chrony retries name resolution, carries several
+# pools instead of one name, and its default `makestep 1 3` steps the first
+# updates however large the offset is, which is what a guest this far out needs.
+# Fedora also does not package timesyncd at all.
+#
+# chrony-wait is what gives time-sync.target a meaning: it holds the target
+# until the clock is actually correct. sshd is ordered behind that target below,
+# which closes the window this fix would otherwise leave open.
+#
+# The unit names differ per family (chrony.service on Ubuntu, chronyd.service
+# elsewhere), so whichever is present is enabled; none present is a build
+# failure, because a guest that cannot learn the time is the bug this fixes.
+RUN set -eu; \
+    units=""; \
+    for unit in chrony.service chronyd.service chrony-wait.service; do \
+      if [ -f "/usr/lib/systemd/system/${unit}" ]; then units="${units} ${unit}"; fi; \
+    done; \
+    test -n "${units}"; \
+    systemctl --root=/ enable ${units}
+
+# Ordering sshd after time-sync.target is what stops a VM being handed over with
+# a clock that is still wrong.
+#
+# `create` waits for SSH to answer and calls the VM ready at that point, and
+# sshd answers about five seconds into a boot while chrony steps the clock at
+# about seven. Between those two an agent is already logged in, running commands
+# against a clock weeks out -- and the failures there are not the retryable kind:
+# apt refuses the metadata and TLS refuses the certificate, and whatever hit it
+# reports the error rather than waiting. Ordering sshd behind the target makes
+# `create`'s existing readiness wait mean "the clock is right" as well, with no
+# change to the tool.
+#
+# The ordering goes on the service and not on ssh.socket, which on Ubuntu binds
+# port 22 before sockets.target. time-sync.target is only reached long after
+# that -- it needs the network, which needs basic.target, which needs
+# sockets.target -- so ordering the socket behind it is a dependency cycle, and
+# systemd breaks a cycle by dropping one of the jobs in it. Gating the service
+# instead has no such loop: the socket binds early and holds the connection in
+# its backlog, so a probe that arrives first stalls for those few seconds
+# instead of being refused, and is answered as soon as sshd takes the socket
+# over. After= rather than Requires=, so a guest that never synchronizes still
+# gets an sshd.
+#
+# That last case is the reason for the timeout below. chrony-wait ships
+# TimeoutStartSec=180, and `chronyc waitsync 0 ...` retries without limit, so a
+# guest with no route to an NTP server would hold sshd for three minutes --
+# longer than `create` waits at all, turning a wrong clock into a failed create.
+# Thirty seconds bounds it: the VM becomes reachable half a minute late, with
+# the same wrong clock it would have had anyway, and `create` still finishes
+# inside its budget.
+RUN set -eu; \
+    mkdir -p /etc/systemd/system/chrony-wait.service.d; \
+    printf '[Service]\nTimeoutStartSec=30\n' \
+      > /etc/systemd/system/chrony-wait.service.d/10-agent-vm-bound-the-wait.conf; \
+    dropins=""; \
+    for unit in ssh.service sshd.service; do \
+      if [ -f "/usr/lib/systemd/system/${unit}" ]; then \
+        mkdir -p "/etc/systemd/system/${unit}.d"; \
+        printf '[Unit]\nAfter=time-sync.target\n' \
+          > "/etc/systemd/system/${unit}.d/10-agent-vm-wait-for-the-clock.conf"; \
+        dropins="${dropins} ${unit}"; \
+      fi; \
+    done; \
+    test -n "${dropins}"
 
 # cloud-init renamed and split its units in 24.3 (cloud-init.service became
 # cloud-init-network.service, and cloud-init-main.service appeared), and the

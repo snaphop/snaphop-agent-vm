@@ -183,7 +183,8 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   artifact, by sequencing existing tools: `podman pull` (digest-pinned) →
   `podman build` of the embedded per-distro `Containerfile`, which adds what a VM
   needs and a container lacks (kernel, `systemd`, `cloud-init`,
-  `openssh-server`, `sudo`, `qemu-guest-agent`) plus the tooling an agent expects
+  `openssh-server`, `sudo`, `qemu-guest-agent`, and `chrony` to synchronize the
+  guest clock) plus the tooling an agent expects
   to find already installed (networking and diagnostic tools, `curl`/`wget`,
   `git`, a C toolchain, Python, Docker, language toolchains, and the coding
   agents themselves — the full inventory is in
