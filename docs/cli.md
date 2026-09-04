@@ -1057,11 +1057,11 @@ Then the rest of what a guest carries, in this order:
 
 | Step | What it runs | As |
 |---|---|---|
-| `mise` itself | `mise self-update --yes`, which also refreshes its plugins | root |
+| `mise` itself | `mise self-update --yes`, which also refreshes its plugins, with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
 | root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
 | the guest user's mise-managed tools | `mise upgrade --yes` | the guest user |
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
-| the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` | root |
+| the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` | root |
 
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
 `claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and
