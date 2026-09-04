@@ -298,7 +298,9 @@ agent-vm doctor --output json
 
 ### `agent-vm image build <distro>[:<tag>]`
 
-Builds (or rebuilds) the cached base image for a distro. Each step is an existing
+Builds (or rebuilds) the cached base image for a distro. `<distro>` is a
+supported family — `ubuntu`, `fedora`, or `arch` — or that family's slim
+variant, named `<family>-slim` (see “Slim images” below). Each step is an existing
 tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
 (kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`,
@@ -337,6 +339,27 @@ built. `create` builds a missing image the same way and reports it the same way.
 Building is the only operation that requires network access to a registry. It is
 safe to run concurrently for different distros, and a second build of the same
 one waits for the first to finish rather than racing it.
+
+#### Slim images
+
+Every family also has a slim variant, named by appending `-slim` to the family:
+`agent-vm image build ubuntu-slim`, `agent-vm create work --distro
+fedora-slim:42`. It boots identically — same kernel command line, same
+cloud-init contract, same SSH and clock guarantees — and carries the same
+common Linux tooling described under “Guest tooling” below, but none of the
+agent tooling: no mise and no language toolchains, no coding agents, no
+Chromium or Playwright, no Docker, and no nested virtualization stack. Pick it
+for a VM that only has to run a build, a shell, or a test suite; it is a much
+smaller image and a much shorter build.
+
+A slim image is a separate base image rather than a mode of the full one. It
+has its own cache directory (`images/ubuntu-slim/24.04/`), its own manifest,
+and its own name in `image list`, `image inspect`, `image rm`, and `vm.json` —
+so `ubuntu` and `ubuntu-slim` can both be cached at once, are built and removed
+independently, and neither one's rebuild disturbs VMs backed by the other.
+`agent-vm update` works on a slim guest exactly as on a full one: the distro
+packages are updated, and the steps for tooling a slim guest does not carry are
+skipped.
 
 The whole build happens in a temporary directory under `images/` that is renamed
 into place only on success, so a failed or interrupted build leaves no image
@@ -795,7 +818,7 @@ and must not already exist.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. |
+| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` to the family (`ubuntu-slim`) for the slim variant. |
 | `--vcpus <n>` | `2` | Virtual CPUs. |
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`). |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |

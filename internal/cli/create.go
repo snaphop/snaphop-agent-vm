@@ -51,7 +51,7 @@ func (r *repeatedFlag) Set(value string) error {
 
 func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	flags := newFlagSet("create", "agent-vm create <name> [flags]", app.Stderr)
-	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; built automatically if not cached")
+	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; append -slim for the slim variant; built automatically if not cached")
 	vcpus := flags.String("vcpus", "", "virtual CPUs")
 	memory := flags.String("memory", "", "guest RAM, for example 512M or 4G")
 	maxMemory := flags.String("max-memory", "", "ceiling the guest's RAM can be grown to at runtime, via virtio-mem; unset means a fixed-size guest")
@@ -780,7 +780,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		vmDir+"/"+state.SeedDirectory, vmDir+"/"+state.SeedImageFile)
 
 	plan(hostexec.QemuImg.Name, "create", "-f", "qcow2", "-F", "qcow2",
-		"-b", layout.BaseDiskPath(ref.Distro.Name, ref.Tag),
+		"-b", layout.BaseDiskPath(ref.ImageName(), ref.Tag),
 		vmDir+"/"+state.OverlayFile, strconv.FormatInt(int64(cfg.Disk), 10))
 
 	plan(hostexec.Virsh.Name, "--connect", uri, "capabilities")
@@ -796,8 +796,8 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		Memory:      cfg.Memory,
 		MaxMemory:   cfg.MaxMemory,
 		OverlayPath: vmDir + "/" + state.OverlayFile,
-		KernelPath:  layout.KernelPath(ref.Distro.Name, ref.Tag),
-		InitrdPath:  layout.InitrdPath(ref.Distro.Name, ref.Tag),
+		KernelPath:  layout.KernelPath(ref.ImageName(), ref.Tag),
+		InitrdPath:  layout.InitrdPath(ref.ImageName(), ref.Tag),
 		// A plan has no manifest to read — the image may not be built yet — so
 		// it uses the command line every base image is built with.
 		KernelCmdline:  distro.KernelCmdline,

@@ -31,7 +31,7 @@ const (
 // were skipped would report confusing failures instead of a plan, and running
 // the build's own file writes would make --dry-run change the state directory.
 func Plan(layout state.Layout, opts BuildOptions) []hostexec.Command {
-	d, tag := opts.Ref.Distro, opts.Ref.Tag
+	name, tag := opts.Ref.ImageName(), opts.Ref.Tag
 
 	sourceRef := opts.Ref.SourceRef()
 	if opts.From != "" {
@@ -44,10 +44,10 @@ func Plan(layout state.Layout, opts BuildOptions) []hostexec.Command {
 
 	// The real workspace name carries the PID of the process doing the build;
 	// a plan has no build to name, so it shows the shape instead.
-	work := filepath.Join(layout.Root(), "images", fmt.Sprintf(".build-%s-%s-<pid>", d.Name, tag))
+	work := filepath.Join(layout.Root(), "images", fmt.Sprintf(".build-%s-%s-<pid>", name, tag))
 	tarPath := filepath.Join(work, "rootfs.tar")
 	diskPath := filepath.Join(work, state.BaseDiskFile)
-	localTag := fmt.Sprintf("agent-vm/%s:%s", d.Name, tag)
+	localTag := fmt.Sprintf("agent-vm/%s:%s", name, tag)
 	pinned := repoOf(sourceRef) + "@" + PlaceholderDigest
 
 	podman := func(args ...string) hostexec.Command {
@@ -86,9 +86,9 @@ func Plan(layout state.Layout, opts BuildOptions) []hostexec.Command {
 // PlanNotes describe what a plan does beyond running tools, so an operator
 // reading --dry-run output sees the file operations too.
 func PlanNotes(layout state.Layout, ref distro.Ref) []string {
-	final := layout.ImageDir(ref.Distro.Name, ref.Tag)
+	final := layout.ImageDir(ref.ImageName(), ref.Tag)
 	return []string{
-		fmt.Sprintf("write the embedded %s build recipe into the temporary build directory", ref.Distro.Containerfile),
+		fmt.Sprintf("write the embedded %s build recipe into the temporary build directory", ref.Containerfile()),
 		fmt.Sprintf("write manifest.json recording the source digest, kernel %s, cmdline %q, and the tool versions used",
 			PlaceholderKernelVersion, distro.KernelCmdline),
 		"delete the exported root filesystem tar",

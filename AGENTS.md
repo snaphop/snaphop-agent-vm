@@ -116,7 +116,12 @@ Where new code belongs:
 - Distro-specific behavior (package names, kernel path, init flavor): the
   per-distro `Containerfile` under `templates/distro/`, plus a small distro
   definition under `internal/image/distro/` for anything a `Containerfile` cannot
-  express. Do not scatter `switch distro` blocks across packages.
+  express. Do not scatter `switch distro` blocks across packages. Each family
+  has two recipes — `<family>.Containerfile` and `<family>-slim.Containerfile`,
+  the latter built as the separate base image `<family>-slim` — and they share
+  the boot, cloud-init, clock, and networking blocks verbatim: a change to one
+  of those blocks belongs in both files in the same edit, which
+  `TestSlimContainerfiles_KeepTheBootAndCloudInitContract` enforces.
 - A new tool invocation: the package that owns the concern (`internal/image`,
   `internal/domain`, `internal/network`), always executed through
   `internal/hostexec` and behind an interface so tests can substitute a fake at the

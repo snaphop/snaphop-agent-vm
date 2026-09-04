@@ -16,6 +16,7 @@ import (
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"git.snaphop.xyz/snaphop/snaphop-agent-vm/templates"
 )
 
 // The digest a fake registry hands back. It is a real-shaped sha256 because
@@ -443,5 +444,88 @@ func TestRemove_UnknownImageIsNotFound(t *testing.T) {
 	var notFound *state.NotFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("got %v, want *NotFoundError", err)
+	}
+}
+
+func slimRef(t *testing.T) distro.Ref {
+	t.Helper()
+	ref, err := distro.ParseRef("ubuntu-slim")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+	return ref
+}
+
+func TestBuild_SlimImageIsCachedUnderItsOwnNameAndBuiltFromTheSlimRecipe(t *testing.T) {
+	fake := ubuntuHost(t)
+	builder, store := newBuilder(t, fake)
+
+	manifest, err := builder.Build(context.Background(), BuildOptions{Ref: slimRef(t)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// The name is what every later operation addresses the image by: the cache
+	// directory, `image rm`, and the vm.json of every VM built on it.
+	if manifest.Distro != "ubuntu-slim" || manifest.Ref() != "ubuntu-slim:24.04" {
+		t.Errorf("manifest names the image %s, want ubuntu-slim:24.04", manifest.Ref())
+	}
+	if !store.HasImage("ubuntu-slim", "24.04") {
+		t.Fatal("the built slim image is not reported as cached")
+	}
+	// A slim build must not be mistaken for, or overwrite, the full image of
+	// the same family and tag.
+	if store.HasImage("ubuntu", "24.04") {
+		t.Error("building ubuntu-slim also produced an image cached as ubuntu")
+	}
+
+	// The recipe that reached podman is the slim one, and it carries none of
+	// the agent tooling the full recipe installs.
+	var context string
+	for _, call := range fake.Calls() {
+		if call.Name == "podman" && len(call.Args) > 0 && call.Args[0] == "build" {
+			context = argAfter(call.Args, "--file")
+		}
+	}
+	if context == "" {
+		t.Fatalf("no podman build in the pipeline\n%s", fake)
+	}
+	// The workspace is removed once the build commits, so the recipe is
+	// compared against the embedded file podman was pointed at.
+	wanted, err := templates.FS.ReadFile("distro/ubuntu-slim.Containerfile")
+	if err != nil {
+		t.Fatalf("reading the slim recipe: %v", err)
+	}
+	if !strings.Contains(string(wanted), "systemctl --root=/ enable") {
+		t.Error("the slim recipe enables no units; a guest built from it would not be reachable")
+	}
+	// Comments name what slim leaves out, so only the instructions are
+	// checked for the agent tooling they would install.
+	for _, line := range strings.Split(string(wanted), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, tool := range []string{"mise", "rustup", "playwright", "docker"} {
+			if strings.Contains(strings.ToLower(line), tool) {
+				t.Errorf("the slim recipe installs %s; slim images carry no agent tooling: %s", tool, line)
+			}
+		}
+	}
+}
+
+func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
+	fake := ubuntuHost(t)
+	builder, store := newBuilder(t, fake)
+
+	for _, ref := range []distro.Ref{ubuntuRef(t), slimRef(t)} {
+		if _, err := builder.Build(context.Background(), BuildOptions{Ref: ref}); err != nil {
+			t.Fatalf("Build(%s): %v", ref, err)
+		}
+	}
+
+	for _, name := range []string{"ubuntu", "ubuntu-slim"} {
+		if !store.HasImage(name, "24.04") {
+			t.Errorf("%s:24.04 is not cached after building both", name)
+		}
 	}
 }

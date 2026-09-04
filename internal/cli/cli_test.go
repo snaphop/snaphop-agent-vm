@@ -248,7 +248,7 @@ func TestRun_UnknownFlagIsReportedOnceWithTwoDashes(t *testing.T) {
 	// The flags that would have worked belong to that command, so they are
 	// listed with the error rather than left behind a second invocation.
 	for _, want := range []string{
-		"agent-vm image build <distro>[:<tag>] [flags]",
+		"agent-vm image build <distro>[-slim][:<tag>] [flags]",
 		"--force",
 		"--platform <string>",
 	} {
@@ -334,7 +334,7 @@ func TestRun_CommandHelpPrintsThatCommandsFlagsAndExitsZero(t *testing.T) {
 		t.Errorf("exit code = %d, want %d:\n%s", code, ExitOK, stderr)
 	}
 	for _, want := range []string{
-		"agent-vm image build <distro>[:<tag>] [flags]",
+		"agent-vm image build <distro>[-slim][:<tag>] [flags]",
 		"--force",
 		"--platform <string>",
 	} {
