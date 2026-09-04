@@ -108,11 +108,13 @@ type BuildOptions struct {
 // only on success, so an interrupted or failed build can never leave a
 // partially written base image that a VM could boot from (SECURITY.md).
 func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Manifest, err error) {
-	d, tag := opts.Ref.Distro, opts.Ref.Tag
+	name, tag := opts.Ref.ImageName(), opts.Ref.Tag
 
 	// One build per base image at a time. A second build of the same image
-	// waits rather than racing; different distros build concurrently.
-	lock, err := b.Store.LockImage(ctx, d.Name, tag, "image build")
+	// waits rather than racing; different distros build concurrently. A slim
+	// image is a different image, so it neither waits for nor collides with
+	// the full build of the same family and tag.
+	lock, err := b.Store.LockImage(ctx, name, tag, "image build")
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +126,8 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		}
 	}()
 
-	if !opts.Force && b.Store.HasImage(d.Name, tag) {
-		return b.Store.LoadManifest(d.Name, tag)
+	if !opts.Force && b.Store.HasImage(name, tag) {
+		return b.Store.LoadManifest(name, tag)
 	}
 
 	sourceRef := opts.Ref.SourceRef()
@@ -142,7 +144,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 	steps := reporter{to: b.Progress}
 	defer func() { steps.finish(err) }()
 
-	work, err := b.newWorkspace(d.Name, tag)
+	work, err := b.newWorkspace(name, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +164,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 	}
 
 	steps.at(stepCommit)
-	if err := b.commit(work, d.Name, tag); err != nil {
+	if err := b.commit(work, name, tag); err != nil {
 		return nil, err
 	}
 	work.dir = "" // committed; nothing left to clean up
@@ -176,8 +178,8 @@ type workspace struct {
 	diskPath string
 }
 
-func (b *Builder) newWorkspace(distroName, tag string) (*workspace, error) {
-	dir := filepath.Join(b.Store.Root(), "images", fmt.Sprintf(".build-%s-%s-%d", distroName, tag, os.Getpid()))
+func (b *Builder) newWorkspace(imageName, tag string) (*workspace, error) {
+	dir := filepath.Join(b.Store.Root(), "images", fmt.Sprintf(".build-%s-%s-%d", imageName, tag, os.Getpid()))
 	if err := b.Store.Remove(dir); err != nil {
 		return nil, err
 	}
@@ -208,11 +210,11 @@ func (b *Builder) buildInto(ctx context.Context, steps reporter, work *workspace
 		return nil, err
 	}
 
-	containerfile, err := b.writeBuildContext(work, d)
+	containerfile, err := b.writeBuildContext(work, opts.Ref)
 	if err != nil {
 		return nil, err
 	}
-	localTag := fmt.Sprintf("agent-vm/%s:%s", d.Name, tag)
+	localTag := fmt.Sprintf("agent-vm/%s:%s", opts.Ref.ImageName(), tag)
 	steps.at(stepLayers)
 	if err := b.build(ctx, containerfile, work.dir, localTag, pinned, platform); err != nil {
 		return nil, err
@@ -254,12 +256,16 @@ func (b *Builder) buildInto(ctx context.Context, steps reporter, work *workspace
 // copies into the workspace, which doubles as podman's build context, and
 // returns the path of the recipe.
 //
-// Every family's recipe COPYs the same guest dotfiles, so they are written from
-// one embedded copy rather than repeated as heredocs in three Containerfiles.
-func (b *Builder) writeBuildContext(work *workspace, d distro.Distro) (string, error) {
-	contents, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+// Every family's full recipe COPYs the same guest dotfiles, so they are
+// written from one embedded copy rather than repeated as heredocs in three
+// Containerfiles. They are written for a slim build too, which COPYs none of
+// them: podman ignores what a recipe does not reference, and writing the same
+// context either way keeps the build from having to know which recipe it is
+// running.
+func (b *Builder) writeBuildContext(work *workspace, ref distro.Ref) (string, error) {
+	contents, err := templates.FS.ReadFile("distro/" + ref.Containerfile())
 	if err != nil {
-		return "", fmt.Errorf("no build recipe for %s: %w", d.Name, err)
+		return "", fmt.Errorf("no build recipe for %s: %w", ref.ImageName(), err)
 	}
 	path := filepath.Join(work.dir, "Containerfile")
 	if err := b.Store.WriteFile(path, contents, 0o644); err != nil {
@@ -445,7 +451,7 @@ func (b *Builder) sysprep(ctx context.Context, diskPath string) error {
 func (b *Builder) writeManifest(ctx context.Context, work *workspace, opts BuildOptions, sourceRef, digest, platform, kernelVersion string) (*state.Manifest, error) {
 	manifest := &state.Manifest{
 		SchemaVersion:  state.ManifestSchemaVersion,
-		Distro:         opts.Ref.Distro.Name,
+		Distro:         opts.Ref.ImageName(),
 		Tag:            opts.Ref.Tag,
 		BuiltAt:        time.Now().UTC(),
 		Platform:       platform,
@@ -554,7 +560,7 @@ func repoOf(ref string) string {
 // uses it as a backing file. A backing file is not optional: removing it makes
 // those VMs' disks unreadable (ADR-0004).
 func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err error) {
-	lock, err := b.Store.LockImage(ctx, ref.Distro.Name, ref.Tag, "image rm")
+	lock, err := b.Store.LockImage(ctx, ref.ImageName(), ref.Tag, "image rm")
 	if err != nil {
 		return err
 	}
@@ -566,11 +572,11 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 		}
 	}()
 
-	if !b.Store.HasImage(ref.Distro.Name, ref.Tag) {
+	if !b.Store.HasImage(ref.ImageName(), ref.Tag) {
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}
 	}
 
-	users, err := b.Store.VMsUsingImage(ref.Distro.Name, ref.Tag)
+	users, err := b.Store.VMsUsingImage(ref.ImageName(), ref.Tag)
 	if err != nil {
 		return err
 	}
@@ -583,14 +589,14 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 			"  Destroy them first, or pass --force to remove it anyway and make their disks unreadable",
 			ref, len(users), strings.Join(names, ", "))
 	}
-	return b.Store.Remove(b.Store.ImageDir(ref.Distro.Name, ref.Tag))
+	return b.Store.Remove(b.Store.ImageDir(ref.ImageName(), ref.Tag))
 }
 
 // EnsureImage returns the cached base image for a reference, building it if the
 // cache misses. It is what `create` calls.
 func (b *Builder) EnsureImage(ctx context.Context, ref distro.Ref) (*state.Manifest, error) {
-	manifest, err := b.Store.LoadManifest(ref.Distro.Name, ref.Tag)
-	if err == nil && b.Store.HasImage(ref.Distro.Name, ref.Tag) {
+	manifest, err := b.Store.LoadManifest(ref.ImageName(), ref.Tag)
+	if err == nil && b.Store.HasImage(ref.ImageName(), ref.Tag) {
 		return manifest, nil
 	}
 

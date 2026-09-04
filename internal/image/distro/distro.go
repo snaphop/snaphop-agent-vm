@@ -31,6 +31,13 @@ type Distro struct {
 	// Containerfile is the embedded build recipe under templates/distro/.
 	// Everything a Containerfile can express belongs there rather than here.
 	Containerfile string
+	// SlimContainerfile is the recipe for this family's slim variant: the same
+	// bootable base and the same common Linux tooling, without the language
+	// toolchains, coding agents, browser, Docker, and nested virtualization
+	// stack the full recipe installs. It is a second recipe rather than a
+	// build argument because the two differ by which blocks run, and podman
+	// has no way to skip a block.
+	SlimContainerfile string
 
 	// PackageUpdate is what `agent-vm update` runs inside a guest of this
 	// family to bring its distro packages up to date, in order. It is followed
@@ -106,12 +113,13 @@ func (d Distro) SourceRef(tag string) string {
 // docs/architecture.md's runtime profile table.
 var (
 	Ubuntu = Distro{
-		Name:          "ubuntu",
-		Repo:          "docker.io/library/ubuntu",
-		DefaultTag:    "24.04",
-		KernelPackage: "linux-image-virtual",
-		Initramfs:     "initramfs-tools",
-		Containerfile: "ubuntu.Containerfile",
+		Name:              "ubuntu",
+		Repo:              "docker.io/library/ubuntu",
+		DefaultTag:        "24.04",
+		KernelPackage:     "linux-image-virtual",
+		Initramfs:         "initramfs-tools",
+		Containerfile:     "ubuntu.Containerfile",
+		SlimContainerfile: "ubuntu-slim.Containerfile",
 		PackageUpdate: []UpdateStep{
 			{Name: "refreshing package lists", Root: true, Argv: []string{"apt-get", "update"}},
 			// A guest is unattended, so apt may never stop at a prompt: the
@@ -131,12 +139,13 @@ var (
 		InitrdPattern: "initrd.img-*",
 	}
 	Fedora = Distro{
-		Name:          "fedora",
-		Repo:          "registry.fedoraproject.org/fedora",
-		DefaultTag:    "42",
-		KernelPackage: "kernel-core",
-		Initramfs:     "dracut",
-		Containerfile: "fedora.Containerfile",
+		Name:              "fedora",
+		Repo:              "registry.fedoraproject.org/fedora",
+		DefaultTag:        "42",
+		KernelPackage:     "kernel-core",
+		Initramfs:         "dracut",
+		Containerfile:     "fedora.Containerfile",
+		SlimContainerfile: "fedora-slim.Containerfile",
 		PackageUpdate: []UpdateStep{
 			{Name: "upgrading packages", Root: true, Argv: []string{"dnf", "-y", "--refresh", "upgrade"}},
 			{Name: "removing packages nothing needs any more", Root: true, Argv: []string{"dnf", "-y", "autoremove"}},
@@ -145,12 +154,13 @@ var (
 		InitrdPattern: "initramfs-*.img",
 	}
 	Arch = Distro{
-		Name:          "arch",
-		Repo:          "docker.io/library/archlinux",
-		DefaultTag:    "base",
-		KernelPackage: "linux",
-		Initramfs:     "mkinitcpio",
-		Containerfile: "arch.Containerfile",
+		Name:              "arch",
+		Repo:              "docker.io/library/archlinux",
+		DefaultTag:        "base",
+		KernelPackage:     "linux",
+		Initramfs:         "mkinitcpio",
+		Containerfile:     "arch.Containerfile",
+		SlimContainerfile: "arch-slim.Containerfile",
 		// pacman has no separate refresh step and no autoremove: -Syu does the
 		// whole upgrade, and removing orphans needs a pipeline we cannot run
 		// without a shell.
@@ -285,14 +295,66 @@ func Lookup(name string) (Distro, bool) {
 	return d, ok
 }
 
-// Ref names one base image: a supported family and a tag of it.
+// SlimSuffix distinguishes a family's slim variant from the family itself,
+// everywhere a base image is named: on the command line, in the image cache
+// directory, and in the manifest and vm.json records that carry that name back
+// (AGENTS.md §8). "ubuntu-slim" is one base image, "ubuntu" another.
+const SlimSuffix = "-slim"
+
+// LookupImage returns the family and variant a base image name refers to,
+// accepting both "ubuntu" and "ubuntu-slim". It is what reads a name back
+// after the fact — a recorded manifest or vm.json — where only the image name
+// survives.
+func LookupImage(name string) (d Distro, slim bool, ok bool) {
+	if family, found := strings.CutSuffix(name, SlimSuffix); found {
+		d, ok = Lookup(family)
+		return d, ok, ok
+	}
+	d, ok = Lookup(name)
+	return d, false, ok
+}
+
+// ImageNames lists every base image name that can be built, families and their
+// slim variants alike, in a stable order — for help text and completion.
+func ImageNames() []string {
+	names := make([]string, 0, 2*len(families))
+	for _, name := range Names() {
+		names = append(names, name, name+SlimSuffix)
+	}
+	return names
+}
+
+// Ref names one base image: a supported family, a tag of it, and whether it is
+// the family's slim variant.
 type Ref struct {
 	Distro Distro
 	Tag    string
+	// Slim selects the family's slim recipe. Because a slim image is a
+	// different base image rather than a different way of using one — a
+	// different disk, kernel, and manifest — it gets its own name and its own
+	// place in the cache, and the two never share either.
+	Slim bool
+}
+
+// ImageName is the name this base image is known by wherever one is named:
+// "ubuntu", or "ubuntu-slim" for the slim variant.
+func (r Ref) ImageName() string {
+	if r.Slim {
+		return r.Distro.Name + SlimSuffix
+	}
+	return r.Distro.Name
+}
+
+// Containerfile is the embedded build recipe this base image is built from.
+func (r Ref) Containerfile() string {
+	if r.Slim {
+		return r.Distro.SlimContainerfile
+	}
+	return r.Distro.Containerfile
 }
 
 // String renders the reference as the operator wrote it: "ubuntu:24.04".
-func (r Ref) String() string { return r.Distro.Name + ":" + r.Tag }
+func (r Ref) String() string { return r.ImageName() + ":" + r.Tag }
 
 // SourceRef is the OCI reference this base image is built from.
 func (r Ref) SourceRef() string { return r.Distro.SourceRef(r.Tag) }
@@ -303,14 +365,15 @@ func (r Ref) SourceRef() string { return r.Distro.SourceRef(r.Tag) }
 var tagPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // ParseRef reads "<distro>" or "<distro>:<tag>", applying the family's default
-// tag when none is given.
+// tag when none is given. A "-slim" suffix on the distro selects the family's
+// slim variant, so "ubuntu-slim:24.04" is the slim build of the same tag.
 func ParseRef(s string) (Ref, error) {
 	name, tag, hasTag := strings.Cut(s, ":")
 
-	d, ok := Lookup(name)
+	d, slim, ok := LookupImage(name)
 	if !ok {
 		return Ref{}, fmt.Errorf("unsupported distro %q: supported distros are %s (adding one requires an ADR, see docs/decisions/0006-initial-guest-distro-support.md)",
-			name, strings.Join(Names(), ", "))
+			name, strings.Join(ImageNames(), ", "))
 	}
 	if !hasTag {
 		tag = d.DefaultTag
@@ -318,5 +381,5 @@ func ParseRef(s string) (Ref, error) {
 	if !tagPattern.MatchString(tag) {
 		return Ref{}, fmt.Errorf("invalid tag %q for distro %q: tags must match %s", tag, name, tagPattern)
 	}
-	return Ref{Distro: d, Tag: tag}, nil
+	return Ref{Distro: d, Tag: tag, Slim: slim}, nil
 }

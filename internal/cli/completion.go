@@ -105,7 +105,7 @@ var valuelessFlags = map[string]bool{
 	"no-start": true, "all": true,
 }
 
-func distroCandidates(*App) []string { return distro.Names() }
+func distroCandidates(*App) []string { return distro.ImageNames() }
 
 // vmNames lists the VMs recorded in the state directory. Every failure is
 // swallowed: with no state directory yet, the answer is simply no candidates.
@@ -274,7 +274,7 @@ func (a *App) resolveSpec(typed []string) (*completionSpec, int) {
 func (a *App) flagValueCandidates(name string) []string {
 	if name == "distro" {
 		// Both a family and a cached `<distro>:<tag>` are valid here.
-		return append(distro.Names(), imageRefs(a)...)
+		return append(distro.ImageNames(), imageRefs(a)...)
 	}
 	return flagValues[name]
 }

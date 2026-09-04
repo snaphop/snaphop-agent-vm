@@ -193,6 +193,11 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and
   builder tool versions.
+  Each family also has a slim recipe, `<family>-slim.Containerfile`, built and
+  cached as a base image of its own under `images/<family>-slim/<tag>/`: the
+  same boot, cloud-init, clock, and SSH blocks and the same common Linux
+  tooling, without the language toolchains, coding agents, browser, Docker, and
+  nested virtualization stack.
 - **Public interface:** the on-disk image layout, the `manifest.json` schema, and
   the per-distro `Containerfile`s — which are the readable, reviewable form of all
   distro-specific knowledge in the project.
@@ -435,8 +440,10 @@ the project is `0.x`, breaking changes are allowed but must be called out in
 
 Entities:
 
-- **Base image** — identity is `(distro, tag)`; provenance is the source OCI
-  digest. Immutable once built. System of record: `images/<distro>/<tag>/`.
+- **Base image** — identity is `(image name, tag)`, where the image name is a
+  family (`ubuntu`) or its slim variant (`ubuntu-slim`); provenance is the
+  source OCI digest. Immutable once built. System of record:
+  `images/<image name>/<tag>/`.
 - **VM** — identity is its name, unique within a state directory. System of
   record for configuration and provenance: `vms/<name>/vm.json`. System of record
   for *runtime* state: libvirt. The tool reconciles the two rather than caching
@@ -464,7 +471,7 @@ One profile, parameterized:
 | libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session mode is unprivileged and NAT-only; bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
 | Network mode | `nat` (default), `bridge` | Bridge requires a pre-existing host bridge. |
 | State directory | user-local default, or a shared path | A shared path implies shared locks and shared images across users. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
-| Guest distro | `ubuntu`, `fedora`, `arch` | Pinned by digest per base image. |
+| Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim` variant of each | Pinned by digest per base image. A slim image is a separate base image, cached and rebuilt independently of the full one. |
 
 There are no feature flags, no build-time profiles, and no staging/production
 distinction — the tool runs on whatever host invokes it. Secrets are not part of

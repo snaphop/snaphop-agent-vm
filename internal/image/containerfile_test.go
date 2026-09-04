@@ -1446,3 +1446,132 @@ func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
 		}
 	}
 }
+
+// slimRecipes returns each family's full and slim recipe, so a test can state
+// what the two must share and what only the full one may carry.
+func slimRecipes(t *testing.T) map[string][2]string {
+	t.Helper()
+
+	recipes := map[string][2]string{}
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		if d.SlimContainerfile == "" {
+			t.Fatalf("%s has no slim recipe; every family has a slim variant", d.Name)
+		}
+		full, err := templates.FS.ReadFile("distro/" + d.Containerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.Containerfile, err)
+		}
+		slim, err := templates.FS.ReadFile("distro/" + d.SlimContainerfile)
+		if err != nil {
+			t.Fatalf("reading %s: %v", d.SlimContainerfile, err)
+		}
+		recipes[d.SlimContainerfile] = [2]string{string(full), string(slim)}
+	}
+	return recipes
+}
+
+// TestSlimContainerfiles_KeepTheBootAndCloudInitContract is what makes a slim
+// image a base image rather than a container that happens to have a kernel.
+//
+// Everything docs/cli.md calls the guest contract — the guest boots, gets an
+// address, resolves names, learns the time, reads the NoCloud seed and no
+// other datasource, and answers SSH — comes from a handful of blocks that the
+// full recipe carries. The slim recipe drops the agent tooling around them and
+// must keep every one of these, so each is required in both files: a change
+// that removes one from the full recipe fails here too, rather than leaving
+// this list quietly checking something nothing produces any more.
+func TestSlimContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
+	contract := []struct{ needle, why string }{
+		{"L+! /etc/resolv.conf", "guests built from it would have no DNS"},
+		{"/etc/tmpfiles.d/systemd-resolve.conf", "systemd's own `L` rule would win and resolv.conf would stay empty"},
+		{"systemd-resolved.service", "nothing would answer the stub resolver"},
+		{"systemd-networkd.service", "the guest would never get an address"},
+		{"datasource_list: [ NoCloud, None ]", "the guest could probe a metadata service on the network"},
+		{"cloud-init.target", "the guest would never receive its SSH key"},
+		{"chrony-wait.service", "a guest could be handed over with a clock weeks out"},
+		{"After=time-sync.target", "SSH would answer before the clock was correct"},
+		{"qemu-guest-agent.service", "the host could not query the guest"},
+		{"/dev/vda1 / ext4 defaults 0 1", "systemd's fstab generator would disagree with the kernel about the root filesystem"},
+		{"net.ipv4.ping_group_range", "an unprivileged account could not run ping"},
+	}
+
+	for slimName, pair := range slimRecipes(t) {
+		full, slim := pair[0], pair[1]
+		for _, want := range contract {
+			if !strings.Contains(full, want.needle) {
+				t.Errorf("the full recipe no longer contains %q; this list describes what a slim image must keep from it, so update both", want.needle)
+			}
+			if !strings.Contains(slim, want.needle) {
+				t.Errorf("%s does not contain %q: %s", slimName, want.needle, want.why)
+			}
+		}
+
+		// The kernel and the init system are the two things a container image
+		// lacks and a VM cannot boot without, whatever else is left out.
+		for _, unit := range []string{"cloud-init", "openssh", "sudo", "chrony"} {
+			if !strings.Contains(slim, unit) {
+				t.Errorf("%s does not install %s; a guest built from it could not be reached or configured", slimName, unit)
+			}
+		}
+	}
+}
+
+// TestSlimContainerfiles_LeaveOutTheAgentTooling is the point of the variant:
+// everything the full recipe installs for a coding agent is most of the build
+// time and most of the image, and a slim guest pays for none of it.
+func TestSlimContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
+	// Named as they appear in an instruction, lower-cased for comparison.
+	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "docker", "libvirt", "codex", "herdr", "npm"}
+
+	for slimName, pair := range slimRecipes(t) {
+		full, slim := pair[0], pair[1]
+		for _, tool := range excluded {
+			if !strings.Contains(strings.ToLower(full), tool) {
+				t.Errorf("the full recipe no longer mentions %q; this list describes what slim leaves out, so update both", tool)
+			}
+		}
+		for _, line := range strings.Split(slim, "\n") {
+			// Comments are where the slim recipe explains what it leaves out.
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			for _, tool := range excluded {
+				if strings.Contains(strings.ToLower(line), tool) {
+					t.Errorf("%s carries agent tooling (%s): %s", slimName, tool, strings.TrimSpace(line))
+				}
+			}
+		}
+
+		// The build context files are the agent's configuration and helper
+		// scripts; a slim image copies none of them in.
+		if strings.Contains(slim, "COPY ") {
+			t.Errorf("%s COPYs a file from the build context; a slim image ships no agent configuration", slimName)
+		}
+	}
+}
+
+// TestSlimContainerfiles_InstallTheCommonTooling keeps the promise the name
+// makes: a slim guest is a working Linux machine, not a stripped one.
+func TestSlimContainerfiles_InstallTheCommonTooling(t *testing.T) {
+	packages := map[string][]string{
+		distro.Ubuntu.SlimContainerfile: {"iputils-ping", "curl", "wget", "git", "build-essential", "python3", "jq", "vim", "tmux", "rsync"},
+		distro.Fedora.SlimContainerfile: {"iputils", "curl", "wget", "git", "gcc", "make", "python3", "jq", "vim", "tmux", "rsync"},
+		distro.Arch.SlimContainerfile:   {"iputils", "curl", "wget", "git", "base-devel", "python", "jq", "vim", "tmux", "rsync"},
+	}
+
+	for slimName, pair := range slimRecipes(t) {
+		wanted, ok := packages[slimName]
+		if !ok {
+			t.Fatalf("%s has no expected package list here; a new family's slim recipe must state the tooling it installs", slimName)
+		}
+		for _, pkg := range wanted {
+			if !strings.Contains(pair[1], pkg) {
+				t.Errorf("%s does not install %q; docs/cli.md promises a slim guest the same common tooling", slimName, pkg)
+			}
+		}
+	}
+}

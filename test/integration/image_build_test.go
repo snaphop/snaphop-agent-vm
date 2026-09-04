@@ -31,11 +31,13 @@ import (
 	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
 )
 
-// distros selects which families to build. Building all three takes tens of
-// minutes and several gigabytes, so a run can narrow it:
+// distros selects which images to build. Building all three takes tens of
+// minutes and several gigabytes, so a run can narrow it, and a slim variant is
+// named the way the command line names it:
 //
 //	go test -tags integration ./test/integration/... -distros=ubuntu
-var distros = flag.String("distros", "ubuntu,fedora,arch", "comma-separated distro families to build")
+//	go test -tags integration ./test/integration/... -distros=ubuntu-slim
+var distros = flag.String("distros", "ubuntu,fedora,arch", "comma-separated base images to build, e.g. ubuntu,fedora-slim")
 
 // requireTools skips the test when a tool it needs is absent, rather than
 // failing: a developer without libguestfs installed has not broken anything.
@@ -121,9 +123,9 @@ func TestImageBuild_ProducesABootableBaseImage(t *testing.T) {
 				path    string
 				minimum int64
 			}{
-				{store.BaseDiskPath(ref.Distro.Name, ref.Tag), 200 << 20},
-				{store.KernelPath(ref.Distro.Name, ref.Tag), 1 << 20},
-				{store.InitrdPath(ref.Distro.Name, ref.Tag), 1 << 20},
+				{store.BaseDiskPath(ref.ImageName(), ref.Tag), 200 << 20},
+				{store.KernelPath(ref.ImageName(), ref.Tag), 1 << 20},
+				{store.InitrdPath(ref.ImageName(), ref.Tag), 1 << 20},
 			} {
 				info, err := os.Stat(artifact.path)
 				if err != nil {
@@ -135,7 +137,7 @@ func TestImageBuild_ProducesABootableBaseImage(t *testing.T) {
 				}
 			}
 
-			assertGuestContract(t, store.BaseDiskPath(ref.Distro.Name, ref.Tag))
+			assertGuestContract(t, store.BaseDiskPath(ref.ImageName(), ref.Tag))
 		})
 	}
 }

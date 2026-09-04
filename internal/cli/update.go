@@ -267,7 +267,7 @@ func (a *App) updateOutput() io.Writer {
 // and the shared Rust toolchain. A VM whose base image predates this command,
 // or whose family is no longer supported, is reported rather than guessed at.
 func updateSteps(vm *state.VM) ([]distro.UpdateStep, error) {
-	family, ok := distro.Lookup(vm.BaseImage.Distro)
+	family, _, ok := distro.LookupImage(vm.BaseImage.Distro)
 	if !ok {
 		return nil, exitf(ExitUsage, "%s was built from %q, which is not a distro this build of agent-vm knows how to update.",
 			vm.Name, vm.BaseImage.Distro)

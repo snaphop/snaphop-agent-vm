@@ -17,6 +17,21 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- **Slim base images.** Every supported family now has a slim variant, named by
+  appending `-slim` to the family: `agent-vm image build ubuntu-slim`,
+  `agent-vm create work --distro fedora-slim`. It boots exactly like the full
+  image — same kernel command line, same cloud-init contract, same SSH and
+  clock behavior — and carries the same common Linux tooling (shells, editors,
+  `git`, `curl`, a C toolchain, Python, network utilities), but leaves out
+  everything the full recipe installs for a coding agent: mise and the language
+  toolchains, the agents themselves, Chromium and Playwright, Docker, and the
+  nested virtualization stack. For a VM that only has to run a build, a shell,
+  or a test suite, that is a much smaller image and a much shorter build. A
+  slim image is a separate base image with its own cache directory, manifest,
+  and name, so `ubuntu` and `ubuntu-slim` can be cached side by side and are
+  built, listed, and removed independently. `agent-vm update` skips the steps
+  for tooling a slim guest does not have.
+
 - **`agent-vm` now works on hosts whose own kernel cannot boot a libguestfs
   appliance.** libguestfs does all of its work — building the base image,
   writing the cloud-init seed — inside a small VM it boots for the purpose, and
