@@ -80,6 +80,8 @@ Minimum versions, all checked by `agent-vm doctor`:
 | `virt-install` | 4.0 | defining and starting domains |
 | libguestfs | 1.50 | `virt-make-fs` (base images and the cloud-init seed), `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `podman` | 4.0 | OCI pull, build, flatten |
+| `ip` (iproute2) | any | host bridge validation |
+| `ssh` (openssh-client) | any | reaching a guest, and a remote hypervisor |
 | `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub |
 
 `podman` is required and has no substitute today: the per-distro image recipes

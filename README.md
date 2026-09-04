@@ -105,6 +105,22 @@ Each is pinned by digest in its base image manifest, so a rebuild is explicit
 rather than something that happens behind your back. Adding a new distro
 *family* requires an ADR; adding a new tag within a supported family does not.
 
+Every family also has a **slim** variant, named by appending `-slim`
+(`ubuntu-slim`, `fedora-slim`, `arch-slim`). It boots identically — same kernel
+command line, same cloud-init contract, same SSH and clock behavior — and
+carries the same common Linux tooling, but none of the agent tooling below: no
+mise or language toolchains, no coding agents, no Chromium, no Docker, no
+nested virtualization stack. It is a much smaller image and a much shorter
+build, for a VM that only has to run a build, a shell, or a test suite:
+
+```bash
+agent-vm create build-01 --distro ubuntu-slim
+```
+
+A slim image is a separate base image with its own cache directory, manifest,
+and name, so `ubuntu` and `ubuntu-slim` can be cached side by side and are
+built and removed independently.
+
 ## What A VM Comes With
 
 A base image is not a bare distro: it carries the tools an agent expects to
