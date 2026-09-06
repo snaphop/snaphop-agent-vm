@@ -58,18 +58,18 @@ bind libvirt directly.
 | Task | Tool we invoke |
 |---|---|
 | Define and start a domain | `virt-install --import --boot kernel=…,initrd=…,kernel_args=…` |
-| Inspect domains | `virsh list --all`, `virsh dominfo`, `virsh dumpxml`, `virsh domblklist` |
+| Inspect domains | `virsh list --all --name`, `virsh domstate`, `virsh dumpxml`, `virsh domblklist`, `virsh domiflist` |
 | Lifecycle | `virsh start`, `virsh shutdown`, `virsh destroy`, `virsh undefine` |
 | Guest address | `virsh domifaddr --source agent` (fallback `--source lease`) |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
-| NAT network | `virsh net-define/net-start/net-autostart/net-list/net-dhcp-leases` |
+| NAT network | `virsh net-define/net-start/net-autostart/net-list` |
 | Host bridge check | `ip -d -json link show type bridge` |
-| Pull / build / flatten OCI images | `podman pull`, `podman build`, `podman create`, `podman export` (or `skopeo copy`) |
-| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
+| Pull / build / flatten OCI images | `podman pull`, `podman build`, `podman create`, `podman export` |
+| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2 --partition` |
 | Locate and extract kernel/initrd | `virt-ls`, `virt-copy-out` |
 | Generalize the base image | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
-| Disk facts | `qemu-img info --output=json` |
+| Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-make-fs --type=vfat --label=cidata` ([ADR-0011](./0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md); originally `virt-install --cloud-init`) |
 | Shell into a guest | `ssh` (exec'd, with the recorded key and address) |
 
@@ -79,15 +79,15 @@ Rules that follow from this decision:
    our own domain XML template, our own NoCloud ISO builder, or our own OCI layer
    extraction requires an ADR explaining why the existing tool could not be used.
 2. **Machine-readable output only.** Prefer `--output=json`, `--format json`,
-   `-json`, `--xml`, and structured `virsh` subcommands (`domifaddr`, `dominfo`,
-   `net-dhcp-leases`) over scraping human-formatted text. Where no structured
+   `-json`, and `--xml` over scraping human-formatted text. Some `virsh`
+   subcommands, including `domifaddr`, still return tables. Where no structured
    output exists, parse the narrowest possible thing and cover it with a fixture
    captured from the real tool.
 3. **Explicit argument vectors, never shell strings.** Every invocation is an
    argv, logged with its exit status. Untrusted values are validated and passed
    after `--` where a tool supports it.
 4. **Version floors, checked by `doctor`.** libvirt 9.0+, QEMU 8.0+,
-   `virt-install` 4.0+, libguestfs 1.50+, podman 4.0+ (or skopeo 1.11+). A missing
+   `virt-install` 4.0+, libguestfs 1.50+, podman 4.0+. A missing
    or too-old tool is a host-readiness failure (exit `3`) that names the tool and
    the version needed.
 5. **Record what ran.** `vm.json` records the `virt-install` version and argument

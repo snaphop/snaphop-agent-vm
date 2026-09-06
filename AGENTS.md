@@ -11,8 +11,9 @@
 
 - **Name:** `snaphop-agent-vm`
 - **What it does:** Creates and manages short-lived QEMU/KVM virtual machines on
-  a Linux host — via libvirt — so AI coding agents get a disposable,
-  network-isolated machine with root access instead of running on the host.
+  a Linux host — via libvirt — so AI coding agents get a disposable
+  machine with root access and NAT networking by default instead of
+  running on the host. NAT alone does not isolate host services or the LAN.
 - **Primary language / runtime:** Go 1.22+ (single static binary, `agent-vm`).
 - **Key dependencies / frameworks:** existing host CLI tools, orchestrated rather
   than reimplemented (ADR-0009) — `virt-install` (defines domains), `virsh`
@@ -57,13 +58,15 @@ update them in the same change if the implementation must diverge.
 
 Users are developers and agent supervisors who need a throwaway machine per
 task: a VM is created in seconds from a cached base image, the agent works
-inside it as root, and the VM is destroyed afterwards. The three invariants that
+inside it as the `agent` user with passwordless `sudo` by default, and the VM
+is destroyed afterwards. The three invariants that
 matter most are **the guest is untrusted** (an agent inside it may run arbitrary
 code, so nothing the host cares about may be reachable by default), **base
-images are content-addressed and reproducible** (a VM's root disk is always a
-copy-on-write overlay on an immutable, digest-pinned base, so creation is fast
-and repeatable), and **we orchestrate existing tools rather than reimplementing
-them** (ADR-0009 — if `virt-install`, `virsh`, `podman`, `qemu-img`, or libguestfs
+images are immutable and their source digest is recorded** (a VM's root disk
+is a copy-on-write overlay on a cached base, so creation reuses the same
+artifact; the cache is keyed by distro and tag, and unpinned package and tool
+versions mean rebuilding is not bit-for-bit reproducible), and **we orchestrate
+existing tools rather than reimplementing them** (ADR-0009 — if `virt-install`, `virsh`, `podman`, `qemu-img`, or libguestfs
 already does something, we call it; writing our own version of it requires an ADR
 saying why the tool could not be used).
 
@@ -78,7 +81,7 @@ path documented.
 
 ```text
 .
-├── cmd/agent-vm/           # CLI entry point (flag parsing, exit codes only)
+├── cmd/agent-vm/           # CLI entry point (signals and exit status only)
 ├── internal/
 │   ├── cli/                # subcommand implementations
 │   ├── config/             # config file, env vars, defaults, validation
@@ -178,14 +181,15 @@ of the configured host bridge. It must exit non-zero (`3`) with an actionable
 message naming the tool and version when the host is not ready. Because the design
 delegates to host tools, this check is load-bearing, not a nicety.
 
-`--dry-run` on any command prints the exact tool invocations it would run. Use it
-to review a change without a KVM host.
+`--dry-run` prints planned tool invocations and skips mutations. Read-only
+queries may still run; build and create plans use placeholders for values that
+only exist after execution. Use it to review a change without creating a VM.
 
 Host preparation beyond package installation (bridge creation, libvirt NAT
 network definition, storage location, unprivileged access) is documented in
 [`docs/host-setup.md`](./docs/host-setup.md). No credentials are required for
-development; public registries are the only external dependency, and offline
-work is possible once a base image is cached.
+development. Image builds use public registries, package mirrors, and tool
+download services; offline VM creation is possible once a base image is cached.
 
 ## 4. Common Commands
 
@@ -218,7 +222,8 @@ The scripts stay the source of truth.
 **Minimum verification before handoff:** `scripts/check.sh`, which runs
 `gofmt -l .` (must be empty), `go vet ./...`, `golangci-lint run`, and
 `go test ./...`. It warns loudly instead of passing silently when
-`golangci-lint` is not installed.
+`golangci-lint` is not installed. Several doctor unit tests currently inspect
+the real `/dev/kvm` and can fail without it; see `CONTRIBUTING.md`.
 
 Additional checks required for specific changes:
 
@@ -238,10 +243,11 @@ Additional checks required for specific changes:
   transport, `internal/state`'s `FS`, or the libvirt URI: verify against both a
   local and a `qemu+ssh://` connection, or say which you could not.
 
-**The integration suite creates and destroys real VMs, networks, and disk
-images on the host it runs on.** It uses a dedicated `agent-vm-test-` name prefix
-and its own state directory. Never point it at a state directory holding VMs
-someone cares about, and never run it against a production libvirt host without
+**The integration suite creates and destroys real VMs and disk images on its
+target host.** VM names use the `agent-vm-test-` prefix and state belongs in a
+dedicated test directory. NAT lifecycle tests use the shared `agent-vm-nat`
+network, creating it if absent and leaving it in place after the run. Never point
+it at a state directory holding VMs someone cares about, and never run it against a production libvirt host without
 explicit approval.
 
 ## 5. Architecture And Runtime Notes
@@ -284,25 +290,31 @@ Major modules and responsibilities:
   — are wrapped in `ssh` here rather than at each call site (ADR-0010). Only `gh`
   and the `ssh` into a guest stay on the client.
 
-Flow for `agent-vm create`: resolve config → check host readiness → ensure base
-image (build if the cache misses) → allocate the VM's state directory under a lock
-→ `qemu-img create` the overlay with the base as backing file → generate the
-cloud-init user-data and meta-data and build the NoCloud seed with `virt-make-fs`
-→ ensure the network → one `virt-install --import --boot
+Flow for `agent-vm create`: resolve config and validate input files → check
+required tool versions (not the full `doctor` report) → lock and check the VM
+name → ensure base image (build if the cache misses) → allocate the VM's state
+directory → generate cloud-init user-data and meta-data and build the NoCloud
+seed with `virt-make-fs` → `qemu-img create` the overlay with the base as backing
+file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
-read-only virtio disk (ADR-0011) → poll `virsh domifaddr` and wait for
-SSH → capture `virsh dumpxml` and write `vm.json`. Every step is idempotent or
-fully rolled back; a failed `create` must not leave a defined domain or a
-half-written state directory behind.
+read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
+→ poll `virsh domifaddr` and wait for SSH (unless waiting is disabled)
+→ optionally register the guest public key with GitHub. Failures through recording
+roll back the domain and per-VM directory; a boot-wait or GitHub registration
+failure retains the recorded VM for inspection. Built base images and the shared
+NAT network remain reusable. Cleanup failures must report what remains.
 
 Runtime profiles and configuration: a single profile, parameterized by the
-libvirt URI (`qemu:///system` by default, `qemu:///session` supported for
-NAT-only unprivileged use, and `qemu+ssh://[user@]host/system` to drive a
+libvirt URI (`qemu:///system` by default, `qemu:///session` accepted with
+NAT mode but requiring a managed network the connection can use, and `qemu+ssh://[user@]host/system` to drive a
 hypervisor on another machine — other remote transports are refused, because
 they reach libvirt but give no shell to build images and disks with), the state
 directory, and the network mode. There is
-no database, queue, or cache beyond the base image cache on local disk. External
-services are container registries, contacted only during an image build.
+no database or queue; the base image cache and VM records live on the
+hypervisor. Image builds contact container registries, distro package mirrors,
+and, for full images, tool and vendor download services. `--github-ssh-key`
+contacts GitHub from the client; `update` downloads packages and tools from
+inside guests.
 
 Canonical contracts and what must change together: `docs/cli.md` (flags,
 subcommands, exit codes, underlying commands), `test/golden/` (`virt-install` argv
@@ -311,8 +323,9 @@ constants, and `docs/host-setup.md` when host prerequisites change. A change to 
 one of these usually requires the others in the same commit.
 
 Compatibility constraints: libvirt 9.0+, QEMU 8.0+, and `virt-install` 4.0+ are the
-floor; x86_64 and aarch64 hosts are supported, and architecture differences
-(machine type, firmware) are `virt-install`'s responsibility rather than ours; base
+floor; x86_64 and aarch64 hosts are supported, and `virt-install` selects
+architecture-specific machine and device defaults;
+we explicitly disable ACPI for direct kernel boot on aarch64; base
 images built by an earlier release must stay bootable, and a breaking manifest
 change requires a `schemaVersion` bump plus a documented rebuild path.
 

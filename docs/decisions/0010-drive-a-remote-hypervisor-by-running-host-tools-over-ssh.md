@@ -63,8 +63,8 @@ Concretely:
 
 - `internal/hostexec` gains a `Location` on each command and a `Remote` runner.
   Hypervisor-located commands — the default, and correct for everything that
-  touches a disk, an image, or a domain — are wrapped in `ssh <destination> --
-  <argv>`. Client-located commands stay here: `gh`, which uses the operator's
+  touches a disk, an image, or a domain — are wrapped in `ssh -- <destination>
+  <quoted-command>`. Client-located commands stay here: `gh`, which uses the operator's
   GitHub login, and the `ssh` into a guest, which uses their keys and terminal.
 - `virsh` and `virt-install` run **on the hypervisor**, with the URI as that
   machine reads it: `qemu+ssh://kvm@host/system` becomes `qemu:///system` at the

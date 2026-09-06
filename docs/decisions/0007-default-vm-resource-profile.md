@@ -48,7 +48,8 @@ Easier:
 
 - `agent-vm create <name>` produces a machine that can do real work without
   anyone reading the flag list first.
-- Three or four concurrent VMs fit comfortably on a 16 GiB laptop.
+- Several VMs can share a developer host, provided its capacity leaves room for
+  the host OS and QEMU overhead; four defaults alone request 16 GiB of guest RAM.
 - The 50 GiB disk costs a few megabytes at creation, so the generous default is
   effectively free until used.
 

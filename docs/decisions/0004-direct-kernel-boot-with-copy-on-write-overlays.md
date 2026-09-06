@@ -28,7 +28,9 @@ image bootloader-capable at all.
 
 The trade is real: with direct kernel boot, the kernel that runs comes from the
 host-side artifact, not from the guest's filesystem. A guest that installs a new
-kernel package keeps booting the old one until the base image is rebuilt.
+kernel package does not change the host-side boot artifacts. To adopt a new
+kernel through the supported image workflow, destroy dependent VMs, rebuild the
+base image, and create replacement VMs.
 
 For disposable, task-scoped VMs that live minutes to hours, "the guest can
 upgrade its own kernel and reboot into it" is close to worthless, and boot latency
@@ -44,13 +46,14 @@ qemu-img create -f qcow2 -b <base.qcow2> -F qcow2 root.qcow2 50G
 
 The base file is opened read-only. The `--disk` size is the overlay's virtual
 size; nothing is preallocated. Deleting a base image while any overlay depends on
-it is refused.
+it is refused unless the operator explicitly uses `image rm --force`, which
+makes dependent VM disks unreadable.
 
 **Guests boot via direct kernel boot**, expressed to `virt-install` (ADR-0009) as:
 
 ```bash
 virt-install --import --disk path=root.qcow2,bus=virtio \
-  --boot kernel=<images>/vmlinuz,initrd=<images>/initrd,kernel_args="root=/dev/vda1 console=ttyS0 rw"
+  --boot kernel=<images>/vmlinuz,initrd=<images>/initrd,kernel_args="root=/dev/vda1 console=ttyS0 console=ttyAMA0 rw memhp_default_state=online_movable"
 ```
 
 The kernel and initramfs are the artifacts extracted during the image build, and
@@ -78,12 +81,14 @@ Easier:
 Harder:
 
 - **A guest cannot change its own kernel.** `apt upgrade` installing a new kernel
-  changes nothing until the base image is rebuilt. This surprises users who expect
+  does not change the boot artifacts; adopting it requires rebuilding the base
+  and creating replacement VMs. This surprises users who expect
   a normal VM, so it is documented in the README, the architecture risks section,
   and the host setup guide.
 - The base image is load-bearing for every VM built on it. Corruption or accidental
   deletion breaks all of them at once, so base images are immutable, opened
-  read-only, and protected by a refusal to remove them while in use.
+  read-only, and protected by a refusal to remove them while in use unless
+  explicitly forced.
 - Overlay chains hide real disk consumption: a 50 GiB VM reports 50 GiB virtual
   and a few megabytes actual, and ten of them can overcommit a disk that looked
   fine at creation time.

@@ -41,8 +41,11 @@ image manifest:
 | `fedora` | `registry.fedoraproject.org/fedora:42` | `kernel-core`, `dracut` |
 | `arch` | `docker.io/library/archlinux:base` | `linux`, `mkinitcpio` |
 
-Distro-specific knowledge lives in one place, `internal/image/distro/`, as a
-distro definition — not as `switch` statements spread across packages. Adding a
+Distro-specific build recipes live in `templates/distro/`, with definitions in
+`internal/image/distro/` for source references, artifact names, and behavior a
+Containerfile cannot express. They are not spread across packages as `switch`
+statements. Each family also has a separately cached `-slim` variant, sharing its
+boot and cloud-init contract while omitting the full image's heavier tooling. Adding a
 tag within a supported family is routine. **Adding a new distro family requires an
 ADR**, because it commits the project to ongoing maintenance and integration
 coverage.
@@ -67,11 +70,13 @@ Easier:
 
 Harder:
 
-- Three build recipes to maintain against upstream changes: package renames,
+- Three distro families, each with full and slim recipes, to maintain against
+  upstream changes: package renames,
   `cloud-init` behavior changes, container images dropping something we depend on.
 - Arch is a rolling target — a rebuilt base image is not last week's base image.
-  Reproducibility comes from the recorded digest, and Arch base rebuilds are more
-  likely to break than the others.
+  The digest records the source OCI image; subsequently installed packages
+  and tools can still change. Arch base rebuilds are more likely to break
+  than the others.
 - Integration runtime grows with each family, and the suite already requires a
   KVM-capable host.
 - Users of Debian, Alpine, or RHEL derivatives are not served out of the box, and

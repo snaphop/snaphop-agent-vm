@@ -30,9 +30,9 @@ Requirements that shape the design:
 - **Operator legibility**: everything is standard libvirt/QEMU. An operator can
   `virsh list`, `virsh dumpxml`, and `virsh console` without this tool.
 
-Deliberately outside this repository: guest-side agent runtime and tooling
-(supplied through cloud-init or a customized base image), multi-host scheduling,
-authentication of remote callers, and long-lived VM fleet management. This is a
+The full base images include guest-side agent tooling; slim images omit it,
+and cloud-init can customize either variant. Deliberately outside this repository:
+multi-host scheduling, authentication of remote callers, and long-lived VM fleet management. This is a
 single-host tool with no daemon of its own.
 
 ## High-Level Design
@@ -76,8 +76,8 @@ performed by the standard tool that already does it. `internal/hostexec` is the
 only package that spawns a process, so argv construction, logging, and exit-status
 handling exist in exactly one place.
 
-Everything below the dashed line above is on **the machine libvirt runs on**. By
-default that is the machine the command was typed on, and the two are the same. A
+The host tools, state directory, and guests in the diagram are on
+**the machine libvirt runs on**. By default that is the machine the command was typed on, and the two are the same. A
 `qemu+ssh://` libvirt URI separates them: the tools, the state directory, and the
 guests are on the hypervisor, and `agent-vm` drives them from the client by
 wrapping each invocation in `ssh`
@@ -104,7 +104,9 @@ Trust boundaries, from most to least trusted:
    is validated before use, and nothing is exposed to it beyond its own virtual
    devices.
 4. **Container registries** — untrusted content, pinned by digest and recorded
-   in the base image manifest so what booted is always identifiable.
+   in the base image manifest so the source of a build is identifiable. Package
+   and agent-tool versions
+   installed during the build can change independently of that source digest.
 
 ### Task-To-Tool Map
 
@@ -141,8 +143,9 @@ stores the `virt-install` version and argv that defined the domain, and
 this?" is always answerable from the state directory.
 
 All work is synchronous and foreground; there is no queue, scheduler, or
-background worker. The only long waits are image builds (minutes, once per
-distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
+background worker. Long waits include image builds, the guest boot wait during `create`
+(bounded by `--wait-for-ssh`), graceful shutdown, and guest software updates
+(bounded by `update --timeout`).
 
 ## Components
 
@@ -204,11 +207,12 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 - **Key dependencies:** `podman`, `qemu-img`, libguestfs
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), each behind an
   interface so tests substitute a fake at the process boundary. Network access to a
-  registry — the only external dependency in the system.
+  registry, distro package mirrors, and tool download services.
 - **Failure behavior:** builds into a temporary directory and renames into place
-  only on success, so a failed or interrupted build never leaves a partially
-  written base image that a VM could boot from, and the workspace is removed
-  whether the failure was ours or a tool's. Nothing is retried: a failed pull or
+  on success. Build failures attempt to remove the workspace and report cleanup
+  errors. Publishing a rebuild moves the old directory aside before installing
+  the new one; an abrupt interruption between renames can leave a `.previous`
+  directory requiring recovery. Nothing is retried: a failed pull or
   build surfaces the tool's own error and the operator reruns `image build`. A
   digest that cannot be read back from what was pulled is fatal, and the build
   never falls back to an unpinned reference. A rebuild keeps the previous image
@@ -251,8 +255,8 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 - **Key dependencies:** `virt-install` (4.0+), `virsh`, libvirt (9.0+), QEMU (8.0+).
   Architecture differences (machine type, firmware) are `virt-install`'s job, not
   ours — a significant reason for ADR-0009.
-- **Failure behavior:** define and start are separate steps, so a rejected
-  configuration fails before anything runs. Graceful shutdown is bounded by a
+- **Failure behavior:** one `virt-install` invocation defines and starts the
+  domain; there is no separate define-only stage. Graceful shutdown is bounded by a
   timeout and then reported — never silently escalated to a force-off. Failures
   surface the tool, its argv, its exit status, its stderr, and the tail of the guest
   console log, which is where boot problems are actually visible.
@@ -269,7 +273,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   `net-start`, `net-autostart`). Bridge mode — validate with `ip -d -json link show
   type bridge` that the named bridge exists and is up, then pass
   `--network bridge=<iface>` to `virt-install`. MAC allocation is left to
-  `virt-install`/libvirt and read back from `virsh dumpxml` into `vm.json`.
+  `virt-install`/libvirt and read back from `virsh domiflist` into `vm.json`.
 - **Failure behavior:** a missing or down bridge is a host-readiness failure
   (exit `3`) with the `nmcli`/`ip` command needed to fix it, not a half-created
   VM. The tool never creates, modifies, or deletes host bridges, and never edits
@@ -287,10 +291,10 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
   transport for a remote hypervisor (ADR-0010).
 - **Public interface:** the state layout and `vm.json` schema.
 - **Failure behavior:** every path is resolved and checked to be inside
-  `$STATE_DIR` before any write or delete, identically on either machine. A stale
-  lock from a crashed process is detectable and reported rather than silently
-  broken; a remote lock is held by a process whose stdin this tool keeps open, so
-  it is released the same way a local one is when that process dies. A `vm.json`
+  `$STATE_DIR` before any write or delete, identically on either machine. Locks are
+  released by the kernel when their holder exits; a contended lock reports its
+  holder. A remote lock is held by a process whose stdin this tool keeps open,
+  and is released when that remote process exits. A `vm.json`
   with an unknown `schemaVersion` is refused, not guessed at.
 - **Compatibility constraints:** the layout is public; scripts and operators read
   it directly.
@@ -362,24 +366,24 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
 1. **Resolve and validate.** Merge defaults, config, env, flags. Validate the VM
    name against `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`, parse sizes, read the SSH
    public key. Any failure exits `2` with nothing changed.
-2. **Host readiness.** Confirm the libvirt connection (`virsh connect`/`virsh
-   version`), `/dev/kvm`, and the presence and versions of the helper tools.
-   Failure exits `3`.
-3. **Ensure the base image.** Cache hit → use it. Cache miss → build it under an
+2. **Required tools.** Check the presence and versions of `virt-install`,
+   `virsh`, and `qemu-img`. This is not the full `doctor` check; run `doctor`
+   separately to verify KVM and the rest of the host configuration.
+3. **Claim the name.** Take the per-VM lock, check stored records, and query
+   libvirt for a domain with that name. Either existing record or domain exits
+   `5` before an image is built.
+4. **Ensure the base image.** Cache hit → use it. Cache miss → build it under an
    image lock: `podman pull` → `podman build` → `podman export` → `virt-make-fs` →
-   `virt-ls`/`virt-copy-out` → `virt-sysprep` → write `manifest.json`, all in a
-   temporary directory that is renamed into place only on success. A registry or
-   build failure exits without creating a VM.
-4. **Claim the VM.** Take the per-VM lock and create `vms/agent-01/`. An existing
-   VM of that name exits `5`.
-5. **Create the overlay.**
+   `virt-ls`/`virt-copy-out` → `virt-sysprep` → write `manifest.json`. Build
+   artifacts are prepared in a temporary directory and installed on success.
+   A registry or build failure exits without creating a VM.
+5. **Build the cloud-init seed.** Create `vms/agent-01/`, write `seed/user-data`
+   with hostname, guest user and authorized keys, and `seed/meta-data` with the
+   instance id, then `virt-make-fs --type=vfat --label=cidata seed/ seed.img`.
+   The seed is attached as a read-only virtio disk (ADR-0011).
+6. **Create the overlay.**
    `qemu-img create -f qcow2 -b <base.qcow2> -F qcow2 root.qcow2 50G`. The base
-   file is opened read-only; nothing in this step or later mutates it.
-6. **Build the cloud-init seed.** Write `seed/user-data` with hostname, guest
-   user and authorized keys, and `seed/meta-data` with the instance id, then
-   `virt-make-fs --type=vfat --label=cidata seed/ seed.img`. The seed is attached
-   as a read-only virtio disk, which is the only kind a guest sees before
-   cloud-init chooses a datasource (ADR-0011).
+   file is opened read-only; VM creation does not mutate it.
 7. **Ensure networking.** `virsh net-list`/`net-define`/`net-start` for the NAT
    network, or `ip -d -json link` validation of the bridge.
 8. **Define and start.** Read the hypervisor's architecture with `virsh
@@ -399,7 +403,7 @@ distro) and the guest boot wait during `create` (bounded by `--wait-for-ssh`).
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence. Then print the result.
 
-Rollback: steps 4–9 are undone in reverse on failure — `virsh destroy`, `virsh
+Rollback: steps 5–9 are undone in reverse on failure — `virsh destroy`, `virsh
 undefine`, then delete the overlay, the seed, and the state directory. Step 10 is the
 deliberate exception noted above: a boot-wait timeout preserves the VM and its
 console log rather than destroying the evidence. `undefine` is
@@ -409,8 +413,8 @@ differently than we do. If a cleanup step itself fails, the tool reports exactly
 what remains on the host and exits `7`. It never reports success with host state
 left behind, and never deletes anything outside `$STATE_DIR`.
 
-`--dry-run` prints the full sequence of tool invocations for any operation without
-running them, which doubles as the documentation of what the tool does and lets an
+`--dry-run` prints planned tool invocations, using placeholders for values that
+require execution, which doubles as the documentation of what the tool does and lets an
 operator perform the same work by hand.
 
 `destroy` is the same path in reverse, and only ever acts on domains and paths
@@ -433,8 +437,8 @@ recorded in `vm.json`.
 What must change together: implementation, `--help` text, `cli.md`, golden files,
 and — when a stored schema changes — the `schemaVersion` constant plus a
 documented upgrade or rebuild path. Versioning follows SemVer on the CLI; while
-the project is `0.x`, breaking changes are allowed but must be called out in
-`CHANGELOG.md`.
+the project is `0.x`, breaking changes still require explicit approval, a
+documented migration path, and an entry in `CHANGELOG.md`.
 
 ## Data Model And State
 
@@ -442,7 +446,9 @@ Entities:
 
 - **Base image** — identity is `(image name, tag)`, where the image name is a
   family (`ubuntu`) or its slim variant (`ubuntu-slim`); provenance is the
-  source OCI digest. Immutable once built. System of record:
+  source OCI digest. Read-only during VM use; an explicit rebuild replaces the
+  cached artifacts.
+  The cache is keyed by name and tag, not by content digest. System of record:
   `images/<image name>/<tag>/`.
 - **VM** — identity is its name, unique within a state directory. System of
   record for configuration and provenance: `vms/<name>/vm.json`. System of record
@@ -453,14 +459,17 @@ Entities:
 
 Consistency: single-writer per VM and per base image, enforced by file locks.
 Operations are idempotent or rolled back; there are no partial commits by design.
-Deleting a base image while an overlay depends on it is refused, because a
-backing file is not optional.
+Deleting a base image while an overlay depends on it is refused unless
+`image rm --force` explicitly overrides the check; that override makes the
+dependent disks unreadable.
 
-Sensitive data: none is stored by design. `vm.json` records the *path* of the
-authorized public key, not private material. Operator-supplied cloud-init data
+Host private keys are never stored. `vm.json` records the *paths* of authorized
+public keys and, with `--github-ssh-key`, the guest-generated public key.
+Operator-supplied cloud-init data can contain sensitive configuration and
 lives only in the per-VM seed and is deleted with the VM. Guest disk contents are
-whatever the agent wrote and are destroyed with the VM; nothing is retained after
-`destroy`.
+whatever the agent wrote and are destroyed with the VM; `destroy --keep-disk`
+deliberately retains the VM directory and its contents.
+A GitHub key remains registered unless `destroy --github-ssh-key` removes it.
 
 ## Runtime Profiles And Configuration
 
@@ -468,9 +477,9 @@ One profile, parameterized:
 
 | Dimension | Options | Notes |
 |---|---|---|
-| libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session mode is unprivileged and NAT-only; bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
+| libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session URIs are accepted only with NAT mode, but the host must support the managed libvirt NAT network; this is not a user-mode networking fallback. Bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
 | Network mode | `nat` (default), `bridge` | Bridge requires a pre-existing host bridge. |
-| State directory | user-local default, or a shared path | A shared path implies shared locks and shared images across users. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
+| State directory | user-local default, or a shared path | Operators using the same hypervisor account share locks and images. Cross-user access needs additional permissions; defaults are not group-writable. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
 | Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim` variant of each | Pinned by digest per base image. A slim image is a separate base image, cached and rebuilt independently of the full one. |
 
 There are no feature flags, no build-time profiles, and no staging/production
@@ -489,7 +498,7 @@ configuration; the only key material referenced is an SSH public key path.
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause, and a host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel` | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
-| `ssh` | any | `agent-vm ssh`, `agent-vm update` | Only those subcommands fail | Host operator |
+| `ssh` | any | Guest SSH, boot readiness, updates, and all remote-hypervisor operations | Guest connections and remote operations fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |
 | Container registries | — | Source images | `image build` fails; unaffected once cached | Retry; pin digests to avoid surprise drift |
 | `cloud-init` in the guest | — | First-boot configuration | VM boots but has no user or SSH key; surfaces as a `--wait-for-ssh` timeout | Console log shows cloud-init output; fix the base image |
@@ -568,13 +577,16 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   requiring root directly, but its appliance is the most fragile dependency in
   the system and the most common source of confusing build failures.
 - **Direct kernel boot means the host holds the kernel.** A guest that updates
-  its own kernel package will not boot the new kernel until the base image is
-  rebuilt. This is a deliberate trade for boot speed
+  its own kernel package continues booting the host-side kernel. Use a rebuilt
+  base image and a newly created VM to boot a newer kernel. This is a deliberate
+  trade for boot speed
   ([ADR-0004](./decisions/0004-direct-kernel-boot-with-copy-on-write-overlays.md)),
   and a documented surprise for users who expect a normal VM.
 - **Arch Linux is a rolling target.** A rebuilt Arch base image is not the same
-  image as last week's; reproducibility comes from the recorded digest, not from
-  the tag.
+  image as last week's; the recorded digest identifies the source OCI image,
+  not all packages and
+  tooling installed during the build. Rebuilding from the same digest is not
+  guaranteed to produce identical artifacts.
 - **Bridged mode removes a boundary.** A VM on the LAN is reachable by anything
   on the LAN, including other people's machines. It exists because some workflows
   need it, not because it is safe by default.

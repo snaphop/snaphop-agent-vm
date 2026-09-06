@@ -25,7 +25,7 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 | `--verbose` | off | Debug-level logging to stderr. |
 | `--quiet` | off | Suppress progress output; errors and warnings still go to stderr. |
 | `--yes` | off | Skip interactive confirmation for destructive operations. |
-| `--dry-run` | off | Print the exact tool invocations the operation would run, and exit 0 without changing anything. |
+| `--dry-run` | off | Print planned invocations without mutations; values that require execution use placeholders. Input validation and read-only checks can still fail. |
 | `--help` | — | Print usage and exit `0`. After a command — `agent-vm create --help` — print that command's invocation and its own flags instead. |
 | `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. |
 
@@ -84,6 +84,11 @@ URI parameters honored: `keyfile=<path>` (offered to ssh as `-i`) and
 `no_verify=1` (skips host key checking, matching what you already told libvirt).
 A password in the URI is refused: it cannot be handed to ssh, and ignoring it
 would leave you wondering why you are prompted.
+
+Local and remote `/session` URIs are accepted with NAT mode only. They still
+require the host to support a managed libvirt NAT network; accepting the URI
+does not provide a user-mode networking fallback. See
+[host setup](./host-setup.md) for connection and network prerequisites.
 
 Only `qemu+ssh://` is accepted for a remote hypervisor. `qemu+tls://`,
 `qemu+tcp://`, and the `libssh` transports reach libvirt but give `agent-vm` no
@@ -211,8 +216,9 @@ by `--github-ssh-key`, so a host without it is still a ready host.
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
 `/dev/kvm` and libvirt access another way and the checks that test those directly
-are the ones that matter. Free space below 10 GiB is a warning: a cached base
-image needs 2–3 GiB and thin overlays grow as guests write. A NAT network that is
+are the ones that matter. Free space below 10 GiB is a warning: base-image
+size and build workspace requirements vary substantially, especially for full
+tooling images, and thin overlays grow as guests write. A NAT network that is
 not defined yet is a pass — `create` defines it on demand, on
 `192.168.171.0/24` with libvirt allocating the bridge device (see
 [`docs/host-setup.md`](./host-setup.md#5-nat-networking-default)). `doctor` only inspects;
@@ -332,13 +338,18 @@ built. `create` builds a missing image the same way and reports it the same way.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--from <ref>` | distro's pinned default | Override the source OCI reference. |
-| `--force` | off | Rebuild even if a cached image with the same source digest exists. |
+| `--from <ref>` | distro's default source tag | Override the source OCI reference. |
+| `--force` | off | Rebuild even if this image name and tag are already cached. Without it, the cache is returned without checking the source again. |
 | `--platform <os/arch>` | host platform | Image platform to pull. |
 
 Building is the only operation that requires network access to a registry. It is
 safe to run concurrently for different distros, and a second build of the same
 one waits for the first to finish rather than racing it.
+
+Before `image build --force`, destroy VMs backed by that image name and tag.
+A rebuild replaces the backing disk and host-side kernel at the same paths; it
+does not preserve the old artifacts for existing overlays or refuse an in-use
+image. Create replacement VMs after the rebuild.
 
 #### Slim images
 
@@ -361,12 +372,16 @@ independently, and neither one's rebuild disturbs VMs backed by the other.
 packages are updated, and the steps for tooling a slim guest does not carry are
 skipped.
 
-The whole build happens in a temporary directory under `images/` that is renamed
-into place only on success, so a failed or interrupted build leaves no image
-behind — and a rebuild keeps the previous image until the new one is complete.
-The source image is pulled by tag, then pinned to the digest that was actually
+The build prepares artifacts in a temporary directory under `images/` and
+installs them on success. During a rebuild the previous image is moved aside
+before the new directory is installed, then removed; failed installation attempts
+restore it. An abrupt interruption during those renames can leave a `.previous`
+directory requiring recovery.
+The source image is pulled by its requested reference, then pinned to the digest that was actually
 fetched; everything after the pull is built on the digest, and the digest is what
-`manifest.json` records.
+`manifest.json` records. The cache is keyed by image name and tag, not digest.
+Packages and agent tools installed by the recipe can change independently, so
+the source digest does not guarantee a byte-for-byte reproducible rebuild.
 
 Every base image makes the same promises to the VMs built on it, and those
 promises are the guest contract: `sshd`, `systemd-networkd`, and the cloud-init
@@ -406,9 +421,10 @@ instead of on every first boot, and a VM works the same way offline.
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
-three. Everything except the coding agents, `herdr`, `tea`, `wrangler`, `cf`,
-Playwright's browsers, mise, Go, and Rust comes from the distro's own
-repository.
+three. The common Linux packages come from the distro's own repository. Coding
+agents, Herdr, tea, mise, Node.js, the JVM and Go toolchains, golangci-lint,
+Rust, and the Cloudflare and Playwright tools use the upstream installation
+paths described below.
 
 Docker can build for a foreign architecture out of the box: `docker build
 --platform linux/arm64 .` works on an x86_64 host, and `--platform
@@ -450,7 +466,7 @@ A guest that can never reach an NTP server never synchronizes.
 
 #### Coding agents
 
-Every base image carries five coding agents, so a VM is usable by an agent the
+Every full base image carries five coding agents, so a VM is usable by an agent the
 moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. All five
 are vendor-built native binaries; `agy` and `codex` come from their vendors' own
 installer scripts into `/usr/local/bin`, where every account on the VM finds
@@ -475,7 +491,7 @@ it is around 300 MiB — with the command itself in `/usr/local/bin`. Each accou
 gets a symlink to it at `~/.codex/packages/standalone/current` on first boot, so
 credentials and configuration stay per-account.
 
-Every VM starts Codex's remote-control daemon at boot for `root` and every
+Every VM built from a full image starts Codex's remote-control daemon at boot for `root` and every
 interactive account, through the `agent-vm-codex-remote-control.service` unit
 (`codex remote-control start`). That daemon needs credentials, which are per-VM
 and never come from a base image or a seed, so on a VM where nobody has run
@@ -487,7 +503,7 @@ agent-vm-codex-remote-control` is where a failure is reported.
 
 #### The Herdr terminal workspace
 
-Every base image also carries [Herdr](https://herdr.dev), a terminal workspace
+Every full base image also carries [Herdr](https://herdr.dev), a terminal workspace
 manager built for coding agents: the server owns the panes the agents run in, so
 an agent left working in a pane keeps working while nobody is attached. It is
 installed with `mise` (`mise use -g herdr`) like `claude`, `opencode`, and `pi`,
@@ -542,8 +558,7 @@ That browser is also exposed as plain `chromium`, so it is usable without going
 through Playwright.
 
 The browsers live in `/opt/ms-playwright`, shared by every account rather than
-downloaded per user into `~/.cache` — which a network-isolated guest could not
-do at all. That directory is world-writable with the sticky bit, the way `/tmp`
+downloaded per user into `~/.cache` — so accounts do not need separate downloads. That directory is world-writable with the sticky bit, the way `/tmp`
 is, because every `playwright install` after the build runs as an account that
 is not root and Playwright writes a `__dirlock` and a `.links` entry into it: a
 root-owned directory would fail those installs with `EACCES`. Any account may
@@ -576,7 +591,7 @@ overlay. A symlink costs neither.
 
 The newest Temurin JDK mise offers and Maven are installed into that store
 during the build, so every account has `java` and `mvn` without downloading anything —
-which a network-isolated guest could not do anyway. Neither version is pinned:
+which also works when the guest cannot reach download servers. Neither version is pinned:
 they are whatever was current when the image was built. The JDK is requested as
 `java@temurin` rather than `java@latest`, which would be an Oracle build of
 OpenJDK: mise names a distribution by prefix.
@@ -645,8 +660,9 @@ library installs perfectly and exits the moment it is launched.
 
 Beyond the coding agents, `tea`, `wrangler`, `cf`, Playwright's browsers, mise,
 Node.js, Go, Rust, and `golangci-lint` are the software in a base image that
-does not come from the distro's own repository. All of them arrive through
-`mise` except Rust, which is `rustup`. Node.js is installed with `mise`
+does not come from the distro's own repository. `tea` comes from its release server, the `mise` binary from its installer,
+Rust from `rustup`, and browser binaries from `playwright install`; the other
+tools in that list are installed through `mise`. Node.js is installed with `mise`
 (`mise use -g node@latest`) on all three distros rather than from a distro
 package or a third-party repository — no build adds an APT repository or GPG
 key any more — so `node`, `npm`, and `npx` are versioned the way the JDK is and
@@ -679,10 +695,11 @@ ignores that setting from project or local settings, and like Codex's daemon it
 needs credentials that only arrive per-VM: on a VM where nobody has run
 `claude login` a session simply starts without Remote Control connected.
 
-This is deliberate and depends on the VM being the sandbox: it is disposable and
-network-isolated by default, and nothing the host cares about is reachable from
-inside it (see [SECURITY.md](../SECURITY.md)). Restricting an agent inside a VM
-that already contains it only stops it doing the work the VM exists for.
+This is deliberate and depends on the VM boundary and the host network policy
+holding (see [SECURITY.md](../SECURITY.md)). Default NAT blocks unsolicited
+LAN connections to the guest, but does not prevent guest-initiated access to
+host services, the LAN, or other guests. See the
+[host firewall guidance](./host-setup.md#host-firewalls-and-the-virbrn-bridge).
 
 These configuration files land in `/etc/skel`, so the login user cloud-init
 creates gets them, and in `/root`. They can be replaced per VM through
@@ -760,12 +777,15 @@ Choice:
 ```
 
 `n` asks for a name — letters, numbers, underscore and dash, or empty for a
-generated `agent-<short id>` — and attaches to that name if it already exists.
+generated two-word name such as `cooker-opines` (or `session-<short id>`
+without a word list) — and attaches to that name if it already exists. Enter
+at the main menu starts a generated session without a second prompt.
 `a` lists the sessions and takes either a number from that list or a name, with
 TAB completing it and listing the candidates when the prefix is ambiguous. `q`
-leaves a plain shell, and so does `Ctrl-D`; detaching from a session comes back
-to the menu. The menu itself is `agent-vm-menu`, so it can be run again from
-the shell.
+leaves a plain shell, and so does `Ctrl-D`. Attaching replaces the menu;
+detaching or ending the session closes the SSH login. Each new session receives
+`TMUX_SESSION_NAME` in its environment. Run `agent-vm-menu` from a shell to
+open the menu again.
 
 It is deliberately invisible to everything that is not a person at a terminal:
 it runs only for an interactive shell with a terminal on both ends, never
@@ -989,13 +1009,19 @@ addresses. In the default NAT mode the network is host-local; with
 Lists VMs known to this state directory with state, distro, resources, network
 mode, address, and creation time. Domains that exist in libvirt but not in state
 are not listed; domains in state that have vanished from libvirt are reported as
-`missing`.
+`missing`. With `--output json`, emits an array of stored VM records augmented
+with live `state` and an optional `address`.
 
 ### `agent-vm info <name>`
 
 Prints one VM's full record, including the base image digest it was created from,
 the overlay path, the MAC address, the captured domain XML path, and the
 `virt-install` version and argument vector that defined it.
+
+With `--output json`, the stored VM fields are augmented with live `state`, an
+optional `address`, and an optional `disk` object containing `virtualSize`,
+`actualSize`, and, when available, `backingFile`. Disk sizes are size strings;
+`disk` is omitted when the overlay cannot be inspected.
 
 ### `agent-vm start <name>` / `stop <name>` / `restart <name>`
 
@@ -1193,8 +1219,9 @@ cannot drift apart.
 
 The tool orchestrates standard host tools rather than reimplementing them
 ([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md)), so every
-operation can be reproduced by hand. `--dry-run` prints the exact invocations for
-any command; the table below is the summary.
+operation can be inspected and reproduced by hand. `--dry-run` prints planned
+invocations, with placeholders for values unavailable without execution; the
+table below is the summary.
 
 | Operation | Tools invoked |
 |---|---|
@@ -1210,7 +1237,7 @@ any command; the table below is the summary.
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
-| any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh <destination> -- <argv>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
+| any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
 | `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
@@ -1231,7 +1258,7 @@ staying stable.
 | `4` | Not found: unknown VM or base image. |
 | `5` | Conflict: VM already exists, image build already in progress, wrong state for the operation. |
 | `6` | Timeout: guest did not boot, become reachable, or shut down in time. |
-| `7` | Cleanup incomplete: the primary operation finished but host state was left behind and needs attention. |
+| `7` | Cleanup incomplete: an operation or its rollback left host state behind that needs attention. |
 
 ## State Layout
 
@@ -1271,9 +1298,10 @@ guessing. Both are at version `1`.
 ## Stored Records
 
 These two files are a public contract: scripts and agent supervisors read them
-directly, and they are also what `--output json` prints — `create` and `info`
-emit the `vm.json` record, `image inspect` emits one manifest, and `image list`
-emits an array of them. Fields are added compatibly; renaming or removing one,
+directly. With `--output json`, `create` emits the `vm.json` record; `info`
+and `list` add live fields as described above. `image inspect` emits one
+manifest, and `image list` emits an array of them. Fields are added compatibly;
+renaming or removing one,
 or changing what a value means, raises `schemaVersion`.
 
 ### `vms/<name>/vm.json`
@@ -1324,12 +1352,12 @@ answer that goes stale.
 |---|---|
 | `schemaVersion` | Schema of this file. A file with an unknown version is refused, never guessed at. |
 | `name`, `createdAt`, `libvirtUri` | Identity, creation time (UTC), and the connection the domain was defined on. |
-| `distro` | The `<distro>:<tag>` reference as it was requested. |
+| `distro` | The resolved `<distro>:<tag>` reference, including the default tag when omitted. |
 | `baseImage` | The image the overlay is backed by, **by digest as well as by name** — a tag can be rebuilt, a digest cannot. `path` is the backing file. |
 | `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. `maxMemory` is present only for a VM created with `--max-memory`, and is the ceiling its `virtio-mem` device can grow it to. |
 | `network` | `mode` is `nat` or `bridge`; `name` is the libvirt network in NAT mode, `bridge` the host interface in bridge mode, and `mac` is what libvirt allocated. Recorded so exposure stays auditable after the fact. |
 | `guest.user` | The account to SSH in as. |
-| `guest.sshKeyPaths` | Paths of the **public** keys that were authorized. Key material is never recorded. |
+| `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
 | `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |
 | `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |

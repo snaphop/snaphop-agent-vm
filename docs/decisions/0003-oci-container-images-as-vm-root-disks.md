@@ -20,7 +20,8 @@ also layer-shared, digest-addressed, and available for every distro we care
 about, from registries our users already trust and mirror.
 
 What container images lack for VM use: a kernel, an initramfs, `systemd` as PID 1
-in some cases, `cloud-init`, an SSH server, and a partitioned bootable disk.
+in some cases, `cloud-init`, an SSH server, and a disk image. Our direct-kernel-boot path adds a single
+root partition but needs no bootloader (ADR-0004).
 Those are additions, not blockers.
 
 Options considered:
@@ -61,7 +62,7 @@ mechanics:
    already know.
 3. `podman create` + `podman export` to flatten the result to a root filesystem
    tarball — podman already knows how to squash layers, whiteouts included.
-4. `virt-make-fs --type=ext4 --format=qcow2` to assemble the tarball into
+4. `virt-make-fs --type=ext4 --format=qcow2 --partition` to assemble the tarball into
    `base.qcow2`, with no root required on the host.
 5. `virt-ls` and `virt-copy-out` to locate and extract `vmlinuz` and `initrd`
    from the image's `/boot`.
@@ -99,7 +100,9 @@ Harder:
 - Container images are not built to be bootable. Guest packaging surprises (a
   kernel that expects a bootloader, `systemd` units disabled in the container
   build) are ours to absorb.
-- `image build` requires network access to a registry, unlike everything else the
-  tool does.
+- Building an uncached image requires registry and package-repository access.
+  Cached images allow VM creation without an image download; guest updates and
+  optional GitHub integration still need their respective networks.
 - Rolling-release images (Arch) mean "rebuild the base image" is not idempotent
-  over time. Reproducibility comes from the recorded digest, not from the tag.
+  over time. The recorded digest identifies the source OCI image; unpinned packages and
+  tools added during the build prevent a guarantee of identical rebuilds.
