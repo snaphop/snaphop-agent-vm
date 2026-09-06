@@ -1,9 +1,9 @@
 # Host Setup
 
 How to prepare a Linux host to run agent VMs, and how to diagnose one that
-cannot. Everything here is host configuration — `agent-vm` never changes it for
-you, because silently reconfiguring someone's networking or firewall is not a
-thing a VM tool should do.
+cannot. Install packages and configure host permissions, bridges, and firewall
+rules yourself. `agent-vm` manages its own storage, domains, and libvirt NAT
+network; it does not reconfigure your existing host bridges or firewall rules.
 
 Verify a host at any point with:
 
@@ -14,7 +14,7 @@ agent-vm doctor
 ## 1. Hardware Virtualization
 
 ```bash
-# Should print a non-zero count
+# On x86_64, should print a non-zero count
 grep -cE 'vmx|svm' /proc/cpuinfo
 
 # Should exist and be usable
@@ -41,9 +41,9 @@ echo 'options kvm_intel nested=1' | sudo tee /etc/modprobe.d/kvm-nested.conf
 sudo modprobe -r kvm_intel && sudo modprobe kvm_intel   # or reboot
 ```
 
-Recent kernels enable this by default. Where it is off, VMs started inside a
-guest still run — QEMU falls back to emulation — but they are slow enough to be
-unusable for real work.
+Where nesting is off, `agent-vm` inside a guest fails its KVM readiness check.
+QEMU can be configured separately to use software emulation, but `agent-vm`
+does not fall back to it.
 
 ## 2. Packages
 
@@ -105,17 +105,18 @@ sudo systemctl enable --now libvirtd          # or virtqemud on modular setups
 sudo usermod -aG libvirt,kvm "$USER"
 ```
 
-Log out and back in (or `newgrp libvirt`) for group membership to take effect.
+Log out and back in for both group memberships to take effect.
 Confirm the connection works without `sudo`:
 
 ```bash
 virsh -c qemu:///system list --all
 ```
 
-`qemu:///system` is the default because bridged networking requires it. For
-NAT-only, fully unprivileged use, `qemu:///session` works — set
-`libvirt_uri = "qemu:///session"` in the config file, and note that host bridges
-are unavailable in that mode.
+`qemu:///system` is the standard setup for both network modes. The CLI accepts
+`qemu:///session` with NAT mode only, but still requires a managed libvirt NAT
+network. Ordinary unprivileged sessions lack that network out of the box; the
+tool does not fall back to QEMU user-mode networking. See
+[libvirt's connection FAQ](https://wiki.libvirt.org/FAQ.html#what-is-the-difference-between-qemu-system-and-qemu-session-which-one-should-i-use).
 
 To drive this host from another machine, see
 [§10](#10-driving-this-host-from-another-machine).
@@ -123,9 +124,11 @@ To drive this host from another machine, see
 ## 4. Storage
 
 State lives in `~/.local/share/agent-vm` by default: cached base images
-under `images/`, per-VM overlays under `vms/`. Plan roughly 2–3 GiB per cached
-base image, plus whatever the guests actually write. (An Ubuntu 24.04 base image
-measures about 1.4 GiB of qcow2 plus 35 MiB of kernel and initramfs.)
+under `images/`, per-VM overlays under `vms/`. Full images include language
+toolchains, browsers, and agent tooling and need substantially more space than
+a minimal distro image. Allow additional space for build intermediates and
+whatever guests write; measure cached artifacts with `agent-vm image list` and
+`du -sh ~/.local/share/agent-vm/images`. Slim images omit the agent tooling.
 
 Building a base image also leaves images in **podman's** storage, which is
 separate from the state directory and is not counted by anything `agent-vm`
@@ -156,8 +159,9 @@ chattr +C ~/.local/share/agent-vm/vms
 ```
 
 To relocate state, set `state_dir` in the config file or `AGENT_VM_STATE_DIR`.
-A shared state directory means shared images *and* shared locks across users —
-workable, but everyone needs write access to it.
+Use one operating-system account per state directory. Giving other users write
+access to its top-level directory is insufficient for shared operation: newly
+created subdirectories and lock files are not group-writable by default.
 
 ### Letting The Hypervisor Reach The State Directory
 
@@ -213,7 +217,8 @@ check.
 NAT mode uses a libvirt-managed network named `agent-vm-nat` on
 `192.168.171.0/24`, with the host at `192.168.171.1` and DHCP handing out
 `.2`–`.254`. `agent-vm` defines and starts it on first use; the guest reaches the
-internet and the host, and nothing on the LAN reaches the guest. The subnet
+internet, the host, and the LAN; unsolicited inbound connections from the LAN
+are blocked. The subnet
 differs from libvirt's own `default` network (`192.168.122.0/24`) so both can
 exist on one host. The bridge device is left unnamed so libvirt allocates one
 (`virbrN`).
@@ -230,7 +235,8 @@ existing libvirt network or another `virbr` interface, and a missing
 ### Host Firewalls And The `virbrN` Bridge
 
 If the host runs a firewall of its own — `ufw` is the common case — NAT mode
-needs one rule, and getting it wrong produces a uniquely misleading failure.
+needs rules for both guest services and forwarding. Missing forwarding rules
+produce a misleading failure.
 
 libvirt adds its own nftables rules accepting the guest's traffic, but that is
 not the last word on a packet. Every nftables base chain registered on the
@@ -324,12 +330,12 @@ hazard, but they are confusing to read later; delete them with
 `route` and port 67 forms, or by number from `ufw status numbered` (deleting
 from the bottom up, since the numbers shift).
 
-**The rule above also lets the guest reach your LAN.** `route allow in on
-<bridge>` permits forwarding to every destination, not just the internet, which
-widens the NAT boundary that [`SECURITY.md`](../SECURITY.md) relies on — and the
-guest is untrusted by design. To keep the guest on the internet only, deny the
-private ranges first; ufw evaluates rules in order, so these must be added
-before the blanket allow:
+**Standard NAT permits guest-initiated connections to your LAN.** The blanket
+route allow restores that standard behavior; NAT blocks unsolicited inbound
+connections, not outbound access to private networks. See
+[libvirt's network documentation](https://libvirt.org/formatnetwork.html).
+To block forwarding to the three RFC 1918 private IPv4 ranges, deny them before
+the blanket allow; ufw evaluates rules in order:
 
 ```bash
 sudo ufw route deny in on virbr1 to 192.168.0.0/16
@@ -352,11 +358,13 @@ sudo ufw route insert 1 deny in on virbr1 to 172.16.0.0/12
 sudo ufw status numbered | grep -i virbr
 ```
 
-Note that the NAT subnet is itself inside `192.168.0.0/16`, so these denies also
-stop VMs on the network from reaching each other. That is usually what you want
-for disposable agent VMs — and it is stricter than the NAT network's own
-default, which allows guest-to-guest traffic on the same bridge. Drop the
-`192.168.0.0/16` line, or narrow it to your LAN's prefix, if VMs need to talk.
+These rules are not complete guest isolation: they do not restrict traffic
+addressed to the host itself, or destinations outside those ranges. They also
+do not reliably isolate guests on the same bridge; applying IP firewall rules
+to bridged packets depends on the host's bridge netfilter configuration. See the
+[Linux bridge documentation](https://cdn.kernel.org/doc/html/latest/networking/bridge.html#netfilter).
+Use a separately reviewed host firewall policy if workloads require stronger
+isolation.
 
 `agent-vm` never adds, removes, or edits host firewall rules. Any rule here is
 yours to add and yours to maintain — including after a bridge is renamed.
@@ -412,21 +420,17 @@ warn when the configured bridge is in this state.
 Check it, and turn it off:
 
 ```bash
-ip -d link show br0 | grep -o 'stp_state [0-9]* .* forward_delay [0-9]*'
+ip -d link show br0
 sudo ip link set br0 type bridge stp_state 0
 ```
 
-STP exists to break forwarding loops. A bridge whose only ports are one uplink
-and a set of guest taps has no loop to break, so turning it off is the right
-answer and it is what libvirt's own NAT bridges effectively do (they keep STP
-on with a zero delay). If the bridge has other ports on it and you would rather
-keep the protocol, set the delay to zero instead:
+STP exists to break forwarding loops. Disable it only when the topology cannot
+form a loop. If STP is required, retain it and configure convergence through
+your bridge manager; setting `forward_delay 0` while kernel STP is enabled is
+not a supported shortcut. The Linux bridge documents a 2–30 second range for
+that timer. See the [Linux bridge documentation](https://cdn.kernel.org/doc/html/latest/networking/bridge.html).
 
-```bash
-sudo ip link set br0 type bridge forward_delay 0
-```
-
-Both are runtime settings and are lost on reboot. Make it persistent in
+The runtime setting is lost on reboot. Make it persistent in
 whatever manages the bridge — with NetworkManager:
 
 ```bash
@@ -505,32 +509,30 @@ module tree as `modules`, and index the modules with `depmod`. On Arch ARM, usin
 the stock `linux-aarch64` package:
 
 ```bash
-version=7.2.2-2-aarch64-ARCH
+# Fetch only the kernel package and unpack it without installing it.
+appliance_work=$(mktemp -d)
+curl -fL -o "$appliance_work/kernel.pkg.tar" "$(pacman -Sddp linux-aarch64)"
+mkdir "$appliance_work/unpack"
+tar -C "$appliance_work/unpack" -xf "$appliance_work/kernel.pkg.tar"
+
+# Use the version of the downloaded package's module tree.
+version=$(basename "$appliance_work"/unpack/usr/lib/modules/*)
 dir=~/.local/share/agent-vm/appliance-kernel/$version
-
-# Fetch and unpack the package without installing it.
-curl -sSLo /tmp/kernel.pkg.tar.xz "$(pacman -Sp linux-aarch64)"
-mkdir -p /tmp/unpack "$dir"
-tar -C /tmp/unpack -xf /tmp/kernel.pkg.tar.xz
-
-cp /tmp/unpack/boot/Image "$dir/Image"
-cp -a "/tmp/unpack/usr/lib/modules/$version" "$dir/modules"
+mkdir -p "$dir"
+cp "$appliance_work/unpack/boot/Image" "$dir/Image"
+cp -aT "$appliance_work/unpack/usr/lib/modules/$version" "$dir/modules"
 
 # depmod wants a tree rooted at <basedir>/lib/modules/<version>.
-mkdir -p /tmp/depmod/lib/modules
-ln -sfn "$dir/modules" "/tmp/depmod/lib/modules/$version"
-depmod -b /tmp/depmod "$version"
+mkdir -p "$appliance_work/depmod/lib/modules"
+ln -s "$dir/modules" "$appliance_work/depmod/lib/modules/$version"
+depmod -b "$appliance_work/depmod" "$version"
+printf 'appliance_kernel = "%s"\n' "$dir"
 ```
 
-Then point `agent-vm` at it:
-
-```toml
-# ~/.config/agent-vm/config.toml
-appliance_kernel = "~/.local/share/agent-vm/appliance-kernel/7.2.2-2-aarch64-ARCH"
-```
-
-or set `AGENT_VM_APPLIANCE_KERNEL` to the same path. The directory name supplies
-the kernel version, so that one setting is the whole configuration. Run
+Copy the printed `appliance_kernel` line into
+`~/.config/agent-vm/config.toml`, or set `AGENT_VM_APPLIANCE_KERNEL` to the same
+path. The directory name supplies the kernel version, so that one setting is
+the whole configuration. Run
 `agent-vm doctor` again; the appliance check turns green and names the directory
 in use. The kernel and modules cost roughly 250 MiB and are read-only
 thereafter.
@@ -546,7 +548,8 @@ rm -rf /var/tmp/.guestfs-$(id -u)
 ```
 
 With a remote hypervisor the path names a directory on **that** machine, and the
-kernel has to match its architecture, not this one's.
+kernel has to match its architecture, not this one's. Use its full absolute path:
+`~` in an explicit configuration value expands to the client's home directory.
 
 ## 9. Verifying End To End
 

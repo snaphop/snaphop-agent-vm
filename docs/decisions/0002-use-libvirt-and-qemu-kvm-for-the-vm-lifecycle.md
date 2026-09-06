@@ -49,7 +49,7 @@ inventory). Minimum supported versions are libvirt 9.0, QEMU 8.0, and
 software emulation rather than deliver a VM too slow to work in.
 
 `agent-vm` remains a foreground CLI with no daemon of its own; libvirt is the
-only long-running component.
+management service, alongside the QEMU processes that run the guests.
 
 ## Consequences
 
@@ -70,7 +70,8 @@ Harder:
   permissions, and group membership. Host readiness is now a real failure mode,
   which is why `agent-vm doctor` exists.
 - Two access modes to support: `qemu:///system` (needed for bridges) and
-  `qemu:///session` (unprivileged, NAT-only).
+  `qemu:///session` (accepted with NAT only, but requiring a usable managed
+  network; see ADR-0005).
 - `virt-install`, `virsh`, and libvirt behavior differ across versions and
   architectures, so the minimum-version floor has to be checked at runtime
   (`agent-vm doctor`) and exercised in the integration suite.

@@ -102,10 +102,10 @@ told where to attach it, so it builds the filesystem and we attach it.
 domain once it had booted; this disk stays attached for the life of the VM, and
 `vdb` is visible inside the guest. It is read-only, and it holds only what the
 guest was already given: the hostname, the authorized public keys, and any
-user-data the operator passed. Nothing secret may be put there — that was
-already true when the seed was an ISO the guest read at boot, and SECURITY.md
-says so — but the window in which a guest can read it is now the VM's whole
-life rather than its first seconds. A guest that wanted the same bytes could
+user-data the operator passed. Host private keys, forge/cloud credentials, and
+registry credentials remain prohibited by SECURITY.md. Operator-supplied
+user-data can contain other sensitive data, so the seed must be treated as
+sensitive for the VM's whole life rather than only its first seconds. A guest that wanted the same bytes could
 read them from `/var/lib/cloud` regardless.
 
 **Device topology changed.** A VM now has a second virtio disk. That is a

@@ -10,10 +10,22 @@ observable behavior, security, dependency, compatibility, or deployment
 change. Describe what changed and why for a human reader.
 
 While the project is `0.x`, breaking changes to the command line, configuration,
-or on-disk state are permitted but must be called out here explicitly, with the
+or on-disk state require explicit approval under `AGENTS.md` and must be called
+out here explicitly, with the
 migration or rebuild step a user has to take.
 
 ## [Unreleased]
+
+Entries record changes during development, including intermediate designs later
+superseded in this section. For current behavior use [the CLI reference](./docs/cli.md).
+In particular, full-image tooling is absent from `-slim` variants, mise installs
+now share `/usr/local/lib/mise`, and the cloud-init seed remains attached for the
+VM's lifetime (ADR-0011).
+
+Image rebuild instructions below refresh the cache for **new** VMs. Destroy VMs
+that depend on a base before rebuilding it, then recreate them to use the new
+image and host-side kernel; rebuilding a backing file in place is unsafe for
+existing overlays.
 
 ### Added
 
@@ -113,186 +125,6 @@ migration or rebuild step a user has to take.
   run as printed rather than one naming a `virbr0` that may not be yours. Like
   the forwarding check it only reads `ufw`'s configuration, never runs `ufw`,
   and warns rather than fails.
-
-### Changed
-
-- **A VM's first boot is about nine seconds shorter, and writes 1.7 GiB less to
-  its disk.** The base images kept the whole `mise`-managed toolchain — the JDK,
-  Maven, Node, Go, and the coding agents — in `/etc/skel`, so `useradd` copied
-  all of it into the login user's home before cloud-init could get to the SSH
-  keys. It now lives in `/usr/local/lib/mise`, one store every account shares,
-  and each account's `~/.local/share/mise` is a symlink to it.
-
-  Nothing an account can do changes: every directory in the store is writable
-  with the sticky bit, the way `/tmp` and the Playwright browser directory
-  already are, so `mise use -g node@24` still works without `sudo` and still
-  affects no other account — the installs are shared, but *which* version an
-  account uses stays in its own `~/.config/mise`. No account may remove
-  another's tool.
-
-  This takes effect when a base image is rebuilt (`agent-vm image build
-  --force`). Existing VMs and existing base images are untouched: an account
-  that already has its own copy of the toolchain keeps it, and first boot leaves
-  it alone rather than replacing it with a link.
-
-- **The cloud-init seed is now built by `agent-vm` and attached as a read-only
-  virtio disk**, instead of being built and attached by
-  `virt-install --cloud-init` (ADR-0011). This fixes VMs on ARM64 hosts, where
-  every `create` produced a guest that booted and could never be logged into:
-  virt-install attaches its seed as a USB CD-ROM on a machine type with no SATA
-  bus, and USB storage is enumerated about a second after cloud-init has already
-  chosen its datasource, so the guest came up with no login user and no
-  authorized key and `create` failed at `Waiting for SSH` with
-  `Permission denied (publickey)`. A virtio disk is probed with the root disk,
-  long before cloud-init looks for it.
-
-  Visible effects: a VM's state directory gains a `seed/` directory holding the
-  `user-data` (moved there from the top level) and a new `meta-data`, plus the
-  `seed.img` built from them; `vm.json` records all four paths; the guest has a
-  second, read-only virtio disk (`vdb`) that stays attached for the life of the
-  VM rather than vanishing after the first boot; and `virt-make-fs` — already
-  required for building base images — is now also used by `create`. Existing VMs
-  are unaffected. Nothing secret belongs on a seed, which was already true and
-  is unchanged.
-
-
-- `create --no-start`'s refusal message no longer says the seed is attached only
-  to the first boot; since ADR-0011 the seed disk stays attached for the life of
-  the VM. The flag is still rejected, for the reason that still holds:
-  `virt-install` always boots the guest it defines.
-
-- A failing tool now says which machine it ran on, so an error from a remote
-  hypervisor cannot be mistaken for one from your own host. ssh failing to
-  connect is reported separately from a tool failing on the far side, because
-  they need different fixes.
-
-- `doctor`'s `libvirt` group check and its refusal of bridged networking now
-  key off whether the connection is a `/session` one rather than matching the
-  literal string `qemu:///session`, so they behave correctly for
-  `qemu+ssh://host/session` too.
-
-- The tmux session menu an interactive login lands on is quicker to get through
-  and no longer leaves you at a menu after a session ends. Pressing Enter at the
-  menu starts a session straight away under a generated name, with no second
-  prompt; generated names are now two short words (`cooker-opines`) instead of
-  `agent-<hex>`; every image now installs a word list (`wamerican` on Ubuntu,
-  `words` on Fedora and Arch) for them, and a guest without one falls back to
-  `session-<hex>`.
-  Attaching now replaces the menu process rather than running underneath it, and
-  sets `detach-on-destroy on` and `exit-empty on`, so detaching or ending the
-  last session closes the SSH connection instead of dropping back to the menu.
-  Each session also gets `TMUX_SESSION_NAME` in its environment. Existing base
-  images keep the old menu; rebuild with `agent-vm image build <distro> --force`.
-
-### Fixed
-
-- **Guests no longer come up with a clock weeks in the past.** On aarch64 —
-  which in practice means an Apple Silicon host running Asahi Linux — the VM had
-  no working real-time clock: QEMU's `virt` machine provides a PL031, but
-  Ubuntu's `linux-image-virtual` ships `rtc-pl031` only in
-  `linux-modules-extra`, which it does not install, so `/dev/rtc0` never
-  appeared and nothing set the clock from hardware at boot. systemd fell back to
-  its own build date and the guest started weeks behind its host (37 days, on
-  the host this was found on), with nothing running afterwards to correct it.
-  The consequences looked unrelated to time: `apt-get update` rejected
-  repository metadata as "not valid yet", TLS handshakes failed against
-  certificates that had not started yet, and build tools wrote timestamps from
-  the wrong month. x86_64 hosts were unaffected, because the CMOS driver is
-  built in there. The base images now ship and enable `chrony`, so a guest
-  corrects its clock within seconds of the network coming up.
-  `systemd-timesyncd` was tried first and rejected: started at boot before
-  `systemd-resolved` could answer, it never acquired a server address and never
-  retried, leaving a guest 37 days behind with the service reported "active" —
-  chrony retries, carries several pools rather than one name, and steps the
-  clock however large the offset is. This needs a rebuilt base image: run `agent-vm image
-  build <distro> --force`, or `agent-vm image rm <distro>` and let the next
-  `create` rebuild it. Existing VMs keep the old behavior until they are
-  recreated on a rebuilt image. `chrony-wait` is enabled too and `sshd` is
-  ordered behind `time-sync.target`, so a VM is not handed over until its clock
-  has been stepped — `create` calls a VM ready when SSH answers, and without
-  this it answered about five seconds into a boot while chrony stepped the clock
-  at about seven, leaving an agent working against a clock weeks out for the two
-  seconds in between. `chrony-wait`'s start timeout is shortened from three
-  minutes to thirty seconds so that a guest with no route to an NTP server
-  becomes reachable half a minute late with a wrong clock, rather than not
-  before `create` stops waiting for it. `chronyd` is ordered behind
-  `network-online.target` so that it can synchronize inside that thirty seconds:
-  started earlier, its one attempt to resolve a pool address failed and the
-  retry backed off, so on Fedora and Arch a source was not selected until about
-  thirty-three seconds in — past the bound, which released `sshd` on a timeout
-  rather than on a correct clock, and added about twenty seconds to every boot.
-  Ordering it behind the network moved that to about five seconds. Finally,
-  `systemd-timesyncd` is masked wherever a family enables it by default (Arch
-  does), so that two NTP clients no longer step the same clock — `chronyd`
-  reported `System clock interference detected (another NTP client?)` when they
-  ran together.
-
-- **A rejected flag no longer takes the command's flag listing with it.**
-  Reporting a bad flag in the tool's own spelling also stopped printing the
-  usage listing that came with it, so `agent-vm create --test` answered with one
-  line and a pointer to `--help`. The error is now followed by that command's
-  invocation and every flag it takes, with each flag's default where it has one
-  — the detail the flag package's listing used to carry, spelled the way this
-  tool accepts. A wrong or missing argument prints the same listing.
-
-- **A rejected flag was reported in a spelling `agent-vm` does not accept.**
-  `agent-vm image build --test` answered `flag provided but not defined:
-  -test` — one dash, and printed twice, once by Go's flag package and once by
-  `agent-vm` — followed by a `Usage of image build:` listing that spelled every
-  flag with one dash as well. None of those are flags this tool takes, so the
-  message quietly disagreed with `docs/cli.md`, `--help`, and the shell
-  completions. A bad flag is now reported once, named the way it was typed and
-  the way it is documented (`--test`).
-
-- **`agent-vm <command> --help` failed instead of helping.** It printed the
-  flag package's usage dump and then exited `2` with `flag: help requested`.
-  Asking for help now prints the command's documented invocation and its own
-  flags, with two dashes, and exits `0` — the way the global `--help` already
-  did.
-
-- **`agent-vm create` ignored its own flags.** `--vcpus`, `--memory`, `--disk`,
-  `--max-memory`, `--distro`, `--network`, `--bridge`, and `--ssh-key` were all
-  silently dropped, and every VM was created with the configured defaults
-  instead — at the default size, on the default network, authorizing the default
-  keys. Setting up a run reads configuration before the subcommand does, to work
-  out which machine the hypervisor is on, and the result was cached and handed
-  back to `create` with none of its flags applied. Nothing reported the loss;
-  the VM was simply not the one that was asked for. `--dry-run` showed the same
-  wrong values, so the printed plan matched what would really have run.
-
-- **`create` now works on an aarch64 host.** `virt-install` failed with
-  `unsupported configuration: ACPI requires UEFI on this architecture`: it
-  turns ACPI on by default, and libvirt refuses ACPI on aarch64 unless the
-  domain also has UEFI firmware, which a directly booted kernel does not have.
-  `create` now asks libvirt for the hypervisor's architecture (`virsh
-  capabilities` — the hypervisor's, not your machine's, so a `qemu+ssh://`
-  connection to an aarch64 host is answered correctly) and passes
-  `--features acpi=off` there. QEMU's `virt` machine describes the guest's
-  devices with a device tree instead, so nothing is lost. x86_64 guests are
-  unchanged and keep ACPI.
-
-- **The serial console of an aarch64 guest is captured again.** Base images
-  recorded a `console=ttyS0` kernel command line, and the aarch64 `virt`
-  machine has no such device — its serial port is `ttyAMA0` — so `console.log`
-  and `agent-vm console` stayed empty on that architecture. Newly built base
-  images name both consoles (`console=ttyS0 console=ttyAMA0`), which each
-  architecture resolves to the one it actually has. Images already in the cache
-  keep the command line they were built with; rebuild with
-  `agent-vm image build <distro> --force` to pick this up.
-
-- `playwright install` in a guest no longer fails with `EACCES: permission
-  denied, mkdir '/opt/ms-playwright/__dirlock'` for every account but root. The
-  shared browser directory the image fills at build time was left owned by root
-  and unwritable by anyone else, so the command Playwright's own "browser not
-  found" error tells you to run — the one an agent needs after `mise` moves
-  `playwright` to a release pinning a newer browser build — could not run as the
-  guest user. It is now world-writable with the sticky bit, like `/tmp`: any
-  account may add a browser build, none may remove another's. Existing base
-  images keep the old permissions; rebuild with
-  `agent-vm image build <distro> --force`, or run
-  `sudo chmod 1777 /opt/ms-playwright /opt/ms-playwright/.links` in a guest.
-
-### Added
 
 - Every base image now carries [Herdr](https://herdr.dev), a terminal workspace
   manager for coding agents, and starts a server for `root` and every
@@ -414,8 +246,8 @@ migration or rebuild step a user has to take.
 - Base images now carry a Rust toolchain: `rustup` with the stable toolchain,
   so `rustc`, `cargo`, `rustfmt`, and `clippy` are in every VM. It is installed
   once into `/usr/local/rustup` and shared by every account rather than
-  downloaded per user at first use, which a network-isolated guest could not do
-  at all — so `rustup update` needs `sudo`, while `cargo install` still writes
+  downloaded per user at first use, which a guest without outbound network
+  access could not do — so `rustup update` needs `sudo`, while `cargo install` still writes
   into the account's own `~/.cargo`. The entry points are in `/usr/local/bin`,
   so they work in a non-interactive `ssh <vm> cargo build` and not only in a
   login shell. `RUSTUP_HOME` is set in `/etc/environment` so the proxies find
@@ -438,7 +270,7 @@ migration or rebuild step a user has to take.
 - Every VM now starts Codex's remote-control daemon at boot, for `root` and for
   every interactive account, through the new
   `agent-vm-codex-remote-control.service` unit. Remote control needs
-  credentials, which are per-VM and never come from a base image or a seed, so
+  credentials, which are per-VM and never baked into a base image, so
   on a VM where nobody has run `codex login` the attempt fails and is reported
   in `journalctl -u agent-vm-codex-remote-control` — deliberately without
   failing the boot. After logging in inside the VM, `sudo systemctl start
@@ -467,8 +299,9 @@ migration or rebuild step a user has to take.
   entry carrying OpenSSH options (`command=`, `restrict`, `from=`) is refused
   rather than silently stripped of its restriction or silently dropped. Finding
   no host key at all is reported as a usage error before anything is created.
-  Every key file that was read is recorded in `vm.json` as a path; key material
-  is never written there.
+  Every host key file that was read is recorded in `vm.json` as a path; the
+  host public key contents are not copied into that record. The separate
+  `--github-ssh-key` feature records the guest-generated public key there.
 
 - `agent-vm create --github-ssh-key` adds the SSH key a VM generates for itself
   on first boot to your GitHub account, so an agent inside the VM can push
@@ -487,8 +320,9 @@ migration or rebuild step a user has to take.
 
 - An interactive SSH login now lands on a tmux session menu: start a session,
   attach to one (by number, or by name with TAB completion), list them, or quit
-  to a plain shell. Detaching returns to the menu, and the menu is
-  `agent-vm-menu` if you want it again later.
+  to a plain shell. Initially detaching returned to the menu; the later menu
+  change closes the SSH session instead. Run `agent-vm-menu` to open the menu
+  from a shell.
 
   It runs only for a person at a terminal — an interactive shell with a
   terminal on both ends, not already inside tmux — so `agent-vm ssh <vm> --
@@ -520,8 +354,8 @@ migration or rebuild step a user has to take.
 
 - Base images now carry a JDK and Maven, installed with `mise`
   (`mise use -g java@temurin maven@latest`), so `java` and `mvn` work in a guest
-  without downloading anything — which a network-isolated guest could not do
-  anyway. The newest Temurin JDK mise offers and the current Maven are installed
+  without downloading anything, including when outbound network access is
+  unavailable. The newest Temurin JDK mise offers and the current Maven are installed
   during the build; neither version is pinned. The JDK is requested as
   `java@temurin` rather than `java@latest`, which would be an Oracle build of
   OpenJDK. Both are reached through mise's shims, which
@@ -534,8 +368,9 @@ migration or rebuild step a user has to take.
 - Every interactive account in a guest now gets an `ed25519` SSH key pair at
   `~/.ssh/id_ed25519`, generated on first boot if that path does not already
   exist. It is generated inside the guest and never leaves it — no private key
-  goes into a base image or a cloud-init seed — and an existing key, such as one
-  an operator supplied through `--cloud-init`, is left alone.
+  goes into a base image or a cloud-init seed — and an existing key
+  generated inside the guest is left alone. Host private keys must not be
+  supplied through `--cloud-init` (`SECURITY.md`).
 
 - The generated cloud-init user-data now creates the login user in the
   `libvirt` and `kvm` groups as well as `docker`, so `virsh` works without
@@ -586,9 +421,9 @@ migration or rebuild step a user has to take.
 
   Each agent is configured in its **most permissive mode**, so it works
   unattended rather than blocking on an approval prompt nobody is there to
-  answer. This is safe only because the VM is itself the sandbox — disposable and
-  network-isolated by default, with nothing the host cares about reachable from
-  inside it. `agy` is the exception to the mechanism: it has no configuration
+  answer. This depends on the VM boundary and the host's network policy holding.
+  Default NAT does not by itself prevent access to host services, the LAN, or
+  other guests; see `docs/host-setup.md` for the limits of that boundary. `agy` is the exception to the mechanism: it has no configuration
   file for permissions, so it gets a shell alias instead, which reaches
   interactive shells only. A non-interactive caller such as
   `ssh <vm> agy -p '…'` has to pass `--dangerously-skip-permissions` itself.
@@ -845,6 +680,75 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- **A VM's first boot is about nine seconds shorter, and writes 1.7 GiB less to
+  its disk.** The base images kept the whole `mise`-managed toolchain — the JDK,
+  Maven, Node, Go, and the coding agents — in `/etc/skel`, so `useradd` copied
+  all of it into the login user's home before cloud-init could get to the SSH
+  keys. It now lives in `/usr/local/lib/mise`, one store every account shares,
+  and each account's `~/.local/share/mise` is a symlink to it.
+
+  Nothing an account can do changes: every directory in the store is writable
+  with the sticky bit, the way `/tmp` and the Playwright browser directory
+  already are, so `mise use -g node@24` still works without `sudo` and still
+  affects no other account — the installs are shared, but *which* version an
+  account uses stays in its own `~/.config/mise`. No account may remove
+  another's tool.
+
+  This takes effect when a base image is rebuilt (`agent-vm image build
+  --force`). Existing VMs and existing base images are untouched: an account
+  that already has its own copy of the toolchain keeps it, and first boot leaves
+  it alone rather than replacing it with a link.
+
+- **The cloud-init seed is now built by `agent-vm` and attached as a read-only
+  virtio disk**, instead of being built and attached by
+  `virt-install --cloud-init` (ADR-0011). This fixes VMs on ARM64 hosts, where
+  every `create` produced a guest that booted and could never be logged into:
+  virt-install attaches its seed as a USB CD-ROM on a machine type with no SATA
+  bus, and USB storage is enumerated about a second after cloud-init has already
+  chosen its datasource, so the guest came up with no login user and no
+  authorized key and `create` failed at `Waiting for SSH` with
+  `Permission denied (publickey)`. A virtio disk is probed with the root disk,
+  long before cloud-init looks for it.
+
+  Visible effects: a VM's state directory gains a `seed/` directory holding the
+  `user-data` (moved there from the top level) and a new `meta-data`, plus the
+  `seed.img` built from them; `vm.json` records all four paths; the guest has a
+  second, read-only virtio disk (`vdb`) that stays attached for the life of the
+  VM rather than vanishing after the first boot; and `virt-make-fs` — already
+  required for building base images — is now also used by `create`. Existing VMs
+  are unaffected. Host credentials and private keys remain prohibited. Any
+  operator-supplied user-data is retained in the seed for the VM's lifetime
+  and must follow `SECURITY.md`.
+
+
+- `create --no-start`'s refusal message no longer says the seed is attached only
+  to the first boot; since ADR-0011 the seed disk stays attached for the life of
+  the VM. The flag is still rejected, for the reason that still holds:
+  `virt-install` always boots the guest it defines.
+
+- A failing tool now says which machine it ran on, so an error from a remote
+  hypervisor cannot be mistaken for one from your own host. ssh failing to
+  connect is reported separately from a tool failing on the far side, because
+  they need different fixes.
+
+- `doctor`'s `libvirt` group check and its refusal of bridged networking now
+  key off whether the connection is a `/session` one rather than matching the
+  literal string `qemu:///session`, so they behave correctly for
+  `qemu+ssh://host/session` too.
+
+- The tmux session menu an interactive login lands on is quicker to get through
+  and no longer leaves you at a menu after a session ends. Pressing Enter at the
+  menu starts a session straight away under a generated name, with no second
+  prompt; generated names are now two short words (`cooker-opines`) instead of
+  `agent-<hex>`; every image now installs a word list (`wamerican` on Ubuntu,
+  `words` on Fedora and Arch) for them, and a guest without one falls back to
+  `session-<hex>`.
+  Attaching now replaces the menu process rather than running underneath it, and
+  sets `detach-on-destroy on` and `exit-empty on`, so detaching or ending the
+  last session closes the SSH connection instead of dropping back to the menu.
+  Each session also gets `TMUX_SESSION_NAME` in its environment. Existing base
+  images keep the old menu; rebuild with `agent-vm image build <distro> --force`.
+
 - The Fedora and Arch base images now install `growpart`
   (`cloud-utils-growpart` / `cloud-guest-utils`), so cloud-init grows the root
   partition to the VM's disk size at first boot the way it already did on
@@ -898,11 +802,10 @@ migration or rebuild step a user has to take.
   bridge device, so libvirt allocates one. Documented in `docs/host-setup.md`.
 
 - `create --no-start` is now rejected with exit `2` and an explanation, instead
-  of being listed as a working flag. `virt-install` always boots a guest that
-  has cloud-init data — the generated seed is attached to that first boot only
-  and is absent from the domain it leaves defined — so a VM stopped before
-  cloud-init finished would never receive its SSH key and could not be reached
-  afterwards. Create the VM and stop it instead:
+  of being listed as a working flag. The original rationale relied on
+  `virt-install --cloud-init` attaching a transient seed only for first boot.
+  ADR-0011 later replaced that seed with a persistent virtio disk; the flag
+  remains rejected because the current create invocation starts the domain. Create the VM and stop it instead:
   `agent-vm create <name> && agent-vm stop <name>`. Documented in
   `docs/cli.md`.
 
@@ -931,15 +834,16 @@ migration or rebuild step a user has to take.
   (ADR-0009): domains are defined with `virt-install` and managed with `virsh`
   instead of through libvirt Go bindings and a hand-maintained domain XML template;
   base images are built with `podman` plus `virt-make-fs`/`virt-copy-out`/
-  `virt-sysprep`; cloud-init seeds are built by `virt-install`; and `ssh` and
+  `virt-sysprep`; cloud-init seeds were initially built by `virt-install`
+  (replaced by `virt-make-fs` in ADR-0011); and `ssh` and
   `virsh console` are exec'd directly. The build is now pure Go with no cgo, and
   the required host tools and their minimum versions are documented and checked by
   `agent-vm doctor`.
 
 - `create`, `destroy`, `image build`, and `image rm` now report a lock they
-  could not release instead of discarding the failure. A stuck lock is host
-  state an operator has to clear before the next run, so it is no longer
-  silent.
+  could not release instead of discarding the failure. Kernel advisory locks
+  are released when their holding process exits; persistent lock files are
+  reusable and must not be deleted to bypass a running operation.
 
 - Base images now boot with `memhp_default_state=online_movable` on the kernel
   command line, so memory added to a running guest becomes usable RAM instead
@@ -955,6 +859,112 @@ migration or rebuild step a user has to take.
   now that the repository is a real project; it became `docs/host-setup.md`.
 
 ### Fixed
+
+- **Guests no longer come up with a clock weeks in the past.** On aarch64 —
+  which in practice means an Apple Silicon host running Asahi Linux — the VM had
+  no working real-time clock: QEMU's `virt` machine provides a PL031, but
+  Ubuntu's `linux-image-virtual` ships `rtc-pl031` only in
+  `linux-modules-extra`, which it does not install, so `/dev/rtc0` never
+  appeared and nothing set the clock from hardware at boot. systemd fell back to
+  its own build date and the guest started weeks behind its host (37 days, on
+  the host this was found on), with nothing running afterwards to correct it.
+  The consequences looked unrelated to time: `apt-get update` rejected
+  repository metadata as "not valid yet", TLS handshakes failed against
+  certificates that had not started yet, and build tools wrote timestamps from
+  the wrong month. x86_64 hosts were unaffected, because the CMOS driver is
+  built in there. The base images now ship and enable `chrony`, so a guest
+  corrects its clock within seconds of the network coming up.
+  `systemd-timesyncd` was tried first and rejected: started at boot before
+  `systemd-resolved` could answer, it never acquired a server address and never
+  retried, leaving a guest 37 days behind with the service reported "active" —
+  chrony retries, carries several pools rather than one name, and steps the
+  clock however large the offset is. This needs a rebuilt base image: run `agent-vm image
+  build <distro> --force`, or `agent-vm image rm <distro>` and let the next
+  `create` rebuild it. Existing VMs keep the old behavior until they are
+  recreated on a rebuilt image. `chrony-wait` is enabled too and `sshd` is
+  ordered behind `time-sync.target`, so a VM is not handed over until its clock
+  has been stepped — `create` calls a VM ready when SSH answers, and without
+  this it answered about five seconds into a boot while chrony stepped the clock
+  at about seven, leaving an agent working against a clock weeks out for the two
+  seconds in between. `chrony-wait`'s start timeout is shortened from three
+  minutes to thirty seconds so that a guest with no route to an NTP server
+  becomes reachable half a minute late with a wrong clock, rather than not
+  before `create` stops waiting for it. `chronyd` is ordered behind
+  `network-online.target` so that it can synchronize inside that thirty seconds:
+  started earlier, its one attempt to resolve a pool address failed and the
+  retry backed off, so on Fedora and Arch a source was not selected until about
+  thirty-three seconds in — past the bound, which released `sshd` on a timeout
+  rather than on a correct clock, and added about twenty seconds to every boot.
+  Ordering it behind the network moved that to about five seconds. Finally,
+  `systemd-timesyncd` is masked wherever a family enables it by default (Arch
+  does), so that two NTP clients no longer step the same clock — `chronyd`
+  reported `System clock interference detected (another NTP client?)` when they
+  ran together.
+
+- **A rejected flag no longer takes the command's flag listing with it.**
+  Reporting a bad flag in the tool's own spelling also stopped printing the
+  usage listing that came with it, so `agent-vm create --test` answered with one
+  line and a pointer to `--help`. The error is now followed by that command's
+  invocation and every flag it takes, with each flag's default where it has one
+  — the detail the flag package's listing used to carry, spelled the way this
+  tool accepts. A wrong or missing argument prints the same listing.
+
+- **A rejected flag was reported in a spelling `agent-vm` does not accept.**
+  `agent-vm image build --test` answered `flag provided but not defined:
+  -test` — one dash, and printed twice, once by Go's flag package and once by
+  `agent-vm` — followed by a `Usage of image build:` listing that spelled every
+  flag with one dash as well. None of those are flags this tool takes, so the
+  message quietly disagreed with `docs/cli.md`, `--help`, and the shell
+  completions. A bad flag is now reported once, named the way it was typed and
+  the way it is documented (`--test`).
+
+- **`agent-vm <command> --help` failed instead of helping.** It printed the
+  flag package's usage dump and then exited `2` with `flag: help requested`.
+  Asking for help now prints the command's documented invocation and its own
+  flags, with two dashes, and exits `0` — the way the global `--help` already
+  did.
+
+- **`agent-vm create` ignored its own flags.** `--vcpus`, `--memory`, `--disk`,
+  `--max-memory`, `--distro`, `--network`, `--bridge`, and `--ssh-key` were all
+  silently dropped, and every VM was created with the configured defaults
+  instead — at the default size, on the default network, authorizing the default
+  keys. Setting up a run reads configuration before the subcommand does, to work
+  out which machine the hypervisor is on, and the result was cached and handed
+  back to `create` with none of its flags applied. Nothing reported the loss;
+  the VM was simply not the one that was asked for. `--dry-run` showed the same
+  wrong values, so the printed plan matched what would really have run.
+
+- **`create` now works on an aarch64 host.** `virt-install` failed with
+  `unsupported configuration: ACPI requires UEFI on this architecture`: it
+  turns ACPI on by default, and libvirt refuses ACPI on aarch64 unless the
+  domain also has UEFI firmware, which a directly booted kernel does not have.
+  `create` now asks libvirt for the hypervisor's architecture (`virsh
+  capabilities` — the hypervisor's, not your machine's, so a `qemu+ssh://`
+  connection to an aarch64 host is answered correctly) and passes
+  `--features acpi=off` there. QEMU's `virt` machine describes the guest's
+  devices with a device tree instead, so nothing is lost. x86_64 guests are
+  unchanged and keep ACPI.
+
+- **The serial console of an aarch64 guest is captured again.** Base images
+  recorded a `console=ttyS0` kernel command line, and the aarch64 `virt`
+  machine has no such device — its serial port is `ttyAMA0` — so `console.log`
+  and `agent-vm console` stayed empty on that architecture. Newly built base
+  images name both consoles (`console=ttyS0 console=ttyAMA0`), which each
+  architecture resolves to the one it actually has. Images already in the cache
+  keep the command line they were built with; rebuild with
+  `agent-vm image build <distro> --force` to pick this up.
+
+- `playwright install` in a guest no longer fails with `EACCES: permission
+  denied, mkdir '/opt/ms-playwright/__dirlock'` for every account but root. The
+  shared browser directory the image fills at build time was left owned by root
+  and unwritable by anyone else, so the command Playwright's own "browser not
+  found" error tells you to run — the one an agent needs after `mise` moves
+  `playwright` to a release pinning a newer browser build — could not run as the
+  guest user. It is now world-writable with the sticky bit, like `/tmp`: any
+  account may add a browser build, none may remove another's. Existing base
+  images keep the old permissions; rebuild with
+  `agent-vm image build <distro> --force`, or run
+  `sudo chmod 1777 /opt/ms-playwright /opt/ms-playwright/.links` in a guest.
 
 - Installing an npm-backed tool with `mise` inside a guest works for the agent
   account again. `mise`'s npm backend takes a lock under `/tmp/fslock`, a
@@ -1063,8 +1073,9 @@ migration or rebuild step a user has to take.
   `90-agent-vm-datasource.cfg`, which sorts before Ubuntu's `90_dpkg.cfg`
   because `-` sorts before `_`. The pin had no effect there.
 
-  The first boot always looked correct, because the cloud-init seed is attached
-  then and `NoCloud` matches immediately. Later boots have no seed, so
+  Before ADR-0011, the first boot always looked correct, because the transient
+  cloud-init seed was attached then and `NoCloud` matched immediately. Later
+  boots had no seed, so
   cloud-init fell through to the network datasources and spent four minutes
   probing `169.254.169.254` before `sshd` started, which is longer than
   `agent-vm start` waits.

@@ -22,8 +22,8 @@ thrown away when the task is done.
 
 A container shares the host kernel; a compromised or confused agent inside one is
 one kernel bug or one misconfigured mount away from the host. A VM has its own
-kernel and its own memory, so the blast radius of "the agent ran something
-unwise" is a disk image you delete.
+kernel and its own memory, separating guest processes from the host. Network
+access still needs its own policy; the default NAT limits are described below.
 
 The cost of a VM is usually setup time and boot time. This project removes both:
 root filesystems come from OCI container images that are already cached and
@@ -126,7 +126,7 @@ built and removed independently.
 A base image is not a bare distro: it carries the tools an agent expects to
 find already installed, so `create` stays fast and a guest works offline.
 Beyond what makes a container image boot as a VM (kernel, `systemd`,
-`cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every image ships
+`cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every full image ships
 `git`, a C toolchain, Python, Node.js, Go, Rust, a JDK with Maven (via mise),
 Docker, `gh` and `tea`, `wrangler` and `cf`, Playwright with a headless
 Chromium, `tmux` with a session menu at login, the
@@ -142,8 +142,10 @@ is where it is, is in [`docs/cli.md`](./docs/cli.md#guest-tooling).
 ## Networking
 
 - **NAT (default).** The VM sits on a libvirt-managed NAT network. It can reach
-  the internet and the host; nothing on the LAN can reach it. This is the right
-  mode for almost all agent work.
+  the internet, the host, other guests on that network, and the LAN, subject to
+  host firewall rules. Unsolicited connections from the LAN are blocked. NAT
+  does not isolate the host or LAN from guest-initiated connections; see the
+  [host firewall guidance](./docs/host-setup.md#host-firewalls-and-the-virbrn-bridge).
 - **Bridged.** The VM attaches to a host bridge and gets an address from your
   LAN's DHCP, like any other machine on the network. Useful when something else
   must connect *to* the agent's VM. It also removes the NAT boundary, so it is

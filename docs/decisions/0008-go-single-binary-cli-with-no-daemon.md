@@ -38,7 +38,8 @@ is a security surface we do not need.
 
 Implement `agent-vm` as a **single static Go binary (Go 1.22+) with no daemon**.
 
-- `cmd/agent-vm` is a thin entry point: flag parsing and exit codes only.
+- `cmd/agent-vm` is a thin entry point: signal handling and exit status only.
+  Flag parsing belongs to `internal/cli`.
 - `internal/*` holds the logic, one package per concern (`cli`, `config`, `image`,
   `domain`, `network`, `guestinit`, `state`, `hostexec`).
 - `internal/hostexec` is the single place processes are spawned: argv construction,
@@ -50,7 +51,7 @@ Implement `agent-vm` as a **single static Go binary (Go 1.22+) with no daemon**.
 - Templates — per-distro `Containerfile`s, cloud-init user-data, the NAT network
   XML — are compiled in with `embed`; there is nothing to install alongside the
   binary.
-- libvirt is the only long-running component. Runtime VM state is read from libvirt
+- libvirt manages the long-running QEMU processes. Runtime VM state is read from libvirt
   and reconciled against `vm.json`, never cached as a second source of truth.
 - Concurrency safety comes from per-VM and per-image file locks in the state
   directory, not from a coordinating process.
@@ -75,7 +76,8 @@ Harder:
 - Orchestrating subprocesses is less ergonomic than calling a library, which is why
   `internal/hostexec` exists and why argument vectors are pinned by golden tests
   (ADR-0009).
-- Without a daemon there is no reaper: a VM left running is left running, and a
-  crashed process can leave a stale lock (detectable and reported, never silently
-  broken).
+- Without a daemon there is no reaper: a VM left running is left running.
+  Advisory locks are released when their holding process exits; persistent lock
+  files are not themselves evidence of a held lock (see ADR-0010 for remote
+  lock lifetime).
 - Contributors need Go plus a KVM-capable host for meaningful integration work.

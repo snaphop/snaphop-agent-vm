@@ -16,8 +16,10 @@ Host preparation is documented in [`docs/host-setup.md`](./docs/host-setup.md);
 and command reference, and [`README.md`](./README.md) for the project overview.
 
 You can build, unit-test, and lint without KVM — tools are faked at the process
-boundary, and `--dry-run` shows what a change would actually run. You cannot run the
-integration suite or boot a VM without KVM.
+boundary, and `--dry-run` shows what a change would actually run. VM lifecycle integration and guest boot require KVM. Currently, several
+`doctor` unit tests also inspect the real `/dev/kvm` despite faking helper
+processes, so the full unit suite can fail on a host without that device.
+Remote transport integration tests require SSH rather than KVM.
 
 One rule shapes most contributions: **this tool orchestrates existing tools rather
 than reimplementing them** ([ADR-0009](./docs/decisions/0009-orchestrate-existing-host-cli-tools.md)).
@@ -59,7 +61,7 @@ go test ./...
 make check
 
 # Only on a KVM-capable host you are willing to have VMs created on:
-go test -tags integration ./test/integration/...
+go test -tags integration ./test/integration/... -timeout 90m
 
 git commit -m "feat(scope): what changed"
 git push --set-upstream origin feat/short-description
@@ -69,13 +71,16 @@ The first four commands are the minimum verification before handing work off, an
 `scripts/check.sh` (or `make check`) runs all four in one go. CI is intended to
 run the same script; the workflows are not written yet, so running it locally is
 currently the only thing that enforces it. **Merging does not publish or deploy
-anything** — tagged releases build and attach binaries, and that workflow is the
-only publishing path.
+anything**. The planned publishing workflow will build and attach binaries for
+tagged releases; until it exists, `scripts/build-release.sh` only builds local
+artifacts and does not publish them.
 
 ### About The Integration Suite
 
-It creates and destroys real VMs, disk images, and libvirt networks on the host
-that runs it, under a `agent-vm-test-` name prefix and its own state directory.
+It creates and destroys real VMs and disk images on its target host, using the
+`agent-vm-test-` VM name prefix and a dedicated state directory. NAT lifecycle
+tests use `agent-vm-nat`, create it if absent, and leave it in place; the VM
+prefix does not apply to this shared network.
 Never run it against a libvirt host with VMs someone cares about, and never
 against a production host without explicit approval. It is not required for merge,
 which is exactly why unit and golden-file coverage matter.

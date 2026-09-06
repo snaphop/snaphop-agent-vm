@@ -17,11 +17,12 @@ The two modes libvirt gives us differ in exactly the way that matters here:
 
 - **NAT** (libvirt-managed network with `dnsmasq` DHCP behind a `virbr`
   interface): the guest reaches the internet and the host; nothing on the LAN can
-  reach the guest. Works on laptops, works on wireless, needs no host network
-  configuration, and works under `qemu:///session` unprivileged.
+  initiate connections to the guest. Outbound connections can also reach the LAN
+  and other guests. It works over wireless without an operator-created bridge;
+  libvirt still needs permission to manage the NAT network.
 - **Bridge** (guest attached to a host bridge): the guest is a peer on the LAN
   with its own DHCP address. Requires a pre-existing bridge, requires
-  `qemu:///system`, cannot be done over most wireless interfaces, and removes the
+  a system connection (local or remote), cannot be done over most wireless interfaces, and removes the
   NAT boundary that keeps an untrusted guest unreachable.
 
 Since the guest is untrusted by design, putting it on the LAN by default would be
@@ -56,12 +57,18 @@ name need not be repeated, but the `--network bridge` choice itself is never
 implicit. Bridge setup is documented in `docs/host-setup.md`; the security
 implication is stated in `SECURITY.md`.
 
+The CLI accepts `/session` URIs with NAT mode, but it still requests a managed
+libvirt network, not QEMU user-mode networking. An ordinary unprivileged session
+does not provide that network out of the box; use a system connection for the
+standard setup. See [libvirt's connection FAQ](https://wiki.libvirt.org/FAQ.html#what-is-the-difference-between-qemu-system-and-qemu-session-which-one-should-i-use)
+and [NAT semantics](https://libvirt.org/formatnetwork.html#connectivity).
+
 ## Consequences
 
 Easier:
 
-- The safe mode is the zero-configuration mode: NAT works on a fresh laptop with
-  no host networking changes and no root.
+- NAT does not require creating a LAN bridge, once libvirt and host permissions
+  are configured. It does not itself isolate host services or the LAN from guests.
 - Choosing exposure is explicit and per-VM, visible in the command line, in
   `vm.json`, and in the domain XML.
 - Host networking stays the operator's responsibility, which keeps this tool out
