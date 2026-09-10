@@ -120,11 +120,16 @@ Where new code belongs:
   per-distro `Containerfile` under `templates/distro/`, plus a small distro
   definition under `internal/image/distro/` for anything a `Containerfile` cannot
   express. Do not scatter `switch distro` blocks across packages. Each family
-  has two recipes — `<family>.Containerfile` and `<family>-slim.Containerfile`,
-  the latter built as the separate base image `<family>-slim` — and they share
-  the boot, cloud-init, clock, and networking blocks verbatim: a change to one
-  of those blocks belongs in both files in the same edit, which
-  `TestSlimContainerfiles_KeepTheBootAndCloudInitContract` enforces.
+  has three recipes — `<family>.Containerfile`, `<family>-slim.Containerfile`
+  and `<family>-nix.Containerfile`, the latter two built as the separate base
+  images `<family>-slim` and `<family>-nix` — and they share the boot,
+  cloud-init, clock, and networking blocks verbatim: a change to one of those
+  blocks belongs in all three files in the same edit, which
+  `TestSlimContainerfiles_KeepTheBootAndCloudInitContract` and
+  `TestNixContainerfiles_KeepTheBootAndCloudInitContract` enforce. The nix
+  recipes take their guest tooling from the shared
+  `templates/distro/agent-tools.nix` instead of the family's package manager
+  (ADR-0012).
 - A new tool invocation: the package that owns the concern (`internal/image`,
   `internal/domain`, `internal/network`), always executed through
   `internal/hostexec` and behind an interface so tests can substitute a fake at the
@@ -341,7 +346,8 @@ hard to reverse, affect multiple components, or change the security/deployment
 boundary — specifically the virtualization stack, the boot method, the image
 cache format, guest-to-host sharing, network modes, where host tools run
 (ADR-0010), the default resource profile,
-adding a supported distro family, or **implementing something a standard host
+adding a supported distro family, adding a base image variant or changing where
+guest tooling comes from (ADR-0012), or **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
 Document observable or operational effects in `CHANGELOG.md` under

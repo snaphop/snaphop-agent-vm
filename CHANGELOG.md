@@ -29,6 +29,47 @@ existing overlays.
 
 ### Added
 
+- **Nix base images.** Every supported family now has a nix variant, named by
+  appending `-nix` to the family: `agent-vm image build ubuntu-nix`,
+  `agent-vm create work --distro arch-nix`. It boots exactly like the full
+  image — same kernel command line, same cloud-init contract, same SSH and
+  clock behavior — and is built from the same distro packages for everything
+  that makes it boot. What changed is where the guest tooling comes from: one
+  shared nix file, `templates/distro/agent-tools.nix`, instead of the family's
+  own package manager and mise. The same file is used for all three families,
+  so a tool set that used to be written out three times in three different
+  package managers is now written once.
+
+  A nix guest carries the common Linux tooling, the language toolchains (Go,
+  Rust, Node.js, Python, the JDK and Maven, `golangci-lint`), `gh`, `tea`,
+  `wrangler`, Chromium and Playwright's browsers, and `nix` itself, and can
+  install more with `nix` as any account. Docker and the nested virtualization
+  stack still come from the distro, because those are background services the
+  system has to start and a nix profile only supplies programs.
+
+  All five coding agents are there and the per-account herdr servers start at
+  boot, as on a full image. `claude` and `opencode` come from nixpkgs, `codex`
+  and `agy` from their vendors' installers, and `pi` and `herdr` from mise —
+  the one thing these images still install outside the nix file, because
+  nothing else provides those two. mise installs nothing else here.
+
+  One difference worth knowing: Rust comes as `rustc` and `cargo` from nixpkgs
+  rather than through `rustup`, so `cargo build` works as usual but
+  `rustup toolchain install` is not available; use `nix` for a second
+  toolchain.
+
+  A nix image is a separate base image with its own cache directory, manifest,
+  and name, so `ubuntu`, `ubuntu-slim` and `ubuntu-nix` can be cached side by
+  side and are built, listed, and removed independently. It is the largest of
+  the three. `agent-vm update` refreshes a nix guest's distro packages and
+  skips the steps for tooling it does not have; to change what the nix profile
+  holds, edit `agent-tools.nix` and rebuild the image with `--force`.
+
+  Which versions a nix guest gets is decided by the nixpkgs the file fetches.
+  It ships following a release branch, which moves over time; run
+  `scripts/pin-nixpkgs.sh` to lock it to an exact revision, after which two
+  builds of the same image install the same versions.
+
 - **Slim base images.** Every supported family now has a slim variant, named by
   appending `-slim` to the family: `agent-vm image build ubuntu-slim`,
   `agent-vm create work --distro fedora-slim`. It boots exactly like the full

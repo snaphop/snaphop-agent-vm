@@ -37,7 +37,12 @@ import (
 //
 //	go test -tags integration ./test/integration/... -distros=ubuntu
 //	go test -tags integration ./test/integration/... -distros=ubuntu-slim
-var distros = flag.String("distros", "ubuntu,fedora,arch", "comma-separated base images to build, e.g. ubuntu,fedora-slim")
+//	go test -tags integration ./test/integration/... -distros=ubuntu-nix
+//
+// The default is the three full images. The slim and nix variants are separate
+// base images with their own recipes, so building one proves nothing about the
+// others and each has to be named to be covered.
+var distros = flag.String("distros", "ubuntu,fedora,arch", "comma-separated base images to build, e.g. ubuntu,fedora-slim,arch-nix")
 
 // requireTools skips the test when a tool it needs is absent, rather than
 // failing: a developer without libguestfs installed has not broken anything.

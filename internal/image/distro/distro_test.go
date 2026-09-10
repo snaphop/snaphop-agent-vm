@@ -146,19 +146,23 @@ func containsArg(argv []string, want string) bool {
 	return false
 }
 
-func TestParseRef_ReadsTheSlimVariantOfAFamily(t *testing.T) {
-	// A slim image is the same family and the same source image, built from
-	// the family's slim recipe and cached under its own name.
+func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
+	// A variant is the same family and the same source image, built from that
+	// family's variant recipe and cached under its own name.
 	tests := []struct {
 		in            string
+		variant       Variant
 		want          string
 		imageName     string
 		containerfile string
 		sourceRef     string
 	}{
-		{"ubuntu-slim", "ubuntu-slim:24.04", "ubuntu-slim", "ubuntu-slim.Containerfile", "docker.io/library/ubuntu:24.04"},
-		{"fedora-slim:41", "fedora-slim:41", "fedora-slim", "fedora-slim.Containerfile", "registry.fedoraproject.org/fedora:41"},
-		{"arch-slim", "arch-slim:base", "arch-slim", "arch-slim.Containerfile", "docker.io/library/archlinux:base"},
+		{"ubuntu-slim", Slim, "ubuntu-slim:24.04", "ubuntu-slim", "ubuntu-slim.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"fedora-slim:41", Slim, "fedora-slim:41", "fedora-slim", "fedora-slim.Containerfile", "registry.fedoraproject.org/fedora:41"},
+		{"arch-slim", Slim, "arch-slim:base", "arch-slim", "arch-slim.Containerfile", "docker.io/library/archlinux:base"},
+		{"ubuntu-nix", Nix, "ubuntu-nix:24.04", "ubuntu-nix", "ubuntu-nix.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"fedora-nix:41", Nix, "fedora-nix:41", "fedora-nix", "fedora-nix.Containerfile", "registry.fedoraproject.org/fedora:41"},
+		{"arch-nix", Nix, "arch-nix:base", "arch-nix", "arch-nix.Containerfile", "docker.io/library/archlinux:base"},
 	}
 	for _, tt := range tests {
 		ref, err := ParseRef(tt.in)
@@ -166,8 +170,8 @@ func TestParseRef_ReadsTheSlimVariantOfAFamily(t *testing.T) {
 			t.Errorf("ParseRef(%q): %v", tt.in, err)
 			continue
 		}
-		if !ref.Slim {
-			t.Errorf("ParseRef(%q) did not select the slim variant", tt.in)
+		if ref.Variant != tt.variant {
+			t.Errorf("ParseRef(%q).Variant = %q, want %q", tt.in, ref.Variant, tt.variant)
 		}
 		if ref.String() != tt.want {
 			t.Errorf("ParseRef(%q) = %s, want %s", tt.in, ref, tt.want)
@@ -178,33 +182,39 @@ func TestParseRef_ReadsTheSlimVariantOfAFamily(t *testing.T) {
 		if ref.Containerfile() != tt.containerfile {
 			t.Errorf("ParseRef(%q).Containerfile() = %s, want %s", tt.in, ref.Containerfile(), tt.containerfile)
 		}
-		// The slim variant is a different recipe, not a different source: the
-		// image it is built from is the family's.
+		// A variant is a different recipe, not a different source: the image
+		// it is built from is the family's.
 		if ref.SourceRef() != tt.sourceRef {
 			t.Errorf("ParseRef(%q).SourceRef() = %s, want %s", tt.in, ref.SourceRef(), tt.sourceRef)
 		}
 	}
 }
 
-func TestParseRef_KeepsAFamilyAndItsSlimVariantApart(t *testing.T) {
+func TestParseRef_KeepsAFamilyAndItsVariantsApart(t *testing.T) {
+	// Every variant of a family shares the family but never a cache directory
+	// or a recipe: all three may be cached at once, and rebuilding one must not
+	// touch the others.
+	names, recipes := map[string]string{}, map[string]string{}
+	for _, name := range []string{"ubuntu", "ubuntu-slim", "ubuntu-nix"} {
+		ref, err := ParseRef(name)
+		if err != nil {
+			t.Fatalf("ParseRef(%s): %v", name, err)
+		}
+		if other, seen := names[ref.ImageName()]; seen {
+			t.Errorf("%s and %s share the image name %q", other, name, ref.ImageName())
+		}
+		if other, seen := recipes[ref.Containerfile()]; seen {
+			t.Errorf("%s and %s share the recipe %q", other, name, ref.Containerfile())
+		}
+		names[ref.ImageName()], recipes[ref.Containerfile()] = name, name
+	}
+
 	full, err := ParseRef("ubuntu")
 	if err != nil {
 		t.Fatalf("ParseRef(ubuntu): %v", err)
 	}
-	slim, err := ParseRef("ubuntu-slim")
-	if err != nil {
-		t.Fatalf("ParseRef(ubuntu-slim): %v", err)
-	}
-	// They share a family but never a cache directory or a recipe: both may be
-	// cached at once, and rebuilding one must not touch the other.
-	if full.ImageName() == slim.ImageName() {
-		t.Errorf("ubuntu and ubuntu-slim share the image name %q", full.ImageName())
-	}
-	if full.Containerfile() == slim.Containerfile() {
-		t.Errorf("ubuntu and ubuntu-slim share the recipe %q", full.Containerfile())
-	}
-	if full.Slim {
-		t.Error("ParseRef(ubuntu) selected the slim variant")
+	if full.Variant != Full {
+		t.Errorf("ParseRef(ubuntu).Variant = %q, want the full recipe", full.Variant)
 	}
 }
 
@@ -212,24 +222,26 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 	// vm.json and manifest.json record only the image name, and `agent-vm
 	// update` has to find the family from it again.
 	for _, tt := range []struct {
-		name   string
-		family string
-		slim   bool
+		name    string
+		family  string
+		variant Variant
 	}{
-		{"ubuntu", "ubuntu", false},
-		{"ubuntu-slim", "ubuntu", true},
-		{"fedora-slim", "fedora", true},
+		{"ubuntu", "ubuntu", Full},
+		{"ubuntu-slim", "ubuntu", Slim},
+		{"fedora-slim", "fedora", Slim},
+		{"ubuntu-nix", "ubuntu", Nix},
+		{"arch-nix", "arch", Nix},
 	} {
-		d, slim, ok := LookupImage(tt.name)
+		d, variant, ok := LookupImage(tt.name)
 		if !ok {
 			t.Errorf("LookupImage(%q) found nothing", tt.name)
 			continue
 		}
-		if d.Name != tt.family || slim != tt.slim {
-			t.Errorf("LookupImage(%q) = %s slim=%v, want %s slim=%v", tt.name, d.Name, slim, tt.family, tt.slim)
+		if d.Name != tt.family || variant != tt.variant {
+			t.Errorf("LookupImage(%q) = %s variant=%q, want %s variant=%q", tt.name, d.Name, variant, tt.family, tt.variant)
 		}
 	}
-	for _, name := range []string{"alpine-slim", "slim", "-slim", "ubuntu-slim-slim"} {
+	for _, name := range []string{"alpine-slim", "slim", "-slim", "ubuntu-slim-slim", "nix", "-nix", "alpine-nix", "ubuntu-nix-nix"} {
 		if d, _, ok := LookupImage(name); ok {
 			t.Errorf("LookupImage(%q) = %s, want no match", name, d.Name)
 		}
@@ -238,7 +250,7 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 
 func TestImageNames_ListEveryBuildableImage(t *testing.T) {
 	got := strings.Join(ImageNames(), " ")
-	want := "arch arch-slim fedora fedora-slim ubuntu ubuntu-slim"
+	want := "arch arch-slim arch-nix fedora fedora-slim fedora-nix ubuntu ubuntu-slim ubuntu-nix"
 	if got != want {
 		t.Errorf("ImageNames() = %q, want %q", got, want)
 	}

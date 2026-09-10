@@ -302,7 +302,7 @@ agent-vm doctor
 agent-vm doctor --output json
 ```
 
-### `agent-vm image build <distro>[:<tag>]`
+### `agent-vm image build <distro>[-slim|-nix][:<tag>]`
 
 Builds (or rebuilds) the cached base image for a distro. `<distro>` is a
 supported family — `ubuntu`, `fedora`, or `arch` — or that family's slim
@@ -371,6 +371,66 @@ independently, and neither one's rebuild disturbs VMs backed by the other.
 `agent-vm update` works on a slim guest exactly as on a full one: the distro
 packages are updated, and the steps for tooling a slim guest does not carry are
 skipped.
+
+#### Nix images
+
+Every family also has a nix variant, named by appending `-nix`: `agent-vm image
+build ubuntu-nix`, `agent-vm create work --distro arch-nix`. It boots
+identically to the full image — same kernel command line, same cloud-init
+contract, same SSH and clock guarantees — and is built from the same distro
+packages for everything that makes it boot. What differs is where the guest
+*tooling* comes from: one shared nix expression,
+`templates/distro/agent-tools.nix`, instead of the family's package manager and
+mise (ADR-0012).
+
+The point is that the expression is written once and means the same thing on
+all three families, where the full recipes state the same tool set in `apt`,
+`dnf` and `pacman` separately. Pick a nix image when you want the tooling
+pinned and identical across distros, or when you want to change the tool set by
+editing one file.
+
+A nix guest carries the common Linux tooling, the language toolchains (Go,
+Rust, Node.js, Python, the JDK and Maven, `golangci-lint`), `gh`, `tea`,
+`wrangler`, Chromium and Playwright's browsers, and `nix` itself. Rust is the
+one toolchain whose interface differs from a full image: `rustc`, `cargo`,
+`rustfmt` and `clippy` come from nixpkgs and there is no `rustup`, so a guest
+that wants a second toolchain uses `nix` rather than `rustup toolchain
+install`. `agent-vm update` skips its rustup step on these guests accordingly. It keeps
+Docker and the nested virtualization stack, which still come from the distro:
+both are system daemons with distro-owned units, and a nix profile can supply
+the binaries but not a running service.
+
+All five coding agents are present, and the per-account herdr servers start at
+boot exactly as they do on a full image. `claude` and `opencode` come from
+nixpkgs, `codex` and `agy` from their vendors' own installers, and `pi` and
+`herdr` from mise — which is the one thing a nix image still installs outside
+the nix file, because nixpkgs packages neither and nothing else can supply
+them. mise installs those two and nothing else: every toolchain, runtime and
+CLI tool comes from `agent-tools.nix`, so there is never a question of which
+copy of Go or Node a guest is running. Their versions are the one part of a nix
+image the nixpkgs pin does not cover.
+
+Nix is installed multi-user, so any account in the guest can `nix profile
+install` for itself. What the image shipped lives in one profile every account
+shares, `/nix/var/nix/profiles/default`, which is on the default `PATH`.
+
+`agent-vm update` updates a nix guest's distro packages as it does any other,
+and skips the mise, codex and rustup steps that have nothing to act on. The
+tooling the nix profile holds is fixed by the expression the image was built
+from — to change it, edit `agent-tools.nix` and run `agent-vm image build
+<distro>-nix --force`.
+
+The nixpkgs the expression fetches is what decides which versions a guest gets.
+It ships following a release branch, which moves; `scripts/pin-nixpkgs.sh`
+resolves it to an exact revision and hash, after which two builds of the same
+image and tag install the same versions.
+
+A nix image is a separate base image, like a slim one: its own cache directory
+(`images/ubuntu-nix/24.04/`), its own manifest, and its own name in `image
+list`, `image inspect`, `image rm`, and `vm.json`. All three variants of a
+family can be cached at once and are built and removed independently. It is the
+largest of the three — a nix store carrying four toolchains and a browser is
+bigger than the equivalent distro packages, because closures are complete.
 
 The build prepares artifacts in a temporary directory under `images/` and
 installs them on success. During a rebuild the previous image is moved aside
@@ -838,7 +898,7 @@ and must not already exist.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` to the family (`ubuntu-slim`) for the slim variant. |
+| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`) or `-nix` (`ubuntu-nix`) to the family for that variant. |
 | `--vcpus <n>` | `2` | Virtual CPUs. |
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`). |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
