@@ -1451,6 +1451,20 @@ func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
 // what the two must share and what only the full one may carry.
 func slimRecipes(t *testing.T) map[string][2]string {
 	t.Helper()
+	return variantRecipes(t, distro.Slim)
+}
+
+func nixRecipes(t *testing.T) map[string][2]string {
+	t.Helper()
+	return variantRecipes(t, distro.Nix)
+}
+
+// variantRecipes pairs every family's full recipe with the named variant's,
+// keyed by the variant recipe's filename. Both halves are returned because the
+// contract tests below check the same needle in each: a needle the full recipe
+// stopped carrying is a stale test, not a passing one.
+func variantRecipes(t *testing.T, variant distro.Variant) map[string][2]string {
+	t.Helper()
 
 	recipes := map[string][2]string{}
 	for _, name := range distro.Names() {
@@ -1458,20 +1472,40 @@ func slimRecipes(t *testing.T) map[string][2]string {
 		if !ok {
 			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
 		}
-		if d.SlimContainerfile == "" {
-			t.Fatalf("%s has no slim recipe; every family has a slim variant", d.Name)
+		ref := distro.Ref{Distro: d, Tag: d.DefaultTag, Variant: variant}
+		if ref.Containerfile() == "" {
+			t.Fatalf("%s has no %q recipe; every family has every variant", d.Name, variant)
 		}
 		full, err := templates.FS.ReadFile("distro/" + d.Containerfile)
 		if err != nil {
 			t.Fatalf("reading %s: %v", d.Containerfile, err)
 		}
-		slim, err := templates.FS.ReadFile("distro/" + d.SlimContainerfile)
+		other, err := templates.FS.ReadFile("distro/" + ref.Containerfile())
 		if err != nil {
-			t.Fatalf("reading %s: %v", d.SlimContainerfile, err)
+			t.Fatalf("reading %s: %v", ref.Containerfile(), err)
 		}
-		recipes[d.SlimContainerfile] = [2]string{string(full), string(slim)}
+		recipes[ref.Containerfile()] = [2]string{string(full), string(other)}
 	}
 	return recipes
+}
+
+// bootAndCloudInitContract is everything docs/cli.md calls the guest contract —
+// the guest boots, gets an address, resolves names, learns the time, reads the
+// NoCloud seed and no other datasource, and answers SSH. It comes from a
+// handful of blocks the full recipe carries, and every variant must keep all of
+// them, so the list is shared by the variant tests below.
+var bootAndCloudInitContract = []struct{ needle, why string }{
+	{"L+! /etc/resolv.conf", "guests built from it would have no DNS"},
+	{"/etc/tmpfiles.d/systemd-resolve.conf", "systemd's own `L` rule would win and resolv.conf would stay empty"},
+	{"systemd-resolved.service", "nothing would answer the stub resolver"},
+	{"systemd-networkd.service", "the guest would never get an address"},
+	{"datasource_list: [ NoCloud, None ]", "the guest could probe a metadata service on the network"},
+	{"cloud-init.target", "the guest would never receive its SSH key"},
+	{"chrony-wait.service", "a guest could be handed over with a clock weeks out"},
+	{"After=time-sync.target", "SSH would answer before the clock was correct"},
+	{"qemu-guest-agent.service", "the host could not query the guest"},
+	{"/dev/vda1 / ext4 defaults 0 1", "systemd's fstab generator would disagree with the kernel about the root filesystem"},
+	{"net.ipv4.ping_group_range", "an unprivileged account could not run ping"},
 }
 
 // TestSlimContainerfiles_KeepTheBootAndCloudInitContract is what makes a slim
@@ -1485,23 +1519,9 @@ func slimRecipes(t *testing.T) map[string][2]string {
 // that removes one from the full recipe fails here too, rather than leaving
 // this list quietly checking something nothing produces any more.
 func TestSlimContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
-	contract := []struct{ needle, why string }{
-		{"L+! /etc/resolv.conf", "guests built from it would have no DNS"},
-		{"/etc/tmpfiles.d/systemd-resolve.conf", "systemd's own `L` rule would win and resolv.conf would stay empty"},
-		{"systemd-resolved.service", "nothing would answer the stub resolver"},
-		{"systemd-networkd.service", "the guest would never get an address"},
-		{"datasource_list: [ NoCloud, None ]", "the guest could probe a metadata service on the network"},
-		{"cloud-init.target", "the guest would never receive its SSH key"},
-		{"chrony-wait.service", "a guest could be handed over with a clock weeks out"},
-		{"After=time-sync.target", "SSH would answer before the clock was correct"},
-		{"qemu-guest-agent.service", "the host could not query the guest"},
-		{"/dev/vda1 / ext4 defaults 0 1", "systemd's fstab generator would disagree with the kernel about the root filesystem"},
-		{"net.ipv4.ping_group_range", "an unprivileged account could not run ping"},
-	}
-
 	for slimName, pair := range slimRecipes(t) {
 		full, slim := pair[0], pair[1]
-		for _, want := range contract {
+		for _, want := range bootAndCloudInitContract {
 			if !strings.Contains(full, want.needle) {
 				t.Errorf("the full recipe no longer contains %q; this list describes what a slim image must keep from it, so update both", want.needle)
 			}
@@ -1572,6 +1592,213 @@ func TestSlimContainerfiles_InstallTheCommonTooling(t *testing.T) {
 			if !strings.Contains(pair[1], pkg) {
 				t.Errorf("%s does not install %q; docs/cli.md promises a slim guest the same common tooling", slimName, pkg)
 			}
+		}
+	}
+}
+
+// TestNixContainerfiles_KeepTheBootAndCloudInitContract is what makes a nix
+// image a base image rather than a container that happens to have a kernel.
+//
+// The nix variant changes where the guest *tooling* comes from and nothing
+// else, so every promise a VM built on a full image makes has to hold here
+// too. The list is shared with the slim test on purpose: a block removed from
+// the full recipe fails in both places rather than leaving either quietly
+// checking something nothing produces any more.
+func TestNixContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
+	for nixName, pair := range nixRecipes(t) {
+		full, nix := pair[0], pair[1]
+		for _, want := range bootAndCloudInitContract {
+			if !strings.Contains(full, want.needle) {
+				t.Errorf("the full recipe no longer contains %q; this list describes what every variant must keep from it, so update both", want.needle)
+			}
+			if !strings.Contains(nix, want.needle) {
+				t.Errorf("%s does not contain %q: %s", nixName, want.needle, want.why)
+			}
+		}
+
+		// The kernel and the init system are the two things a container image
+		// lacks and a VM cannot boot without, whatever else is left out.
+		for _, unit := range []string{"cloud-init", "openssh", "sudo", "chrony"} {
+			if !strings.Contains(nix, unit) {
+				t.Errorf("%s does not install %s; a guest built from it could not be reached or configured", nixName, unit)
+			}
+		}
+	}
+}
+
+// TestNixContainerfiles_InstallTheToolingFromNix is the point of the variant:
+// the tool set comes from the one shared expression, and the guest ends up with
+// a working multi-user nix rather than a root-owned store nobody else can add
+// to.
+func TestNixContainerfiles_InstallTheToolingFromNix(t *testing.T) {
+	required := []struct{ needle, why string }{
+		{"https://nixos.org/nix/install", "there would be no nix in the image to install anything with"},
+		{"--no-daemon", "a multi-user install cannot complete in a build with no running systemd"},
+		{"COPY agent-tools.nix /etc/agent-vm/agent-tools.nix", "the expression that defines the tool set would not be in the image"},
+		{"nix-build --no-out-link /etc/agent-vm/agent-tools.nix -A env", "nothing would build the tool set"},
+		{"nix-env --profile /nix/var/nix/profiles/default --set", "the tools would not be in a profile every account shares"},
+		{"build-users-group = nixbld", "nix-daemon would have no unprivileged accounts to build under"},
+		{"nix-daemon.socket", "an unprivileged account in the guest could not install anything"},
+		{"COPY nix.sh /etc/profile.d/agent-vm-nix.sh", "a login shell would not find the tools"},
+		{"PATH=/nix/var/nix/profiles/default/bin:", "`ssh <vm> go build`, which reads no profile, would not find the tools"},
+		{"-A browsers", "Playwright would have no browser and `chromium` would not run"},
+	}
+
+	for nixName, pair := range nixRecipes(t) {
+		nix := pair[1]
+		for _, want := range required {
+			if !strings.Contains(nix, want.needle) {
+				t.Errorf("%s does not contain %q: %s", nixName, want.needle, want.why)
+			}
+		}
+	}
+}
+
+// TestNixContainerfiles_LeaveTheToolingToTheNixFile guards the boundary the
+// variant exists to draw. mise survives in a nix image for exactly two tools,
+// pi and herdr, which nixpkgs does not package and which nothing else can
+// install — and herdr is not optional, because the image starts a server for
+// every account at boot. Anything else installed through mise would give the
+// image two sources for the same tool and no way to say which one a guest is
+// running, which is the ambiguity the nix variant removes.
+func TestNixContainerfiles_LeaveTheToolingToTheNixFile(t *testing.T) {
+	allowed := []string{"pi", "herdr"}
+
+	for nixName, pair := range nixRecipes(t) {
+		full, nix := pair[0], pair[1]
+
+		// Rust is the one toolchain the full recipe installs outside a package
+		// manager; in a nix image it comes from the profile like the rest.
+		for _, tool := range []string{"rustup-init", "sh.rustup.rs"} {
+			if !strings.Contains(full, tool) {
+				t.Errorf("the full recipe no longer mentions %q; this list describes what the nix variant replaces, so update both", tool)
+			}
+			if strings.Contains(nix, tool) {
+				t.Errorf("%s installs a toolchain outside agent-tools.nix (%s)", nixName, tool)
+			}
+		}
+
+		installs := 0
+		for _, line := range strings.Split(nix, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") || !strings.Contains(line, "mise use") {
+				continue
+			}
+			installs++
+			_, args, found := strings.Cut(line, "--yes")
+			if !found {
+				t.Errorf("%s runs mise without --yes, which would block an unattended build: %s", nixName, line)
+				continue
+			}
+			// Everything after --yes is the tool list, up to the shell
+			// separator that ends the command.
+			got := strings.Fields(strings.TrimRight(strings.TrimSpace(args), "; \\"))
+			if !slices.Equal(got, allowed) {
+				t.Errorf("%s installs %v through mise, want exactly %v: everything else belongs in agent-tools.nix", nixName, got, allowed)
+			}
+		}
+		if installs == 0 {
+			t.Errorf("%s installs nothing through mise; pi and herdr come from nowhere else, and a guest without herdr has a failed unit at every boot", nixName)
+		}
+
+		// The shims are the other half of it: a symlink to the mise binary for
+		// any other command would put a mise-resolved tool on PATH ahead of
+		// the profile's.
+		if want := "for command in pi herdr; do"; !strings.Contains(nix, want) {
+			t.Errorf("%s does not shim exactly pi and herdr (%q missing)", nixName, want)
+		}
+		if got := strings.Count(nix, "ln -sf /usr/local/bin/mise"); got != 1 {
+			t.Errorf("%s links commands to the mise binary in %d places, want exactly 1: pi and herdr are the whole list", nixName, got)
+		}
+	}
+}
+
+// TestNixContainerfiles_KeepTheServicesAGuestStillRuns covers the two places a
+// nix guest is not allowed to differ from a full one.
+//
+// Docker and libvirt are the deliberate exception to installing from nix: both
+// are system daemons with kernel-side state and distro-owned units, and a nix
+// profile can supply the binaries but not a running, socket-activated service,
+// so they stay on the distro's package manager (ADR-0012).
+//
+// The herdr servers are the reason mise survives in this variant at all. The
+// unit is a template instantiated per account, so an image that shipped it
+// without installing herdr would come up with a failed unit at every boot of
+// every guest — which is exactly what dropping mise from these recipes would
+// have caused.
+func TestNixContainerfiles_KeepTheServicesAGuestStillRuns(t *testing.T) {
+	for nixName, pair := range nixRecipes(t) {
+		nix := pair[1]
+		for _, unit := range []string{"docker.service", "libvirtd.service"} {
+			if !strings.Contains(nix, unit) {
+				t.Errorf("%s does not enable %s; a nix guest would lose a capability the full image promises", nixName, unit)
+			}
+		}
+		for _, want := range []struct{ needle, why string }{
+			{"COPY herdr-server.sh /usr/local/sbin/agent-vm-herdr-server", "nothing would start a herdr server for each account"},
+			{"'ExecStart=/usr/local/bin/herdr server' \\", "the unit would not start the server the shim in /usr/local/bin points at"},
+		} {
+			if !strings.Contains(nix, want.needle) {
+				t.Errorf("%s does not contain %q: %s", nixName, want.needle, want.why)
+			}
+		}
+	}
+}
+
+// TestAgentToolsNix_IsShippedInTheBuildContext catches the failure where the
+// recipes COPY a file the builder never writes: podman fails late, after the
+// pull and most of the build, with a message about a missing context file.
+func TestAgentToolsNix_IsShippedInTheBuildContext(t *testing.T) {
+	for _, name := range []string{"agent-tools.nix", "nix.sh"} {
+		if !slices.Contains(buildContextFiles, name) {
+			t.Errorf("%s is not in buildContextFiles; every nix build would fail on the COPY", name)
+		}
+		if _, err := templates.FS.ReadFile("distro/" + name); err != nil {
+			t.Errorf("reading embedded distro/%s: %v", name, err)
+		}
+	}
+}
+
+// TestAgentToolsNix_PinsItsNixpkgsInOnePlace keeps the pin findable and
+// movable. Two builds of the same image name and tag should install the same
+// versions, and the only thing that decides that is which nixpkgs is fetched.
+func TestAgentToolsNix_PinsItsNixpkgsInOnePlace(t *testing.T) {
+	contents, err := templates.FS.ReadFile("distro/agent-tools.nix")
+	if err != nil {
+		t.Fatalf("reading distro/agent-tools.nix: %v", err)
+	}
+	nix := string(contents)
+
+	for _, want := range []struct{ needle, why string }{
+		{"nixpkgsRef =", "there would be nothing for scripts/pin-nixpkgs.sh to rewrite"},
+		{"nixpkgsSha256 =", "a pinned revision could not be verified"},
+		{"scripts/pin-nixpkgs.sh", "nothing would tell a reader how to pin it"},
+		{"archive/${nixpkgsRef}.tar.gz", "the fetch would not follow the binding above it"},
+	} {
+		if !strings.Contains(nix, want.needle) {
+			t.Errorf("agent-tools.nix does not contain %q: %s", want.needle, want.why)
+		}
+	}
+
+	// A second fetchTarball would be a second, unpinned source of packages.
+	if got := strings.Count(nix, "fetchTarball"); got != 1 {
+		t.Errorf("agent-tools.nix calls fetchTarball %d times, want exactly 1: every package must come from the one pinned tree", got)
+	}
+}
+
+// TestAgentToolsNix_CarriesNoCredentials is the same check the agent
+// configuration files get. A base image is shared by every VM built on it, so
+// nothing per-VM and nothing secret may be in a file it ships (SECURITY.md).
+func TestAgentToolsNix_CarriesNoCredentials(t *testing.T) {
+	contents, err := templates.FS.ReadFile("distro/agent-tools.nix")
+	if err != nil {
+		t.Fatalf("reading distro/agent-tools.nix: %v", err)
+	}
+	lowered := strings.ToLower(string(contents))
+
+	for _, secret := range []string{"api_key", "apikey", "token", "password", "secret", "begin openssh private key", "begin rsa private key"} {
+		if strings.Contains(lowered, secret) {
+			t.Errorf("agent-tools.nix mentions %q; a base image is shared by every VM built on it", secret)
 		}
 	}
 }

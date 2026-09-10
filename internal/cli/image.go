@@ -73,7 +73,7 @@ func (a *App) buildProgress() image.Progress {
 }
 
 func runImageBuild(ctx context.Context, app *App, args []string) error {
-	flags := newFlagSet("image build", "agent-vm image build <distro>[-slim][:<tag>] [flags]", app.Stderr)
+	flags := newFlagSet("image build", "agent-vm image build <distro>[-slim|-nix][:<tag>] [flags]", app.Stderr)
 	from := flags.String("from", "", "override the source OCI reference")
 	platform := flags.String("platform", "", "image platform to pull (default: the host platform)")
 	force := flags.Bool("force", false, "rebuild even if a cached image already exists")

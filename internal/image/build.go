@@ -71,6 +71,8 @@ var buildContextFiles = []string{
 	"chromium.sh",
 	"mise.sh",
 	"toolchains.sh",
+	"nix.sh",
+	"agent-tools.nix",
 	"user-setup.sh",
 	"codex-remote-control.sh",
 	"herdr-server.sh",
@@ -111,9 +113,9 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 	name, tag := opts.Ref.ImageName(), opts.Ref.Tag
 
 	// One build per base image at a time. A second build of the same image
-	// waits rather than racing; different distros build concurrently. A slim
-	// image is a different image, so it neither waits for nor collides with
-	// the full build of the same family and tag.
+	// waits rather than racing; different distros build concurrently. Each
+	// variant is a different image, so a slim or nix build neither waits for
+	// nor collides with the full build of the same family and tag.
 	lock, err := b.Store.LockImage(ctx, name, tag, "image build")
 	if err != nil {
 		return nil, err
@@ -258,9 +260,10 @@ func (b *Builder) buildInto(ctx context.Context, steps reporter, work *workspace
 //
 // Every family's full recipe COPYs the same guest dotfiles, so they are
 // written from one embedded copy rather than repeated as heredocs in three
-// Containerfiles. They are written for a slim build too, which COPYs none of
-// them: podman ignores what a recipe does not reference, and writing the same
-// context either way keeps the build from having to know which recipe it is
+// Containerfiles. They are written for every variant, including a slim build
+// that COPYs none of them and a nix build that COPYs a different subset:
+// podman ignores what a recipe does not reference, and writing the same
+// context every time keeps the build from having to know which recipe it is
 // running.
 func (b *Builder) writeBuildContext(work *workspace, ref distro.Ref) (string, error) {
 	contents, err := templates.FS.ReadFile("distro/" + ref.Containerfile())

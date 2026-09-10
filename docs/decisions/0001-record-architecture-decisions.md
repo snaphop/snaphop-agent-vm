@@ -34,8 +34,9 @@ For this project specifically, an ADR is required for changes to the
 virtualization stack, the boot method, the image cache format, guest-to-host
 sharing, network modes, where host tools run (ADR-0010), the default resource
 profile, adding a supported distro
-family, and implementing in our own code something a standard host tool already
-does (ADR-0009).
+family, adding a base image variant or changing where guest tooling comes from
+(ADR-0012), and implementing in our own code something a standard host tool
+already does (ADR-0009).
 
 ## Consequences
 
