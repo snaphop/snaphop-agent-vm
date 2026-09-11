@@ -13,10 +13,15 @@
 # which is exactly the kind of change that should not turn into a guest with no
 # browser. Matching the executable by name survives both. chromium-* excludes
 # chromium_headless_shell-*, whose binary is a different program.
+#
+# -L is what makes this work on a nix image, where every entry under the
+# browsers directory is a symlink into the store: find does not descend a
+# symlink without it, and the search would come up empty next to a browser that
+# is plainly there.
 set -eu
 
 browsers="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
-chrome="$(find "${browsers}" -type f -name chrome -path '*/chromium-*' 2>/dev/null | sort -V | tail -n1)"
+chrome="$(find -L "${browsers}" -type f -name chrome -path '*/chromium-*' 2>/dev/null | sort -V | tail -n1)"
 
 if [ -z "${chrome}" ]; then
     echo "chromium: no browser found under ${browsers}." >&2
