@@ -96,6 +96,22 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# Nix's own configuration for the rest of this build.
+#
+# Everything below runs as root inside `podman build`, and nix defaults
+# build-users-group to "nixbld" when it runs as root -- then refuses to start
+# because that group does not exist yet. Creating the build users this early
+# would not help: root's builds would move into a sandbox this container cannot
+# set up, having neither privileged mounts nor nested user namespaces. So the
+# build gets single-user settings, and the multi-user block further down
+# replaces this file with the one the guest actually uses.
+RUN set -eu; \
+    install -d -m 0755 /etc/nix; \
+    printf '%s\n' \
+      'build-users-group =' \
+      'sandbox = false' \
+      > /etc/nix/nix.conf
+
 # Nix itself (ADR-0012).
 #
 # The installer runs in single-user mode. A multi-user install starts nix-daemon
@@ -156,16 +172,21 @@ RUN set -eu; \
 COPY chromium.sh /usr/local/bin/chromium
 RUN chmod 0755 /usr/local/bin/chromium
 
-# Drop everything the builds above needed and nothing in the profile does, then
-# hardlink the duplicates the remaining closures share.
+# Drop everything the builds above needed and nothing in the profile does.
 #
 # This is not housekeeping. A nix store carrying four toolchains and a browser
 # is the largest single thing in this image, and every byte of it is copied
 # into the base disk and then read through a copy-on-write overlay by every VM
 # built on it.
+#
+# The obvious companion, `nix-store --optimise`, is deliberately absent. It
+# deduplicates by renaming a temporary hardlink over an existing store path, and
+# on the overlay filesystem every `podman build` layer lives on that rename
+# fails with ESTALE partway through -- so the step cannot succeed here whatever
+# the store contains. Deduplication is left to the guest, where the store sits
+# on a real ext4 root.
 RUN set -eu; \
-    nix-collect-garbage --delete-old >/dev/null; \
-    nix-store --optimise >/dev/null
+    nix-collect-garbage --delete-old >/dev/null
 
 # Multi-user nix for the guest.
 #
@@ -178,6 +199,15 @@ RUN set -eu; \
 #
 # The build users are what let nix-daemon build derivations under unprivileged
 # accounts. Thirty-two is the installer's own number.
+#
+# The last two steps are what the single-user install leaves undone, and both
+# are silent when missing. The shipped socket unit carries
+# ConditionPathIsReadWrite=/nix/var/nix/daemon-socket, so without that directory
+# systemd skips the socket at every boot and reports the unit enabled and
+# healthy while no daemon ever listens; and a root-owned /nix/store gives the
+# build users nowhere to write, which fails the first unprivileged install after
+# the daemon is finally reached. 1775 is the mode the installer's own multi-user
+# script sets.
 RUN set -eu; \
     groupadd --system nixbld; \
     for i in $(seq 1 32); do \
@@ -189,7 +219,10 @@ RUN set -eu; \
     printf '%s\n' \
       'build-users-group = nixbld' \
       'experimental-features = nix-command flakes' \
-      > /etc/nix/nix.conf
+      > /etc/nix/nix.conf; \
+    install -d -m 0755 /nix/var/nix/daemon-socket; \
+    chgrp nixbld /nix/store; \
+    chmod 1775 /nix/store
 
 # The daemon's units come out of the nix package's own store path rather than
 # being written here, so they stay correct across nix releases. A nix package
@@ -232,6 +265,8 @@ RUN chmod 0644 /etc/profile.d/agent-vm-nix.sh
 # that disagreement is cheap to find.
 RUN set -eu; \
     for command in node npm npx go gofmt golangci-lint python3 \
+                   java javac mvn \
+                   cargo-fmt cargo-clippy \
                    cargo rustc rustfmt claude opencode gh tea wrangler; do \
       if [ ! -x "/nix/var/nix/profiles/default/bin/${command}" ]; then \
         echo "the nix profile has no ${command}; this list and agent-tools.nix disagree" >&2; \

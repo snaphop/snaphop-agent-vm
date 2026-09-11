@@ -901,6 +901,45 @@ existing overlays.
 
 ### Fixed
 
+- **The nix base images build again.** `agent-vm image build ubuntu-nix` (and
+  the arch and fedora variants) failed four different ways, all of them in the
+  recipe rather than in nix. The installer refused to run because nix defaults
+  its build-user group to `nixbld` when it runs as root and the recipe created
+  that group only later, so the build now writes single-user settings to
+  `/etc/nix/nix.conf` first and the multi-user block still replaces them for the
+  guest. `nix-store --optimise` was dropped: it deduplicates by renaming a
+  temporary hardlink over a store path, which fails with a stale file handle on
+  the overlay filesystem every container build layer lives on, so the step could
+  never succeed — the guest's store, on a real root filesystem, is where
+  deduplication belongs. `java`, `javac`, `mvn`, `cargo-fmt` and `cargo-clippy`
+  were missing from the commands the recipe links into `/usr/local/bin`, so the
+  JDK, Maven, `cargo fmt` and `cargo clippy` were installed but unreachable to
+  anything that does not read a login shell's profile — an `ssh <vm> mvn
+  package` included.
+
+- **Multi-user nix works in a nix guest.** The daemon was enabled but never
+  started: its socket unit requires `/nix/var/nix/daemon-socket` to exist, the
+  single-user install used during the image build does not create it, and
+  systemd silently skipped the unit at every boot while reporting it enabled.
+  `/nix/store` was also left root-owned, so the build users had nowhere to
+  write. The `agent` account could not install anything with nix -- the failure
+  a base image is supposed to make impossible. Both are now set up during the
+  build, and an unprivileged `nix build` works in a fresh VM.
+
+- **arch-nix guests run Arch's python scripts on Arch's python.** The nix
+  profile's `python3` is linked into `/usr/local/bin`, which precedes `/usr/bin`
+  on the default PATH, and Arch is the one family shipping `#!/usr/bin/env
+  python3` scripts. `virt-install` failed to build the image outright, and
+  `cloud-init` would have failed at first boot -- as a guest that never received
+  its SSH key. Those shebangs are now pinned to `/usr/bin/python3`.
+
+- **`chromium` finds its browser in a nix guest.** The wrapper searched
+  `/opt/ms-playwright` with `find`, which does not descend a symlink unless
+  asked to. In a nix image every entry there is a symlink into the nix store, so
+  the search came up empty and `chromium` reported no browser next to a browser
+  that was plainly installed. The full and slim images were unaffected, and the
+  fix (`find -L`) changes nothing for them.
+
 - **Guests no longer come up with a clock weeks in the past.** On aarch64 —
   which in practice means an Apple Silicon host running Asahi Linux — the VM had
   no working real-time clock: QEMU's `virt` machine provides a PL031, but
