@@ -143,13 +143,21 @@ let
     "opencode"
   ];
 
+  # nixos-25.05's wrangler 4.17.0 currently has a stale fixed-output hash for
+  # its pnpm dependency tree. Keep this override narrow so the image can build
+  # while the rest of the tooling still comes from the selected nixpkgs tree.
+  wranglerFixed = pkgs.wrangler.overrideAttrs (old: {
+    pnpmDeps = old.pnpmDeps.overrideAttrs (_: {
+      outputHash = "sha256-U98sZ8Hg44tzh/KUQ4e6am5MLvr+5732B6fTfbtY4qE=";
+    });
+  });
+
   # gh and tea are how an agent works with a forge from inside the guest, and
   # wrangler is what the full image ships for Cloudflare deployments.
   forgeTooling = need [
     "gh"
     "tea"
-    "wrangler"
-  ];
+  ] ++ [ wranglerFixed ];
 
   # nix itself has to be in the profile: it is what the guest uses to install
   # anything else, and the recipes take the nix-daemon units out of this
