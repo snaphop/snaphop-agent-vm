@@ -16,10 +16,10 @@
 #     kernel-side state; nix can supply the binaries but not a running,
 #     socket-activated daemon integrated with the distro's units, so the nix
 #     recipes install those two from the distro as well.
-#   - codex and agy, which come from their vendors' own installers, and pi and
-#     herdr, which come from mise's registry. None of the four is packaged in
-#     nixpkgs, and none of them was ever installed by a distro package manager,
-#     so nix mode does not change how they arrive. See the recipes.
+#   - codex, which comes from OpenAI's installer, and pi, herdr, agy and grok,
+#     which come from mise. None of them is packaged in nixpkgs, and none of
+#     them was ever installed by a distro package manager, so nix mode does
+#     not change how they arrive. See the recipes.
 #
 # Nothing here is a credential and nothing here is per-VM: a base image is
 # shared by every VM built on it (SECURITY.md).

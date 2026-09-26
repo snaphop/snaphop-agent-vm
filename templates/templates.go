@@ -14,7 +14,7 @@ import "embed"
 // FS holds the embedded template tree.
 //
 //go:embed network/*.xml.tmpl distro/*.Containerfile distro/tmux.conf
-//go:embed distro/claude-settings.json distro/codex-config.toml distro/opencode.json
+//go:embed distro/claude-settings.json distro/codex-config.toml distro/opencode.json distro/grok-config.toml
 //go:embed distro/agent-aliases.sh distro/chromium.sh distro/mise.sh
 //go:embed distro/toolchains.sh distro/nix.sh distro/agent-tools.nix
 //go:embed distro/user-setup.sh distro/tmux-menu.sh distro/tmux-menu-profile.sh

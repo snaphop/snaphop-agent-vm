@@ -130,8 +130,8 @@ Beyond what makes a container image boot as a VM (kernel, `systemd`,
 `git`, a C toolchain, Python, Node.js, Go, Rust, a JDK with Maven (via mise),
 Docker, `gh` and `tea`, `wrangler` and `cf`, Playwright with a headless
 Chromium, `tmux` with a session menu at login, the
-[Herdr](https://herdr.dev) terminal workspace, and five coding agents —
-`claude`, `codex`, `opencode`, `pi`, and `agy` — each configured in its most
+[Herdr](https://herdr.dev) terminal workspace, and six coding agents —
+`claude`, `codex`, `opencode`, `pi`, `agy`, and `grok` — each configured in its most
 permissive mode, because the VM is the sandbox. Guests can also run VMs of
 their own.
 

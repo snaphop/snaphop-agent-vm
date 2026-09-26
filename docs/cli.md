@@ -400,15 +400,15 @@ Docker and the nested virtualization stack, which still come from the distro:
 both are system daemons with distro-owned units, and a nix profile can supply
 the binaries but not a running service.
 
-All five coding agents are present, and the per-account herdr servers start at
+The same coding agents are present, and the per-account herdr servers start at
 boot exactly as they do on a full image. `claude` and `opencode` come from
-nixpkgs, `codex` and `agy` from their vendors' own installers, and `pi` and
-`herdr` from mise — which is the one thing a nix image still installs outside
-the nix file, because nixpkgs packages neither and nothing else can supply
-them. mise installs those two and nothing else: every toolchain, runtime and
-CLI tool comes from `agent-tools.nix`, so there is never a question of which
-copy of Go or Node a guest is running. Their versions are the one part of a nix
-image the nixpkgs pin does not cover.
+nixpkgs, `codex` from OpenAI's installer, and `pi`, `herdr`, `agy` and `grok`
+from mise — which is what a nix image still installs outside the nix file,
+because nixpkgs packages none of them. `agy` is mise's registry name for the
+Antigravity CLI; `grok` is `npm:@xai-official/grok` on the Node runtime the
+nix profile already provides. mise installs no toolchain and no runtime, so
+there is never a question of which copy of Go or Node a guest is running.
+Their versions are the one part of a nix image the nixpkgs pin does not cover.
 
 Nix is installed multi-user, so any account in the guest can `nix profile
 install` for itself. What the image shipped lives in one profile every account
@@ -469,7 +469,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Development | `git`, a C/C++ toolchain (`gcc`, `make`, `pkg-config`), Python 3 with `pip` |
 | Shell workflow | `jq`, `zip`/`unzip`, `xz`, `tar`, `less`, `vim`, `nano`, `tmux` (with a session menu at login), `htop`, `tree`, `file`, `man` |
 | Containers | Docker (`docker`, `docker compose`, `docker buildx`), started at boot, able to build for `linux/arm64` as well as the host's own architecture |
-| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`; `claude`, `opencode` and `pi` are managed by `mise` |
+| Coding agents | `claude`, `codex`, `opencode`, `pi`, `agy`, `grok`; `claude`, `opencode`, `pi`, `agy` and `grok` are managed by `mise` |
 | Terminal workspace | `herdr`, managed by `mise`, with a server started at boot for every account |
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` and `cf` (both Cloudflare), managed by `mise` |
@@ -526,21 +526,26 @@ A guest that can never reach an NTP server never synchronizes.
 
 #### Coding agents
 
-Every full base image carries five coding agents, so a VM is usable by an agent the
-moment it is reachable: `claude`, `codex`, `opencode`, `pi`, and `agy`. All five
-are vendor-built native binaries; `agy` and `codex` come from their vendors' own
-installer scripts into `/usr/local/bin`, where every account on the VM finds
-them. Their versions are not pinned — they are whatever was current when the
-image was built, and rebuilding the image is how a guest gets newer ones.
+Every full base image carries six coding agents, so a VM is usable by an agent the
+moment it is reachable: `claude`, `codex`, `opencode`, `pi`, `agy`, and `grok`.
+Their versions are not pinned — they are whatever was current when the image
+was built. `agent-vm update` moves the mise-managed ones without a rebuild.
 
-`claude`, `opencode`, and `pi` are installed with `mise` (`mise use -g claude
-opencode pi`), the same tool-version manager the JDK and Maven come from; those
-registry names resolve to each vendor's own release archive. The install lands
-in the shared `mise` store described below, and an account can still move an
-agent to another release with `mise use -g claude@<version>` without root. Each of the three also has a symlink in `/usr/local/bin` pointing
-at the `mise` binary — a shim, which resolves the version from the calling
-account's own configuration — so `ssh <vm> claude -p '…'` finds the command
-even though an ssh command runs no login shell.
+`claude`, `opencode`, `pi`, and `agy` are installed with `mise` (`mise use -g
+claude opencode pi agy`), the same tool-version manager the JDK and Maven come
+from. Those registry names resolve to each vendor's own release archive; `agy`
+is the registry name for `aqua:google-antigravity/antigravity-cli`. The install
+lands in the shared `mise` store described below, and an account can still move
+an agent to another release with `mise use -g claude@<version>` without root.
+Each has a symlink in `/usr/local/bin` pointing at the `mise` binary — a shim,
+which resolves the version from the calling account's own configuration — so
+`ssh <vm> claude -p '…'` finds the command even though an ssh command runs no
+login shell.
+
+`grok`, xAI's CLI, is installed the same way from npm (`mise use -g
+npm:@xai-official/grok`), which is the only place it is published, and has the
+same `/usr/local/bin` shim. The package's command is `grok`. It carries no
+credentials.
 
 `codex` is installed by OpenAI's installer (`https://chatgpt.com/codex/install.sh`)
 rather than from npm or mise, because `codex remote-control` runs only against the
@@ -609,6 +614,7 @@ guest if you want the default behaviour back.
 `cf`, Cloudflare's newer CLI, is installed the same way
 (`mise use -g npm:cf`), on the same Node runtime, for the same reason: npm is
 the only place Cloudflare publishes it. It ships with no credentials either.
+`grok` is installed in that same npm step (`mise use -g npm:@xai-official/grok`).
 
 There is exactly one browser in the image: the Chromium build Playwright pins.
 Playwright will not drive a browser it did not install, so a distribution
@@ -626,8 +632,8 @@ add a browser build; none may remove another account's. `PLAYWRIGHT_BROWSERS_PAT
 profile script, so it applies to non-interactive commands such as
 `ssh <vm> node script.js`, which is how an agent actually drives a browser.
 
-The JVM toolchain — and `claude`, `opencode`, `pi`, and `herdr`, described
-above — comes from [mise](https://mise.jdx.dev). The `mise` binary itself is in
+The JVM toolchain — and `claude`, `opencode`, `pi`, `agy`, `grok`, and `herdr`,
+described above — comes from [mise](https://mise.jdx.dev). The `mise` binary itself is in
 `/usr/local/bin`, so every account has the command, and what it installs goes
 into `/usr/local/lib/mise`, one store every account shares. Each account's
 `~/.local/share/mise` is a symlink to it: from `/etc/skel` for an account
@@ -729,12 +735,12 @@ key any more — so `node`, `npm`, and `npx` are versioned the way the JDK is an
 an account can move to another release with `mise use -g node@<version>`
 without `sudo`. Each of the three has a `/usr/local/bin` symlink so a
 non-interactive `ssh <vm> node script.js` finds it. `wrangler`, `playwright`,
-and `cf` are the only npm packages left in the image, and all three are
+`cf`, and `grok` are the npm packages in the image, and all four are
 installed through `mise`'s npm backend rather than with `npm install -g`.
 
 A build fails outright if the Node.js it ends up with is older than 22.19, checks
 that the codex installer really produced its standalone package, and runs each of
-the five agents once at the end and fails if any of them cannot
+the six agents once at the end and fails if any of them cannot
 start. Installing an agent and having a working agent are different things, and
 the difference would otherwise only surface inside a VM long after the image was
 built and cached.
@@ -747,6 +753,9 @@ stopping to ask a human to approve individual tool calls: `claude` defaults to
 for permissions, so the image ships a shell alias that adds
 `--dangerously-skip-permissions`; that alias reaches interactive shells only, and
 a non-interactive caller such as `ssh <vm> agy -p '…'` must pass the flag itself.
+`grok` defaults to `permission_mode = "always-approve"` in `~/.grok/config.toml`
+and turns its own updater off (`auto_update = false`), so it does not replace
+the binary `mise` installed; `agent-vm update` moves it with `mise upgrade`.
 
 `claude` also starts its Remote Control bridge in every session — the
 `remoteControlAtStartup` setting, which is what `claude --remote-control` does
@@ -1152,7 +1161,8 @@ Then the rest of what a guest carries, in this order:
 
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
 `claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and
-`golangci-lint`, and the npm-backed `wrangler`, `playwright` and `cf`. It is run
+`golangci-lint`, `agy`, and the npm-backed `wrangler`, `playwright`, `cf` and
+`grok`. It is run
 for both accounts because `mise`'s configuration is per account — the installs
 are in one shared store, but which version each account uses is recorded under
 its own home, and both accounts are in use. The second run is cheap: whatever
@@ -1174,9 +1184,10 @@ Before each tooling step the guest is asked whether it has the command at all; a
 VM built from an image that predates one — or from an image you built yourself —
 skips that step and reports it, rather than failing the update.
 
-Two things are deliberately left alone: `agy`, which self-updates in the
-background, and the Playwright browser downloads, which are refreshed with
-`playwright install` rather than by upgrading a package.
+The Playwright browser downloads are deliberately left alone. They are
+refreshed with `playwright install` rather than by upgrading a package.
+`agy` and `grok` are not: both are mise installs, so the `mise upgrade` steps
+move them with everything else in the store.
 
 Takes one or more VM names, or `--all` for every VM recorded in this state
 directory. The two spellings are mutually exclusive, and giving neither exits `2`.

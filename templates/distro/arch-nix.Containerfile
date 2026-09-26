@@ -16,10 +16,10 @@
 # supply a running system daemon wired into the distro's units: Docker and the
 # nested virtualization stack. Both blocks are copied from the full recipe.
 #
-# mise survives here for exactly two tools, pi and herdr, which come from its
-# registry and are packaged nowhere else. It installs no toolchain and no other
-# agent: claude and opencode come from nixpkgs, and codex and agy from their
-# vendors' own installers, exactly as they do in the full recipe.
+# mise survives here for the tools nixpkgs does not package: pi, herdr and agy
+# from its registry, and grok from its npm backend. It installs no toolchain
+# and no runtime. claude and opencode come from nixpkgs, and codex from
+# OpenAI's installer, exactly as they do in the full recipe.
 # TestNixContainerfiles_LeaveTheToolingToTheNixFile enforces the boundary.
 #
 # BASE_IMAGE is passed in pinned to a digest. Do not add a default that would
@@ -267,19 +267,21 @@ RUN set -eu; \
       ln -sf "/nix/var/nix/profiles/default/bin/${command}" "/usr/local/bin/${command}"; \
     done
 
-# mise, for the two tools nixpkgs does not package.
+# mise, for the tools nixpkgs does not package.
 #
-# pi and herdr come from mise's registry -- the names below resolve to each
-# vendor's own release binary -- and neither is in nixpkgs, in a distro
-# repository, or behind a vendor installer this recipe could call instead.
-# Removing mise entirely would mean removing both, and herdr is not optional:
-# this image starts a herdr server for every account at boot, so a guest
-# without it would come up with a failed unit every time.
+# pi, herdr and agy come from mise's registry -- the names below resolve to
+# each vendor's own release binary; `agy` is aqua:google-antigravity/antigravity-cli
+# -- and grok comes from mise's npm backend (`npm:@xai-official/grok`), which
+# is the only place it is published. None of them is in nixpkgs. Removing mise
+# entirely would mean removing all four, and herdr is not optional: this image
+# starts a herdr server for every account at boot, so a guest without it would
+# come up with a failed unit every time.
 #
-# This is the whole of mise's role in a nix image. It installs no toolchain, no
-# runtime, and no other agent -- everything else comes from agent-tools.nix --
-# so the "which copy of Go am I running" ambiguity the nix variant exists to
-# remove does not come back with it.
+# This is the whole of mise's role in a nix image. It installs no toolchain
+# and no runtime -- node, which the npm backend needs, comes from the nix
+# profile already linked into /usr/local/bin -- so the "which copy of Go am I
+# running" ambiguity the nix variant exists to remove does not come back with
+# it.
 #
 # The binary goes in /usr/local/bin so that `mise` is on the default PATH for
 # every account, and what it installs goes in /usr/local/lib/mise, one store
@@ -289,7 +291,7 @@ RUN set -eu; \
     install -d -m 0755 /usr/local/lib/mise
 
 # The versions are deliberately unpinned, like the vendor installers below:
-# both tools ship several releases a week and a pinned one would be stale
+# these tools ship several releases a week and a pinned one would be stale
 # before the image was rebuilt. This is the one part of a nix image that the
 # nixpkgs pin does not cover.
 RUN set -eu; \
@@ -297,19 +299,20 @@ RUN set -eu; \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
-      mise use --global --yes pi herdr; \
+      PATH="/usr/local/bin:${PATH}" \
+      mise use --global --yes pi herdr agy npm:@xai-official/grok; \
     rm -rf /tmp/mise-cache /tmp/fslock /usr/local/lib/mise/downloads
 
 # /tmp/fslock is where mise's npm backend takes the lock it holds while it
 # installs a package, and the directory belongs to whichever account created it
-# first, at mode 0755. Nothing in this recipe uses that backend, but
-# `agent-vm update` and any `mise use -g npm:<package>` an agent runs later do:
+# first, at mode 0755. The grok install above uses that backend, and so do
+# `agent-vm update` and any `mise use -g npm:<package>` an agent runs later:
 # without this rule the first one to run as root locks every other account out
 # with "failed to acquire project lock: Permission denied". The rule recreates
 # the directory at every boot with /tmp's own permissions.
 RUN printf 'd /tmp/fslock 1777 root root -\n' > /etc/tmpfiles.d/agent-vm-mise-fslock.conf
 
-# Open the shared store to every account, now that both tools are installed in
+# Open the shared store to every account, now that the tools are installed in
 # it.
 #
 # Each directory gets the sticky bit along with write permission, which is
@@ -343,17 +346,18 @@ RUN set -eu; \
 COPY mise.sh /etc/profile.d/agent-vm-mise.sh
 RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 
-# pi and herdr on the default PATH of every account.
+# The mise-installed commands on the default PATH of every account.
 #
 # A shim is a symlink to the mise binary, which dispatches on the name it was
 # called by and resolves the version from the calling account's own mise
 # configuration -- so a single symlink in /usr/local/bin serves every account
 # without pointing into any account's home. That is what keeps
-# `ssh <vm> herdr ...` working: an ssh command runs no login shell, so it never
-# reads the profile script above. The list is these two and no more; everything
-# else in /usr/local/bin points into the nix profile.
+# `ssh <vm> herdr ...` and `ssh <vm> grok -p '...'` working: an ssh command
+# runs no login shell, so it never reads the profile script above. The list is
+# these four and no more; everything else in /usr/local/bin points into the
+# nix profile.
 RUN set -eu; \
-    for command in pi herdr; do \
+    for command in pi herdr agy grok; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -379,11 +383,6 @@ RUN set -eu; \
     test -x /usr/local/lib/codex/packages/standalone/current/codex \
       || { echo 'the codex installer did not produce a standalone package; codex remote-control would refuse to start in every VM built on this image' >&2; exit 1; }
 
-# agy has no nixpkgs package and no release archive a package manager can
-# resolve, so it comes from its vendor's installer, pointed at /usr/local/bin so
-# every account on the VM finds it rather than only root.
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
-
 # Run every agent once, and fail the build if any of them cannot start.
 #
 # Installing an agent and having a working agent are different things: a build
@@ -392,10 +391,10 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
 # inside a VM, long after the image was built and cached. This is the step that
 # turns that into a failed build.
 #
-# All five are here: claude and opencode from nixpkgs, pi from mise's registry,
-# and codex and agy from their vendors' installers.
+# All six are here: claude and opencode from nixpkgs, codex from OpenAI's
+# installer, and pi, agy and grok from mise.
 RUN set -eu; \
-    for agent in claude codex opencode pi agy; do \
+    for agent in claude codex opencode pi agy grok; do \
       if ! "$agent" --version >/dev/null 2>&1; then \
         echo "the ${agent} CLI installed but cannot run:" >&2; \
         "$agent" --version >&2 || true; \
@@ -441,7 +440,9 @@ RUN set -eu; \
 #
 # Each lands in /etc/skel, which useradd copies into the login user cloud-init
 # creates, and in /root, whose home already exists here and so never consults
-# skel. pi is absent because it does not gate tool calls at all.
+# skel. pi is absent because it does not gate tool calls at all. grok's
+# config sets always-approve and turns its own updater off, so it does not
+# replace the binary mise installed.
 # claude additionally starts its Remote Control bridge in every session, which
 # is what `claude --remote-control` does from the command line. It is set here
 # rather than in a project or local settings file on purpose: claude treats the
@@ -452,8 +453,9 @@ RUN set -eu; \
 COPY claude-settings.json /etc/skel/.claude/settings.json
 COPY codex-config.toml /etc/skel/.codex/config.toml
 COPY opencode.json /etc/skel/.config/opencode/opencode.json
+COPY grok-config.toml /etc/skel/.grok/config.toml
 RUN set -eu; \
-    for file in .claude/settings.json .codex/config.toml .config/opencode/opencode.json; do \
+    for file in .claude/settings.json .codex/config.toml .config/opencode/opencode.json .grok/config.toml; do \
       install -D -m 0644 "/etc/skel/${file}" "/root/${file}"; \
     done
 

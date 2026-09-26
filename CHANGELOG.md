@@ -29,6 +29,17 @@ existing overlays.
 
 ### Added
 
+- **Grok CLI, and `agy` installed with mise.** Full and nix base images install
+  `agy` with mise (`mise use -g agy`, mise's registry name for the Antigravity
+  CLI) instead of Antigravity's installer script, and install xAI's CLI as
+  `grok` with `mise use -g npm:@xai-official/grok`. Both land in the shared
+  mise store with a `/usr/local/bin` shim, so `ssh <vm> grok -p '…'` finds the
+  command and `agent-vm update` moves them with `mise upgrade`. `grok` ships
+  set to always-approve tool calls, and with its own updater turned off so it
+  does not replace the binary mise owns. Images already in the cache keep the
+  old `agy` and have no `grok`; rebuild with `agent-vm image build <distro>
+  --force`.
+
 - **Nix base images.** Every supported family now has a nix variant, named by
   appending `-nix` to the family: `agent-vm image build ubuntu-nix`,
   `agent-vm create work --distro arch-nix`. It boots exactly like the full
@@ -47,11 +58,11 @@ existing overlays.
   stack still come from the distro, because those are background services the
   system has to start and a nix profile only supplies programs.
 
-  All five coding agents are there and the per-account herdr servers start at
+  The coding agents are there and the per-account herdr servers start at
   boot, as on a full image. `claude` and `opencode` come from nixpkgs, `codex`
-  and `agy` from their vendors' installers, and `pi` and `herdr` from mise —
-  the one thing these images still install outside the nix file, because
-  nothing else provides those two. mise installs nothing else here.
+  from OpenAI's installer, and `pi`, `herdr`, `agy` and `grok` from mise —
+  the tools nixpkgs does not package. mise installs no toolchain and no
+  runtime here.
 
   One difference worth knowing: Rust comes as `rustc` and `cargo` from nixpkgs
   rather than through `rustup`, so `cargo build` works as usual but
