@@ -247,6 +247,9 @@ func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
 
 	guest := sshArgvs(fake)
 	want := []string{
+		// self-update writes a tempfile directly into this directory and does
+		// not create it, so the directory has to exist before that step.
+		"sudo -n mkdir -p -- /root/.cache/mise-tmp",
 		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp mise self-update --yes",
 		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp mise upgrade --yes",
 		// The guest user's own mise data directory, so not through sudo: root's

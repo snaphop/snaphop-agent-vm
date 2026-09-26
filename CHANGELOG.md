@@ -901,6 +901,13 @@ existing overlays.
 
 ### Fixed
 
+- `agent-vm update` can update `mise` again. Root's `mise self-update` was
+  given `TMPDIR=/root/.cache/mise-tmp`, a directory no guest has, and `mise`
+  writes the downloaded release to a file directly in that directory without
+  creating it. The step stopped with "No such file or directory" at
+  `/root/.cache/mise-tmp/.tmp…` and left `mise` at the version the image
+  shipped. The update now creates that directory before running `mise`.
+
 - **The nix base images build again.** `agent-vm image build ubuntu-nix` (and
   the arch and fedora variants) failed four different ways, all of them in the
   recipe rather than in nix. The installer refused to run because nix defaults
