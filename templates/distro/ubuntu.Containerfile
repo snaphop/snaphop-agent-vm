@@ -178,18 +178,16 @@ RUN set -eu; \
 
 # The coding agents every guest comes up with.
 #
-# This is the one place in the image that installs software from outside the
-# distro's own repositories: none of these five are packaged by any distro.
-# claude, opencode and pi come from mise's registry -- the names below resolve
-# to each vendor's own release archive -- so they are versioned the same way
-# the JDK below is: an account that needs another release runs
-# `mise use -g claude@<version>` for itself, where a root-owned global npm
-# prefix would have needed sudo. They are the vendors' native builds and carry
-# no Node dependency of their own. agy has no such release and comes from its
-# vendor's installer, pointed at /usr/local/bin so that every account on the VM
-# finds it rather than only root. That binary self-updates in the background
-# and cannot write to /usr/local/bin as a non-root user, so guests keep the
-# version the image was built with.
+# None of them is packaged by any distro. claude, opencode, pi and agy come
+# from mise's registry -- the names below resolve to each vendor's own release
+# archive; `agy` is aqua:google-antigravity/antigravity-cli -- so they are
+# versioned the same way the JDK below is: an account that needs another
+# release runs `mise use -g claude@<version>` for itself, where a root-owned
+# global npm prefix would have needed sudo. They are the vendors' native
+# builds and carry no Node dependency of their own. agy used to come from its
+# vendor's installer, which wrote a root-owned binary into /usr/local/bin that
+# a non-root account could not replace and that `agent-vm update` therefore
+# left alone; the registry install is what lets the update move it.
 #
 # The versions are deliberately unpinned, like every other package here: these
 # tools ship several releases a week and a pinned one would be stale before the
@@ -204,7 +202,7 @@ RUN set -eu; \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
-      mise use --global --yes claude opencode pi; \
+      mise use --global --yes claude opencode pi agy; \
     rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # herdr, the terminal workspace manager a guest runs as a daemon.
@@ -288,11 +286,12 @@ RUN set -eu; \
       mise use --global --yes go@latest golangci-lint@latest; \
     rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
-# wrangler, Playwright, and cf: the npm packages left in the image.
+# wrangler, Playwright, cf, and the Grok CLI: the npm packages in the image.
 #
 # None of them is packaged by any family and all are published only to npm, so
 # they come from mise's npm backend -- `npm:` names rather than the registry
-# names the agents use, because npm is the only place they exist. They are
+# names the agents use, because npm is the only place they exist. grok is
+# xAI's CLI (`npm:@xai-official/grok`); the package's bin is `grok`. They are
 # installed here, with everything else mise manages, so that they are in the
 # shared store before the build runs `playwright install chromium` a few steps
 # later. What each is for, and the environment each needs, is
@@ -303,7 +302,7 @@ RUN set -eu; \
            MISE_STATE_DIR=/etc/skel/.local/state/mise \
            MISE_CACHE_DIR=/tmp/mise-cache; \
     export PATH="$(mise where node)/bin:$PATH"; \
-    mise use --global --yes npm:wrangler npm:playwright npm:cf; \
+    mise use --global --yes npm:wrangler npm:playwright npm:cf npm:@xai-official/grok; \
     rm -rf /tmp/mise-cache /tmp/fslock /usr/local/lib/mise/downloads
 
 # /tmp/fslock is where mise's npm backend takes the lock it holds while it
@@ -366,8 +365,8 @@ RUN chmod 0644 /etc/profile.d/agent-vm-mise.sh
 # directory on PATH. node and npm are in the list because mise is the only
 # place they come from now -- there is no packaged /usr/bin/node behind them.
 RUN set -eu; \
-    for command in node npm npx go gofmt golangci-lint claude opencode pi \
-                   herdr wrangler playwright cf; do \
+    for command in node npm npx go gofmt golangci-lint claude opencode pi agy \
+                   herdr wrangler playwright cf grok; do \
       ln -sf /usr/local/bin/mise "/usr/local/bin/${command}"; \
     done
 
@@ -395,8 +394,6 @@ RUN set -eu; \
     test -x /usr/local/lib/codex/packages/standalone/current/codex \
       || { echo 'the codex installer did not produce a standalone package; codex remote-control would refuse to start in every VM built on this image' >&2; exit 1; }
 
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr/local/bin
-
 # Run every agent once, and fail the build if any of them cannot start.
 #
 # Installing an agent and having a working agent are different things: an
@@ -405,7 +402,7 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
 # command, inside a VM, long after the image was built and cached. This is the
 # step that turns that into a failed build.
 RUN set -eu; \
-    for agent in claude codex opencode pi agy; do \
+    for agent in claude codex opencode pi agy grok; do \
       if ! "$agent" --version >/dev/null 2>&1; then \
         echo "the ${agent} CLI installed but cannot run:" >&2; \
         "$agent" --version >&2 || true; \
@@ -436,7 +433,9 @@ RUN set -eu; \
 #
 # Each lands in /etc/skel, which useradd copies into the login user cloud-init
 # creates, and in /root, whose home already exists here and so never consults
-# skel. pi is absent because it does not gate tool calls at all.
+# skel. pi is absent because it does not gate tool calls at all. grok's
+# config sets always-approve and turns its own updater off, so it does not
+# replace the binary mise installed.
 # claude additionally starts its Remote Control bridge in every session, which
 # is what `claude --remote-control` does from the command line. It is set here
 # rather than in a project or local settings file on purpose: claude treats the
@@ -447,8 +446,9 @@ RUN set -eu; \
 COPY claude-settings.json /etc/skel/.claude/settings.json
 COPY codex-config.toml /etc/skel/.codex/config.toml
 COPY opencode.json /etc/skel/.config/opencode/opencode.json
+COPY grok-config.toml /etc/skel/.grok/config.toml
 RUN set -eu; \
-    for file in .claude/settings.json .codex/config.toml .config/opencode/opencode.json; do \
+    for file in .claude/settings.json .codex/config.toml .config/opencode/opencode.json .grok/config.toml; do \
       install -D -m 0644 "/etc/skel/${file}" "/root/${file}"; \
     done
 

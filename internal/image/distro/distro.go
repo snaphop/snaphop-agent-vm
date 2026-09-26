@@ -226,10 +226,10 @@ const rootMiseTmpDir = "/root/.cache/mise-tmp"
 // configuration to bump. The second run is cheap: the version the first one
 // installed is already in the shared store, and only the config moves.
 //
-// Not covered: agy, which self-updates in the background and cannot write
-// /usr/local/bin as a non-root user, and the Playwright browser downloads,
-// which are refreshed by `playwright install` rather than by upgrading a
-// package.
+// Not covered: the Playwright browser downloads, which are refreshed by
+// `playwright install` rather than by upgrading a package. agy and grok are
+// covered: both are mise installs, so `mise upgrade` moves them with the
+// other tools in the shared store.
 func ToolingUpdate(user string) []UpdateStep {
 	steps := []UpdateStep{
 		// Created before either mise invocation. See rootMiseTmpDir: self-update

@@ -67,6 +67,7 @@ var buildContextFiles = []string{
 	"claude-settings.json",
 	"codex-config.toml",
 	"opencode.json",
+	"grok-config.toml",
 	"agent-aliases.sh",
 	"chromium.sh",
 	"mise.sh",

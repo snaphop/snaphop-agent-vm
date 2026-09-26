@@ -1,0 +1,9 @@
+# Grok's per-account config. The VM is the sandbox, so the agent does not stop
+# to ask before a tool call. auto_update stays off because the binary belongs
+# to mise: grok's own updater would replace it outside the store, and
+# `agent-vm update` moves it with `mise upgrade` instead.
+[ui]
+permission_mode = "always-approve"
+
+[cli]
+auto_update = false

@@ -76,22 +76,25 @@ Two deliberate exceptions, both documented in the recipes:
   integrated with the guest's init, and a nix guest that quietly lost `docker`
   and `libvirtd` would not keep the contract `docs/cli.md` states.
   `TestNixContainerfiles_KeepTheDaemonsNixCannotSupply` enforces it.
-- **codex and agy come from their vendors' installers**, exactly as they do in
-  the full recipe. Neither was ever a package-manager install, and `codex
-  remote-control` runs only against the standalone package that installer lays
-  down.
-- **mise survives for `pi` and `herdr`, and for nothing else.** Both come from
-  its registry, neither is in nixpkgs, and herdr is not optional: the image
-  starts a server for every account at boot, so an image without it would come
-  up with a failed unit every time. mise installs no toolchain, no runtime and
-  no other agent here, so the "which copy of Go am I running" ambiguity this
-  variant removes does not come back with it.
-  `TestNixContainerfiles_LeaveTheToolingToTheNixFile` enforces that the list is
-  exactly those two.
+- **codex comes from OpenAI's installer**, exactly as it does in the full
+  recipe. `codex remote-control` runs only against the standalone package that
+  installer lays down.
+- **mise survives for the tools nixpkgs does not package: `pi`, `herdr`,
+  `agy`, and `grok`.** `pi`, `herdr` and `agy` come from its registry (`agy`
+  resolves to `aqua:google-antigravity/antigravity-cli`); `grok` comes from
+  its npm backend (`npm:@xai-official/grok`), which is the only place that
+  package is published. herdr is not optional: the image starts a server for
+  every account at boot, so an image without it would come up with a failed
+  unit every time. mise installs no toolchain and no runtime — node, which
+  the npm backend needs, comes from the nix profile — so the "which copy of
+  Go am I running" ambiguity this variant removes does not come back with it.
+  `TestNixContainerfiles_LeaveTheToolingToTheNixFile` enforces that the list
+  is exactly those four.
 
 ## Consequences
 
-**The guest contract is unchanged.** A nix guest has all five coding agents and
+**The guest contract is unchanged.** A nix guest has the same coding agents as
+a full guest — `claude`, `codex`, `opencode`, `pi`, `agy`, and `grok` — and
 the per-account herdr servers, so nothing a script or supervisor can observe
 differs from a full guest. That is what the narrow mise exception buys, and it
 is why the exception exists: the alternative was an image whose boot always

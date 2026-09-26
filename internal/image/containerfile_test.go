@@ -312,19 +312,19 @@ func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
 	}
 }
 
-// miseAgents are the coding agents installed with mise, by the registry name
-// each recipe asks for. agy and codex are absent because neither has a mise
-// package: agy comes from its vendor's installer, and codex from OpenAI's own,
-// which is the only thing that produces the standalone package
-// `codex remote-control` requires.
-var miseAgents = []string{"claude", "opencode", "pi"}
+// miseAgents are the coding agents installed with mise's registry, by the name
+// each recipe asks for. codex is absent because it has no mise package: it
+// comes from OpenAI's installer, which is the only thing that produces the
+// standalone package `codex remote-control` requires. grok is absent here
+// because it is an npm package, installed with the other npm tools.
+var miseAgents = []string{"claude", "opencode", "pi", "agy"}
 
 // miseShims are every command installed with mise that a guest has to be able
 // to run without a login shell, in the order the recipes link them.
 var miseShims = []string{
 	"node", "npm", "npx",
 	"go", "gofmt", "golangci-lint",
-	"claude", "opencode", "pi", "herdr", "wrangler", "playwright", "cf",
+	"claude", "opencode", "pi", "agy", "herdr", "wrangler", "playwright", "cf", "grok",
 }
 
 // shimLoopCommands returns the command names the recipe's `for command in ...;
@@ -346,7 +346,7 @@ func shimLoopCommands(recipe string) ([]string, bool) {
 }
 
 // TestContainerfiles_InstallTheCodingAgents guards the guest contract that a VM
-// comes up with claude, codex, opencode, pi and agy already installed.
+// comes up with claude, codex, opencode, pi, agy and grok already installed.
 //
 // None of the five is packaged by any distro, so nothing else in the image
 // would pull them in by accident: if a recipe stops naming one, guests simply
@@ -408,14 +408,11 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 			t.Errorf("%s does not check that the codex installer produced a standalone package; remote control would fail in every VM built on the image", d.Containerfile)
 		}
 
-		// agy has no npm package. Installing it anywhere but a directory on
-		// the default PATH leaves it invisible to every account but the one
-		// that ran the build.
-		if !strings.Contains(recipe, "antigravity.google/cli/install.sh") {
-			t.Errorf("%s does not install the Antigravity CLI (agy)", d.Containerfile)
-		}
-		if !strings.Contains(recipe, "--dir /usr/local/bin") {
-			t.Errorf("%s installs agy without pointing it at /usr/local/bin; it will land in the build user's home and no guest account will find it", d.Containerfile)
+		// The vendor installer writes a root-owned binary into /usr/local/bin.
+		// That shadows the mise shim and is a file a non-root account cannot
+		// replace, which is why agent-vm update used to leave agy alone.
+		if strings.Contains(recipe, "antigravity.google/cli/install.sh") {
+			t.Errorf("%s still installs agy from the vendor script; it belongs to mise with the other registry agents", d.Containerfile)
 		}
 
 		// 22.19 is the Node floor the image promises. Catching a distro
@@ -439,6 +436,7 @@ func TestContainerfiles_ConfigureTheAgentsForUnattendedUse(t *testing.T) {
 		{"claude-settings.json", "/etc/skel/.claude/settings.json"},
 		{"codex-config.toml", "/etc/skel/.codex/config.toml"},
 		{"opencode.json", "/etc/skel/.config/opencode/opencode.json"},
+		{"grok-config.toml", "/etc/skel/.grok/config.toml"},
 	}
 
 	for _, name := range distro.Names() {
@@ -515,6 +513,16 @@ func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
 	if !strings.Contains(aliases, "--dangerously-skip-permissions") {
 		t.Errorf("agent-aliases.sh does not pass --dangerously-skip-permissions to agy, which is the only way it runs unattended")
 	}
+
+	// permission_mode is only read from the user config, not from a project
+	// file, which is why this copy lives in the account's home. auto_update
+	// has to stay off: grok's updater would replace the binary mise owns.
+	grok := readTemplate(t, "distro/grok-config.toml")
+	for _, setting := range []string{`permission_mode = "always-approve"`, "auto_update = false"} {
+		if !strings.Contains(grok, setting) {
+			t.Errorf("grok-config.toml does not set %s; grok will ask before every tool call, or replace the mise-managed binary on its own", setting)
+		}
+	}
 }
 
 // TestAgentConfigs_CarryNoCredentials is the SECURITY.md guard on this whole
@@ -540,7 +548,7 @@ func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
 // file missing from the build context fails the build minutes in, after the
 // package installation has already been paid for.
 func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
-	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "agent-aliases.sh", "codex-remote-control.sh"} {
+	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "grok-config.toml", "agent-aliases.sh", "codex-remote-control.sh"} {
 		if !slices.Contains(buildContextFiles, name) {
 			t.Errorf("%s is not in buildContextFiles %v, so podman's build context will not contain it", name, buildContextFiles)
 		}
@@ -709,7 +717,7 @@ func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
 		}
 		recipe := readTemplate(t, "distro/"+d.Containerfile)
 
-		if !strings.Contains(recipe, `for agent in claude codex opencode pi agy; do`) {
+		if !strings.Contains(recipe, `for agent in claude codex opencode pi agy grok; do`) {
 			t.Errorf("%s does not run each agent once at build time; an agent that installs but cannot start would ship undetected", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "installed but cannot run") {
@@ -816,10 +824,10 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 			t.Errorf("%s does not install tea from Gitea's release server; only Arch packages it, and on Ubuntu the name belongs to an unrelated text editor", d.Containerfile)
 		}
 
-		// Playwright, wrangler and cf are published only to npm, so they are
-		// the one place mise's npm backend is still used.
-		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright npm:cf") {
-			t.Errorf("%s does not install wrangler, Playwright and cf with mise", d.Containerfile)
+		// Playwright, wrangler, cf and grok are published only to npm, so they
+		// are the one place mise's npm backend is used.
+		if !strings.Contains(recipe, "mise use --global --yes npm:wrangler npm:playwright npm:cf npm:@xai-official/grok") {
+			t.Errorf("%s does not install wrangler, Playwright, cf and grok with mise", d.Containerfile)
 		}
 		if !strings.Contains(recipe, "playwright install") || !strings.Contains(recipe, "chromium") {
 			t.Errorf("%s does not install a Chromium for Playwright to drive", d.Containerfile)
@@ -1655,14 +1663,14 @@ func TestNixContainerfiles_InstallTheToolingFromNix(t *testing.T) {
 }
 
 // TestNixContainerfiles_LeaveTheToolingToTheNixFile guards the boundary the
-// variant exists to draw. mise survives in a nix image for exactly two tools,
-// pi and herdr, which nixpkgs does not package and which nothing else can
-// install — and herdr is not optional, because the image starts a server for
+// variant exists to draw. mise survives in a nix image for the tools nixpkgs
+// does not package: pi, herdr and agy from its registry, and grok from its
+// npm backend. herdr is not optional, because the image starts a server for
 // every account at boot. Anything else installed through mise would give the
 // image two sources for the same tool and no way to say which one a guest is
 // running, which is the ambiguity the nix variant removes.
 func TestNixContainerfiles_LeaveTheToolingToTheNixFile(t *testing.T) {
-	allowed := []string{"pi", "herdr"}
+	allowed := []string{"pi", "herdr", "agy", "npm:@xai-official/grok"}
 
 	for nixName, pair := range nixRecipes(t) {
 		full, nix := pair[0], pair[1]
@@ -1704,11 +1712,14 @@ func TestNixContainerfiles_LeaveTheToolingToTheNixFile(t *testing.T) {
 		// The shims are the other half of it: a symlink to the mise binary for
 		// any other command would put a mise-resolved tool on PATH ahead of
 		// the profile's.
-		if want := "for command in pi herdr; do"; !strings.Contains(nix, want) {
-			t.Errorf("%s does not shim exactly pi and herdr (%q missing)", nixName, want)
+		if want := "for command in pi herdr agy grok; do"; !strings.Contains(nix, want) {
+			t.Errorf("%s does not shim exactly the mise-installed commands (%q missing)", nixName, want)
 		}
 		if got := strings.Count(nix, "ln -sf /usr/local/bin/mise"); got != 1 {
-			t.Errorf("%s links commands to the mise binary in %d places, want exactly 1: pi and herdr are the whole list", nixName, got)
+			t.Errorf("%s links commands to the mise binary in %d places, want exactly 1: the shim loop is the whole list", nixName, got)
+		}
+		if strings.Contains(nix, "antigravity.google/cli/install.sh") {
+			t.Errorf("%s still installs agy from the vendor script; it is a mise registry tool in a nix image too", nixName)
 		}
 	}
 }
