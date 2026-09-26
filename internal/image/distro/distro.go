@@ -200,8 +200,15 @@ const (
 // project lock: Permission denied" before installing anything. Base images
 // built after this now ship a tmpfiles.d rule that gives /tmp/fslock /tmp's
 // own permissions, but VMs created from an older image do not, and an update
-// is exactly what they need to run. mise creates the directory if it is
-// missing, so nothing has to exist in the guest beforehand.
+// is exactly what they need to run.
+//
+// The directory is created by the first tooling step, because nothing in a
+// guest has it yet. mise self-update writes its download to a file directly
+// in $TMPDIR — the self_update crate's tempfile, named .tmpXXXXXX — and does
+// not create that directory, so a missing one fails the update with "No such
+// file or directory" at $TMPDIR/.tmpXXXXXX before the binary is replaced.
+// mise upgrade's npm backend would create $TMPDIR/fslock, but self-update
+// runs first.
 const rootMiseTmpDir = "/root/.cache/mise-tmp"
 
 // ToolingUpdate is what `agent-vm update` runs in every guest, whatever its
@@ -225,6 +232,15 @@ const rootMiseTmpDir = "/root/.cache/mise-tmp"
 // package.
 func ToolingUpdate(user string) []UpdateStep {
 	steps := []UpdateStep{
+		// Created before either mise invocation. See rootMiseTmpDir: self-update
+		// does not create a missing TMPDIR, and this is the path it is given.
+		// Skipped with the rest of the mise steps in a guest that has no mise.
+		{
+			Name:     "preparing mise's temporary directory",
+			Root:     true,
+			Requires: "mise",
+			Argv:     []string{"mkdir", "-p", "--", rootMiseTmpDir},
+		},
 		// mise first, so the newer binary is the one that resolves and installs
 		// everything below it. --yes because an update is unattended; HOME is
 		// named explicitly because sudo's env_reset decides it otherwise, and

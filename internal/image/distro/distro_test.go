@@ -124,16 +124,57 @@ func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
 // and the guest user's `mise upgrade` after them fails with "failed to acquire
 // project lock: Permission denied" before installing anything.
 func TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory(t *testing.T) {
+	sawMise := false
 	for _, step := range ToolingUpdate("agent") {
-		if step.Requires != "mise" || !step.Root {
+		// The mkdir that creates the directory is a mise prerequisite, not a
+		// mise invocation, and it does not itself consult TMPDIR.
+		if step.Requires != "mise" || !step.Root || !containsArg(step.Argv, "mise") {
 			continue
 		}
+		sawMise = true
 		if !containsArg(step.Argv, "TMPDIR="+rootMiseTmpDir) {
 			t.Errorf("%q runs mise as root with the default TMPDIR: %v", step.Name, step.Argv)
 		}
 	}
+	if !sawMise {
+		t.Fatal("root's mise steps disappeared")
+	}
 	if strings.HasPrefix(rootMiseTmpDir, "/tmp/") || rootMiseTmpDir == "/tmp" {
 		t.Errorf("rootMiseTmpDir = %q, which is the shared directory the guest user's mise locks in", rootMiseTmpDir)
+	}
+}
+
+// TestToolingUpdate_CreatesTheMiseTmpDirBeforeSelfUpdate covers mise
+// self-update failing with "No such file or directory" at
+// $TMPDIR/.tmpXXXXXX. The self_update crate creates that tempfile directly in
+// $TMPDIR and does not create the directory, and a guest has no
+// /root/.cache/mise-tmp until an update makes one.
+func TestToolingUpdate_CreatesTheMiseTmpDirBeforeSelfUpdate(t *testing.T) {
+	steps := ToolingUpdate("agent")
+	mkdirAt, selfUpdateAt := -1, -1
+	for i, step := range steps {
+		joined := strings.Join(step.Argv, " ")
+		if joined == "mkdir -p -- "+rootMiseTmpDir {
+			mkdirAt = i
+			if !step.Root {
+				t.Errorf("creating %s has to run as root, which is the only account that can write under /root", rootMiseTmpDir)
+			}
+			if step.Requires != "mise" {
+				t.Errorf("the directory is only needed in a guest that has mise; Requires = %q", step.Requires)
+			}
+		}
+		if strings.Contains(joined, "mise self-update") {
+			selfUpdateAt = i
+		}
+	}
+	if mkdirAt < 0 {
+		t.Fatalf("root's TMPDIR %s is never created", rootMiseTmpDir)
+	}
+	if selfUpdateAt < 0 {
+		t.Fatal("no mise self-update step")
+	}
+	if mkdirAt > selfUpdateAt {
+		t.Errorf("mkdir at step %d runs after mise self-update at step %d", mkdirAt, selfUpdateAt)
 	}
 }
 

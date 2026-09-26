@@ -1143,6 +1143,7 @@ Then the rest of what a guest carries, in this order:
 
 | Step | What it runs | As |
 |---|---|---|
+| root's mise temporary directory | `mkdir -p -- /root/.cache/mise-tmp` | root |
 | `mise` itself | `mise self-update --yes`, which also refreshes its plugins, with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
 | root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
 | the guest user's mise-managed tools | `mise upgrade --yes` | the guest user |
@@ -1164,7 +1165,11 @@ passwordless sudo, and the guest's own output is streamed to stderr as it runs.
 Root's `mise` steps are given their own `TMPDIR` because `mise`'s npm backend
 locks each install under `$TMPDIR/fslock`, a directory owned by whichever
 account creates it: left at the default, root's steps would take `/tmp/fslock`
-and the guest user's step after them would fail to acquire its lock.
+and the guest user's step after them would fail to acquire its lock. The
+directory is created first. `mise self-update` downloads the replacement
+binary into a file directly under `$TMPDIR` and does not create that
+directory, so an update against a guest that has never had the path stops
+with "No such file or directory" before replacing anything.
 Before each tooling step the guest is asked whether it has the command at all; a
 VM built from an image that predates one — or from an image you built yourself —
 skips that step and reports it, rather than failing the update.
@@ -1293,7 +1298,7 @@ table below is the summary.
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
-| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
+| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
