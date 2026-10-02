@@ -1,0 +1,49 @@
+# The pre-handoff bar from AGENTS.md: scripts/check.sh, which is gofmt, go vet,
+# golangci-lint, and the unit tests. Integration tests need a KVM host and are
+# not part of this workflow, and they are not required for merge.
+#
+# A tag push does not run this file. The release workflow runs the same script
+# before it publishes, and merging publishes nothing.
+name: Check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: scripts/check.sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # golangci-lint v2.14 requires Go 1.26 or newer to run. The module's
+      # language version stays 1.22 in go.mod; this is only the toolchain the
+      # check runs on, and that toolchain still applies the go.mod version.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      # Installed rather than invoked, so the lint step is the one inside
+      # scripts/check.sh and a local run and a pull request run the same
+      # command. v2.14.0 is the version this repository is linted with.
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          install-only: true
+          verify: false
+          skip-cache: true
+
+      - name: Run scripts/check.sh
+        run: scripts/check.sh

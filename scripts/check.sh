@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The minimum verification required before handing work off (AGENTS.md §4):
-# formatting, vet, lint, and the unit tests. CI is meant to run this same script
-# once its workflows exist, so a green run here is the bar for handing work off.
+# formatting, vet, lint, and the unit tests. GitHub Actions runs this same
+# script (.github/workflows/check.yml), so a green run here is the bar for
+# handing work off.
 #
 # golangci-lint is skipped with a warning when it is not installed, because a
 # missing linter should not look like passing code.

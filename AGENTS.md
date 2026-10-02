@@ -103,8 +103,8 @@ path documented.
 ├── scripts/                # repeatable development and operational helpers
 ├── docs/                   # architecture, CLI contract, runbooks, ADRs
 ├── Makefile                # thin wrapper around scripts/, plus `make install`
-├── .github/                # contribution metadata (pull request template). The
-│                           # CI workflows described in §5 are not written yet.
+├── .github/                # pull request template, Actions (check, release),
+│                           # and Dependabot
 ├── AGENTS.md               # canonical agent instructions
 ├── CODE_REVIEW.md          # code-review process
 ├── CONTRIBUTING.md         # contribution workflow
@@ -227,8 +227,9 @@ The scripts stay the source of truth.
 **Minimum verification before handoff:** `scripts/check.sh`, which runs
 `gofmt -l .` (must be empty), `go vet ./...`, `golangci-lint run`, and
 `go test ./...`. It warns loudly instead of passing silently when
-`golangci-lint` is not installed. Several doctor unit tests currently inspect
-the real `/dev/kvm` and can fail without it; see `CONTRIBUTING.md`.
+`golangci-lint` is not installed. GitHub Actions runs the same script on
+pull requests and on pushes to `master`. The unit tests do not need
+`/dev/kvm`.
 
 Additional checks required for specific changes:
 
@@ -334,12 +335,15 @@ we explicitly disable ACPI for direct kernel boot on aarch64; base
 images built by an earlier release must stay bootable, and a breaking manifest
 change requires a `schemaVersion` bump plus a documented rebuild path.
 
-CI and release behavior — the intended contract; the workflows themselves are
-not written yet (§2). Pull requests run `scripts/check.sh`: format, vet, lint,
-and unit tests. Integration tests run only on a KVM-capable runner and are not
-required for merge. **Merging does not deploy or publish anything.** Tagged
-releases build and attach static binaries; that workflow is the only publishing
-path.
+CI and release behavior. Pull requests and pushes to `master` run
+`scripts/check.sh` (`.github/workflows/check.yml`): format, vet, lint, and
+unit tests. Integration tests need a KVM host, are not part of that
+workflow, and are not required for merge. **Merging does not deploy or
+publish anything.** Pushing a `vX.Y.Z` tag runs
+`.github/workflows/release.yml`, which builds the static binaries with
+`scripts/build-release.sh` and attaches them to a GitHub Release. That
+workflow is the only publishing path. Dependabot opens weekly pull requests
+for Go module and GitHub Actions updates.
 
 Require an ADR in [`docs/decisions/`](./docs/decisions/) for decisions that are
 hard to reverse, affect multiple components, or change the security/deployment

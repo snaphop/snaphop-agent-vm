@@ -1,0 +1,91 @@
+# The only publishing path. Pushing a vX.Y.Z tag builds the static Linux
+# binaries and attaches them to a GitHub Release. A merge does not run this
+# workflow. The tag pattern is a glob: v0.1.0 and v0.1.0-rc.1 both match,
+# and a hyphen in the tag marks the release as a pre-release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Same toolchain as the check workflow. golangci-lint v2.14 needs Go
+      # 1.26 or newer; go.mod still declares the 1.22 language version.
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          install-only: true
+          verify: false
+          skip-cache: true
+
+      - name: Run scripts/check.sh
+        run: scripts/check.sh
+
+      - name: Build the release binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/build-release.sh
+
+      - name: Check the binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            bin="dist/agent-vm-linux-$arch"
+            test -x "$bin"
+            # CGO is disabled, so a dynamically linked binary is a broken build.
+            if ! file "$bin" | grep -q 'statically linked'; then
+              echo "$bin is not a static binary:" >&2
+              file "$bin" >&2
+              exit 1
+            fi
+          done
+          version_output="$(./dist/agent-vm-linux-amd64 --version)"
+          printf '%s\n' "$version_output"
+          if ! printf '%s\n' "$version_output" | grep -F "$VERSION"; then
+            echo "the amd64 binary does not report $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum agent-vm-linux-amd64 agent-vm-linux-arm64 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            "${args[@]}" \
+            dist/agent-vm-linux-amd64 \
+            dist/agent-vm-linux-arm64 \
+            dist/SHA256SUMS

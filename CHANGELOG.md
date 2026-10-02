@@ -27,6 +27,15 @@ that depend on a base before rebuilding it, then recreate them to use the new
 image and host-side kernel; rebuilding a backing file in place is unsafe for
 existing overlays.
 
+### Added
+
+- **GitHub Actions and Dependabot.** Pull requests and pushes to `master` run
+  `scripts/check.sh` (format, vet, lint, and unit tests). Pushing a `vX.Y.Z`
+  tag builds the static Linux binaries and attaches them, with checksums, to
+  a GitHub Release; a tag containing a hyphen is published as a pre-release.
+  Merging still publishes nothing. Dependabot opens a weekly pull request for
+  Go module updates and another for GitHub Actions updates.
+
 ### Changed
 
 - The source repository is <https://github.com/snaphop/snaphop-agent-vm>,

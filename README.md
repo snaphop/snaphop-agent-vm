@@ -1,5 +1,7 @@
 # snaphop-agent-vm
 
+[![Check](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml/badge.svg)](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml)
+
 Disposable QEMU/KVM virtual machines for AI coding agents, built from OCI
 container images and managed through libvirt.
 
@@ -261,6 +263,8 @@ make check                 # gofmt, go vet, golangci-lint, go test — the
 Unit tests need no KVM host: tools are faked at the process boundary, and
 `virt-install` argument vectors and generated cloud-init user-data are pinned by
 golden files. `--dry-run` lets you inspect what a change would actually run.
+Pull requests run `make check` on GitHub Actions. A `vX.Y.Z` tag publishes
+the static Linux binaries as a GitHub Release.
 
 Integration tests create and destroy real VMs on the host that runs them:
 

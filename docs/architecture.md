@@ -519,12 +519,15 @@ The build artifact is a single static Go binary per OS/architecture; there is no
 container image, no server, and nothing to deploy. Installation is copying the
 binary onto a KVM-capable host.
 
-- Pull requests run `scripts/check.sh` — format, vet, lint, and unit tests.
-  Integration tests run only on a KVM-capable runner and are not required for
-  merge. This is the intended contract: the CI workflows are not written yet, so
-  today the script is run locally.
-- **Merging does not publish or deploy anything.** Tagged releases build and
-  attach binaries; that workflow is the only publishing path.
+- Pull requests and pushes to `master` run `scripts/check.sh` on GitHub
+  Actions (`.github/workflows/check.yml`) — format, vet, lint, and unit tests.
+  Integration tests need a KVM host, are not part of that workflow, and are
+  not required for merge.
+- **Merging does not publish or deploy anything.** Pushing a `vX.Y.Z` tag
+  runs `.github/workflows/release.yml`, which builds the static binaries with
+  `scripts/build-release.sh` and attaches them to a GitHub Release. That
+  workflow is the only publishing path. Dependabot opens weekly pull requests
+  for Go module and GitHub Actions updates.
 - Rollback is running the previous binary. Because base images are versioned by
   `schemaVersion` and VMs record the image digest they came from, an older binary
   either understands existing state or refuses it explicitly.

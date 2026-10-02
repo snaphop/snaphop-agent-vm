@@ -16,10 +16,9 @@ Host preparation is documented in [`docs/host-setup.md`](./docs/host-setup.md);
 and command reference, and [`README.md`](./README.md) for the project overview.
 
 You can build, unit-test, and lint without KVM — tools are faked at the process
-boundary, and `--dry-run` shows what a change would actually run. VM lifecycle integration and guest boot require KVM. Currently, several
-`doctor` unit tests also inspect the real `/dev/kvm` despite faking helper
-processes, so the full unit suite can fail on a host without that device.
-Remote transport integration tests require SSH rather than KVM.
+boundary, and `--dry-run` shows what a change would actually run. VM lifecycle
+integration and guest boot require KVM. Remote transport integration tests
+require SSH rather than KVM.
 
 One rule shapes most contributions: **this tool orchestrates existing tools rather
 than reimplementing them** ([ADR-0009](./docs/decisions/0009-orchestrate-existing-host-cli-tools.md)).
@@ -68,12 +67,11 @@ git push --set-upstream origin feat/short-description
 ```
 
 The first four commands are the minimum verification before handing work off, and
-`scripts/check.sh` (or `make check`) runs all four in one go. CI is intended to
-run the same script; the workflows are not written yet, so running it locally is
-currently the only thing that enforces it. **Merging does not publish or deploy
-anything**. The planned publishing workflow will build and attach binaries for
-tagged releases; until it exists, `scripts/build-release.sh` only builds local
-artifacts and does not publish them.
+`scripts/check.sh` (or `make check`) runs all four in one go. GitHub Actions
+runs that script on every pull request and on pushes to `master`. **Merging
+does not publish or deploy anything.** Pushing a `vX.Y.Z` tag builds the
+static binaries and attaches them to a GitHub Release. `scripts/build-release.sh`
+builds the same binaries locally and does not publish them.
 
 ### About The Integration Suite
 
