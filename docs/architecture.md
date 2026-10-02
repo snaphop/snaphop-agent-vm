@@ -517,7 +517,8 @@ entry replaces code we would otherwise have to write and maintain.
 
 The build artifact is a single static Go binary per OS/architecture; there is no
 container image, no server, and nothing to deploy. Installation is copying the
-binary onto a KVM-capable host.
+binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
+`scripts/build-release.sh` also copies those files into `dist/` beside it.
 
 - Pull requests and pushes to `master` run `scripts/check.sh` on GitHub
   Actions (`.github/workflows/check.yml`) — format, vet, lint, and unit tests.
@@ -525,9 +526,9 @@ binary onto a KVM-capable host.
   not required for merge.
 - **Merging does not publish or deploy anything.** Pushing a `vX.Y.Z` tag
   runs `.github/workflows/release.yml`, which builds the static binaries with
-  `scripts/build-release.sh` and attaches them to a GitHub Release. That
-  workflow is the only publishing path. Dependabot opens weekly pull requests
-  for Go module and GitHub Actions updates.
+  `scripts/build-release.sh` and attaches them, with `LICENSE` and `NOTICE`, to
+  a GitHub Release. That workflow is the only publishing path. Dependabot opens
+  weekly pull requests for Go module and GitHub Actions updates.
 - Rollback is running the previous binary. Because base images are versioned by
   `schemaVersion` and VMs record the image digest they came from, an older binary
   either understands existing state or refuses it explicitly.

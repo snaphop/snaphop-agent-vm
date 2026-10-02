@@ -70,8 +70,9 @@ The first four commands are the minimum verification before handing work off, an
 `scripts/check.sh` (or `make check`) runs all four in one go. GitHub Actions
 runs that script on every pull request and on pushes to `master`. **Merging
 does not publish or deploy anything.** Pushing a `vX.Y.Z` tag builds the
-static binaries and attaches them to a GitHub Release. `scripts/build-release.sh`
-builds the same binaries locally and does not publish them.
+static binaries and attaches them, with `LICENSE` and `NOTICE`, to a GitHub
+Release. `scripts/build-release.sh` builds the same binaries locally and does
+not publish them.
 
 ### About The Integration Suite
 

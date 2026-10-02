@@ -251,8 +251,9 @@ make install               # build the static binaries and install this host's
                            # into ~/.local/bin (override with PREFIX or BINDIR)
 ```
 
-`make release` builds the static binaries for every architecture into `dist/`;
-installing on another host is copying the right one onto it.
+`make release` builds the static binaries for every architecture into `dist/`
+and copies `LICENSE` and `NOTICE` in beside them. Installing on another host
+is copying the binary for that host together with those two files.
 
 ## Development
 
@@ -265,7 +266,7 @@ Unit tests need no KVM host: tools are faked at the process boundary, and
 `virt-install` argument vectors and generated cloud-init user-data are pinned by
 golden files. `--dry-run` lets you inspect what a change would actually run.
 Pull requests run `make check` on GitHub Actions. A `vX.Y.Z` tag publishes
-the static Linux binaries as a GitHub Release.
+the static Linux binaries, `LICENSE`, and `NOTICE` as a GitHub Release.
 
 Integration tests create and destroy real VMs on the host that runs them:
 
@@ -279,3 +280,7 @@ verification required before handing work off.
 ## License
 
 [MIT](./LICENSE). Copyright (c) 2026 SnapHop.
+
+The binary also includes [BurntSushi/toml](https://github.com/BurntSushi/toml)
+and the Go standard library and runtime. Their notices are in
+[NOTICE](./NOTICE), and `agent-vm licenses` prints both files.

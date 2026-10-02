@@ -1256,6 +1256,23 @@ Execs `virsh console` for the VM. The console is also logged to
 that is not running exits `5` and names that log, which is what you actually
 want when a guest failed to boot.
 
+### `agent-vm licenses`
+
+Prints the license for SnapHop Agent VM and the third-party notices for the
+software linked into the binary. The text form writes the `LICENSE` file, a
+blank line, and the `NOTICE` file. `--output json` writes one object:
+
+| Field | Meaning |
+|---|---|
+| `license` | The MIT license, exactly the `LICENSE` file. |
+| `notice` | The copyright and permission notices for BurntSushi/toml and for the Go standard library and runtime, exactly the `NOTICE` file. |
+
+An unexpected argument exits `2`.
+
+The same text is embedded in the binary, so a copied binary still carries the
+notices. `scripts/build-release.sh` also places `LICENSE` and `NOTICE` in
+`dist/` next to the binaries, and a GitHub Release attaches those files.
+
 ### `agent-vm completion <bash|zsh|fish>`
 
 Prints a tab-completion script for the named shell to stdout. Naming an
@@ -1313,6 +1330,7 @@ table below is the summary.
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none — completion reads the state directory and spawns no process |
+| `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
 | `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
 

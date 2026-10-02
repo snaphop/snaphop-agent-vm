@@ -29,6 +29,12 @@ existing overlays.
 
 ### Added
 
+- **License notices travel with the program.** `agent-vm licenses` prints the
+  MIT license and the notices for the other software included in the binary
+  (the TOML library and the Go runtime). A release includes `LICENSE` and
+  `NOTICE` next to the binaries, and the same text is built into the binary,
+  so copying the binary alone still carries the notices.
+
 - **GitHub Actions and Dependabot.** Pull requests and pushes to `master` run
   `scripts/check.sh` (format, vet, lint, and unit tests). Pushing a `vX.Y.Z`
   tag builds the static Linux binaries and attaches them, with checksums, to

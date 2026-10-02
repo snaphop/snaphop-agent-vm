@@ -1,7 +1,8 @@
 # The only publishing path. Pushing a vX.Y.Z tag builds the static Linux
-# binaries and attaches them to a GitHub Release. A merge does not run this
-# workflow. The tag pattern is a glob: v0.1.0 and v0.1.0-rc.1 both match,
-# and a hyphen in the tag marks the release as a pre-release.
+# binaries and attaches them, with LICENSE and NOTICE, to a GitHub Release.
+# A merge does not run this workflow. The tag pattern is a glob: v0.1.0 and
+# v0.1.0-rc.1 both match, and a hyphen in the tag marks the release as a
+# pre-release.
 name: Release
 
 on:
@@ -57,6 +58,19 @@ jobs:
               file "$bin" >&2
               exit 1
             fi
+            # -s -w strips symbols, not string data. These phrases are how the
+            # linked licenses require a binary to carry their notices. A build
+            # that dropped the embed would still be a static binary.
+            for needle in \
+              'Copyright (c) 2026 SnapHop' \
+              'Copyright (c) 2013 TOML authors' \
+              'Copyright 2009 The Go Authors.'
+            do
+              if ! grep -a -F -q "$needle" "$bin"; then
+                echo "$bin is missing the license notice: $needle" >&2
+                exit 1
+              fi
+            done
           done
           version_output="$(./dist/agent-vm-linux-amd64 --version)"
           printf '%s\n' "$version_output"
@@ -64,12 +78,14 @@ jobs:
             echo "the amd64 binary does not report $VERSION" >&2
             exit 1
           fi
+          cmp -s LICENSE dist/LICENSE || { echo "dist/LICENSE differs from LICENSE" >&2; exit 1; }
+          cmp -s NOTICE dist/NOTICE || { echo "dist/NOTICE differs from NOTICE" >&2; exit 1; }
 
       - name: Write checksums
         run: |
           set -euo pipefail
           cd dist
-          sha256sum agent-vm-linux-amd64 agent-vm-linux-arm64 > SHA256SUMS
+          sha256sum agent-vm-linux-amd64 agent-vm-linux-arm64 LICENSE NOTICE > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish the GitHub Release
@@ -88,4 +104,6 @@ jobs:
             "${args[@]}" \
             dist/agent-vm-linux-amd64 \
             dist/agent-vm-linux-arm64 \
+            dist/LICENSE \
+            dist/NOTICE \
             dist/SHA256SUMS

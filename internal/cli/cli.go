@@ -103,6 +103,7 @@ func commands() map[string]*command {
 		updateCommand(),
 		consoleCommand(),
 		destroyCommand(),
+		licensesCommand(),
 		completionCommand(),
 		completeCommand(),
 	}

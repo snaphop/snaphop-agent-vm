@@ -169,6 +169,7 @@ func completionSpecs() map[string]*completionSpec {
 		"update":     {flags: []string{"all", "timeout"}, args: vmName},
 		"console":    {args: vmName},
 		"destroy":    {flags: []string{"keep-disk", "force", "timeout", "github-ssh-key"}, args: vmName},
+		"licenses":   {},
 		"completion": {args: []argSource{func(*App) []string { return shellNames() }}},
 		"image": {subcommands: map[string]*completionSpec{
 			"build":   {flags: []string{"from", "platform", "force"}, args: []argSource{distroCandidates}},

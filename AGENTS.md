@@ -39,8 +39,8 @@ of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
 `Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
 `internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
-`start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `completion`,
-`--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
+`start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `licenses`,
+`completion`, `--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
 documented contract. What remains is hardening: the integration
 suite in `test/integration/` now covers the image build **and** the VM
 lifecycle — create, boot, SSH, stop/start/restart, destroy, rollback after a
@@ -93,6 +93,7 @@ path documented.
 │   ├── state/              # state directory, vm.json, locking
 │   ├── github/             # gh api calls for --github-ssh-key, host-side only
 │   ├── progress/           # terminal progress rendering for long operations
+│   ├── notices/            # LICENSE and NOTICE, embedded in the release binary
 │   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
 ├── templates/              # embedded: per-distro Containerfiles, cloud-init
@@ -290,6 +291,8 @@ Major modules and responsibilities:
 - `internal/progress` — renders the progress of a long, multi-step operation: a
   bar redrawn in place on a terminal, one plain line per step anywhere else.
   Presentation only; the package doing the work reports which step it reached.
+- `internal/notices` — the MIT license and the third-party notices embedded in
+  the binary and printed by `agent-vm licenses`.
 - `internal/hostexec` — the only package that spawns processes: argv construction,
   timeouts, logging with exit status, tool version detection, and *where* a
   command runs. Each command carries a location; with a `qemu+ssh://` libvirt URI
@@ -342,9 +345,9 @@ unit tests. Integration tests need a KVM host, are not part of that
 workflow, and are not required for merge. **Merging does not deploy or
 publish anything.** Pushing a `vX.Y.Z` tag runs
 `.github/workflows/release.yml`, which builds the static binaries with
-`scripts/build-release.sh` and attaches them to a GitHub Release. That
-workflow is the only publishing path. Dependabot opens weekly pull requests
-for Go module and GitHub Actions updates.
+`scripts/build-release.sh` and attaches them, with `LICENSE` and `NOTICE`, to
+a GitHub Release. That workflow is the only publishing path. Dependabot opens
+weekly pull requests for Go module and GitHub Actions updates.
 
 Require an ADR in [`docs/decisions/`](./docs/decisions/) for decisions that are
 hard to reverse, affect multiple components, or change the security/deployment
