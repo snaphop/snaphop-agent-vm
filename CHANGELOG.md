@@ -16,6 +16,8 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-02
+
 Entries record changes during development, including intermediate designs later
 superseded in this section. For current behavior use [the CLI reference](./docs/cli.md).
 In particular, full-image tooling is absent from `-slim` variants, mise installs
@@ -1287,8 +1289,5 @@ existing overlays.
   in use. The tool now passes `-U`, which overrides the lock check while still
   opening the image read-only.
 
-## [0.1.0] - 2026-08-17
-
-### Added
-
-- Initial project scaffold.
+[Unreleased]: https://github.com/snaphop/snaphop-agent-vm/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/snaphop/snaphop-agent-vm/releases/tag/v0.1.0
