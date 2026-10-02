@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // write puts one configuration file in a temporary directory and returns its

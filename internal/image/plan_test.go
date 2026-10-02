@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/golden"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/golden"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 func TestPlan_MatchesTheInvocationsABuildActuallyRuns(t *testing.T) {

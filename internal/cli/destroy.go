@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 func destroyCommand() *command {

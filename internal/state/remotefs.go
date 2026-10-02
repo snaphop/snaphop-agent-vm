@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // RemoteFS is the state directory on the machine libvirt runs on, reached over

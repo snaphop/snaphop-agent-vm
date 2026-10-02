@@ -241,6 +241,8 @@ these VMs that you would not run on a machine you are willing to lose.
 ## Building And Installing
 
 ```bash
+git clone https://github.com/snaphop/snaphop-agent-vm.git
+cd snaphop-agent-vm
 make build                 # go build ./...
 make install               # build the static binaries and install this host's
                            # into ~/.local/bin (override with PREFIX or BINDIR)
@@ -271,4 +273,4 @@ verification required before handing work off.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE). Copyright (c) 2026 SnapHop.

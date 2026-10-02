@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 func sshCommand() *command {

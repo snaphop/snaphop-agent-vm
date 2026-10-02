@@ -9,8 +9,8 @@ import (
 	"strings"
 	"text/template"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/templates"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/templates"
 )
 
 // The NAT network's addressing. libvirt's own default network uses

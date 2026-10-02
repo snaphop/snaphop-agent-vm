@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 func listCommand() *command {

@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // The lifecycle tests drive the real binary as a subprocess rather than calling

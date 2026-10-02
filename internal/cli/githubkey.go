@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/github"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/guestinit"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/github"
+	"github.com/snaphop/snaphop-agent-vm/internal/guestinit"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // guestPublicKeyPath is where the base image's first-boot unit puts the key

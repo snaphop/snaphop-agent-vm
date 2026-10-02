@@ -29,8 +29,8 @@ import (
 	"strings"
 	"text/template"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/templates"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/templates"
 )
 
 // mimeBoundary is fixed rather than random. Two identical VM configurations

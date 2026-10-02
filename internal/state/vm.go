@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // VMSchemaVersion is the version of the vm.json schema this build writes and

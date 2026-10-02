@@ -27,6 +27,14 @@ that depend on a base before rebuilding it, then recreate them to use the new
 image and host-side kernel; rebuilding a backing file in place is unsafe for
 existing overlays.
 
+### Changed
+
+- The source repository is <https://github.com/snaphop/snaphop-agent-vm>,
+  released under the MIT License (copyright 2026 SnapHop). The Go module path
+  is `github.com/snaphop/snaphop-agent-vm`. A checkout that still imports
+  `git.snaphop.xyz/snaphop/snaphop-agent-vm` needs that import path updated
+  before it will build.
+
 ### Added
 
 - **Grok CLI, and `agy` installed with mise.** Full and nix base images install

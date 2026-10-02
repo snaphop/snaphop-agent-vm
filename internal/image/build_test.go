@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/golden"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/templates"
+	"github.com/snaphop/snaphop-agent-vm/internal/golden"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/templates"
 )
 
 // The digest a fake registry hands back. It is a real-shaped sha256 because

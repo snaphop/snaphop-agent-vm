@@ -11,7 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/cli"
+	"github.com/snaphop/snaphop-agent-vm/internal/cli"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // natConfig is the configuration this check is about: NAT mode on a local

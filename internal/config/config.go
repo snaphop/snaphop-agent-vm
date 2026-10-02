@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
 )
 
 // NetworkMode selects how a guest is attached to the network.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // Forwarding is only half of what NAT mode needs, and it is the half whose

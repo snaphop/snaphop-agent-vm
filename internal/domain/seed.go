@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // The NoCloud seed is built here rather than by `virt-install --cloud-init`

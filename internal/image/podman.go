@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // The OCI half of the pipeline: pull a source image, pin it to a digest, build

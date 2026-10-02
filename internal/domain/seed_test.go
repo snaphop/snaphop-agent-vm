@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 const (

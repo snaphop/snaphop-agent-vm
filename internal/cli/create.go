@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/github"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/guestinit"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/network"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/github"
+	"github.com/snaphop/snaphop-agent-vm/internal/guestinit"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/network"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // defaultWaitForSSH is how long create waits for a guest to accept SSH. It is

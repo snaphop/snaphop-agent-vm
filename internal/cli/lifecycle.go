@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/domain"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/domain"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // defaultStopTimeout is how long a graceful shutdown is given before the tool

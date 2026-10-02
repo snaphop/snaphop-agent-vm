@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/templates"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/templates"
 )
 
 // Timeouts for the long steps. A registry pull and a distro package

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // otherUser is an identity that owns nothing the tests create, so a directory

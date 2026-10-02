@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/golden"
+	"github.com/snaphop/snaphop-agent-vm/internal/golden"
 )
 
 // A real ed25519 public key: golden files and parser tests are worth nothing if

@@ -7,11 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/progress"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/image"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/progress"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 func imageCommand() *command {

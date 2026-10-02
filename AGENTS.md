@@ -169,7 +169,7 @@ No libvirt development headers are needed — the build is pure Go and talks to
 libvirt through `virt-install` and `virsh`.
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/snaphop/snaphop-agent-vm.git
 cd snaphop-agent-vm
 go mod download
 cp .env.example .env          # optional; source it into your shell to override

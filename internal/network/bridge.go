@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // bridgeLink is the subset of `ip -d -json link` output we read. Using the

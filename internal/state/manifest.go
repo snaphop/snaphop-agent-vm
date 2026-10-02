@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // ManifestSchemaVersion is the version of the manifest.json schema this build

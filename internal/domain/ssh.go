@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // sshProbeTimeout bounds one readiness probe. It is short because the probe is

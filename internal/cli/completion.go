@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/state"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
 // completeCommandName is the hidden command the generated shell scripts call to

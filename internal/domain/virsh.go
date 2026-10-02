@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // virtInstallTimeout bounds one define-and-start. It is generous because

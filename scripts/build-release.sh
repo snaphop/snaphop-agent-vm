@@ -22,7 +22,7 @@ for arch in $ARCHES; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
     go build \
     -trimpath \
-    -ldflags "-s -w -X git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/cli.Version=$VERSION" \
+    -ldflags "-s -w -X github.com/snaphop/snaphop-agent-vm/internal/cli.Version=$VERSION" \
     -o "$output" \
     ./cmd/agent-vm
 done

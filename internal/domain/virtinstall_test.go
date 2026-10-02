@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/golden"
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/image/distro"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/golden"
+	"github.com/snaphop/snaphop-agent-vm/internal/image/distro"
 )
 
 func natOptions() CreateOptions {

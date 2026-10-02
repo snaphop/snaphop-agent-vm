@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // Client talks to GitHub through the operator's authenticated `gh`.

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // In NAT mode a guest reaches the internet only if the host forwards its

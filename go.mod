@@ -1,4 +1,4 @@
-module git.snaphop.xyz/snaphop/snaphop-agent-vm
+module github.com/snaphop/snaphop-agent-vm
 
 go 1.22
 

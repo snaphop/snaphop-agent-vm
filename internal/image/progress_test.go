@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // recordingProgress captures what a build reported, in order.

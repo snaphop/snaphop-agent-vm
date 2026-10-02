@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.snaphop.xyz/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 )
 
 // CreateOptions is everything virt-install needs to define one VM. Paths are
