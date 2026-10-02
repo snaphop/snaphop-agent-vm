@@ -35,6 +35,7 @@ func bridgeOptions() CreateOptions {
 }
 
 func TestVirtInstallArgs_NAT(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -43,6 +44,7 @@ func TestVirtInstallArgs_NAT(t *testing.T) {
 }
 
 func TestVirtInstallArgs_Bridge(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(bridgeOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -58,6 +60,7 @@ func virtioMemOptions() CreateOptions {
 }
 
 func TestVirtInstallArgs_VirtioMem(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(virtioMemOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -66,6 +69,7 @@ func TestVirtInstallArgs_VirtioMem(t *testing.T) {
 }
 
 func TestVirtInstallArgs_SizesTheMemoryDeviceToTheGrowthRoom(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(virtioMemOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -83,6 +87,7 @@ func TestVirtInstallArgs_SizesTheMemoryDeviceToTheGrowthRoom(t *testing.T) {
 }
 
 func TestVirtInstallArgs_GivesTheMemoryDeviceANUMANodeCoveringEveryVCPU(t *testing.T) {
+	t.Parallel()
 	// libvirt refuses a domain whose NUMA cells do not account for every vCPU,
 	// and a memory device has to name a node that exists.
 	for _, tc := range []struct {
@@ -110,6 +115,7 @@ func TestVirtInstallArgs_GivesTheMemoryDeviceANUMANodeCoveringEveryVCPU(t *testi
 }
 
 func TestVirtInstallArgs_WithoutMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -129,6 +135,7 @@ func TestVirtInstallArgs_WithoutMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsAMemoryCeilingBelowTheGuestsMemory(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.MaxMemory = 2 * config.GiB
 
@@ -138,6 +145,7 @@ func TestVirtInstallArgs_RejectsAMemoryCeilingBelowTheGuestsMemory(t *testing.T)
 }
 
 func TestVirtInstallArgs_RejectsGrowthRoomThatIsNotAWholeVirtioMemBlock(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	// 3 MiB of growth room: QEMU would reject the device for not being a
 	// multiple of its 2 MiB block size.
@@ -149,6 +157,7 @@ func TestVirtInstallArgs_RejectsGrowthRoomThatIsNotAWholeVirtioMemBlock(t *testi
 }
 
 func TestVirtInstallArgs_EqualMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.MaxMemory = opts.Memory
 
@@ -164,6 +173,7 @@ func TestVirtInstallArgs_EqualMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
 }
 
 func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
+	t.Parallel()
 	nat, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -190,6 +200,7 @@ func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
 }
 
 func TestVirtInstallArgs_BootsTheKernelDirectlyWithItsCommandLine(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -211,6 +222,7 @@ func TestVirtInstallArgs_BootsTheKernelDirectlyWithItsCommandLine(t *testing.T) 
 // second after cloud-init has already chosen a datasource, so the guest booted
 // with no login user and no authorized key.
 func TestVirtInstallArgs_AttachesTheSeedAsAReadOnlyVirtioDisk(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -243,6 +255,7 @@ func TestVirtInstallArgs_AttachesTheSeedAsAReadOnlyVirtioDisk(t *testing.T) {
 }
 
 func TestVirtInstallArgs_LogsTheSerialConsoleToAFile(t *testing.T) {
+	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
@@ -258,6 +271,7 @@ func TestVirtInstallArgs_LogsTheSerialConsoleToAFile(t *testing.T) {
 }
 
 func TestVirtInstallArgs_AppendsPassthroughArgumentsLast(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.ExtraArgs = []string{"--tpm", "backend.type=emulator"}
 
@@ -273,6 +287,7 @@ func TestVirtInstallArgs_AppendsPassthroughArgumentsLast(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsAnInvalidVMName(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.Name = "Agent VM"
 
@@ -282,6 +297,7 @@ func TestVirtInstallArgs_RejectsAnInvalidVMName(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsAPathVirtInstallWouldMisread(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.OverlayPath = "/home/operator/vms/agent,01/root.qcow2"
 
@@ -295,6 +311,7 @@ func TestVirtInstallArgs_RejectsAPathVirtInstallWouldMisread(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsARelativePath(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.KernelPath = "images/ubuntu/24.04/vmlinuz"
 
@@ -304,6 +321,7 @@ func TestVirtInstallArgs_RejectsARelativePath(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsBridgedModeWithNoBridge(t *testing.T) {
+	t.Parallel()
 	opts := bridgeOptions()
 	opts.Bridge = ""
 
@@ -313,6 +331,7 @@ func TestVirtInstallArgs_RejectsBridgedModeWithNoBridge(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsAnUnknownNetworkMode(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.Network = "host"
 
@@ -322,6 +341,7 @@ func TestVirtInstallArgs_RejectsAnUnknownNetworkMode(t *testing.T) {
 }
 
 func TestVirtInstallArgs_RejectsMemoryThatRoundsToZeroMiB(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.Memory = 512
 
@@ -364,6 +384,7 @@ func contains(args []string, want string) bool {
 // libvirt refuses ACPI without UEFI there, and a directly booted kernel has no
 // UEFI (featuresArg).
 func TestVirtInstallArgs_AArch64TurnsOffACPI(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.Arch = "aarch64"
 
@@ -375,6 +396,7 @@ func TestVirtInstallArgs_AArch64TurnsOffACPI(t *testing.T) {
 }
 
 func TestVirtInstallArgs_KeepsACPIOnX8664(t *testing.T) {
+	t.Parallel()
 	opts := natOptions()
 	opts.Arch = "x86_64"
 

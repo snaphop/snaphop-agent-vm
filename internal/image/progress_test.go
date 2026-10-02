@@ -28,6 +28,7 @@ func (r *recordingProgress) Finish(err error) {
 }
 
 func TestBuild_ReportsEveryStepInOrder(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, _ := newBuilder(t, fake)
 	reported := &recordingProgress{}
@@ -61,6 +62,7 @@ func TestBuild_ReportsEveryStepInOrder(t *testing.T) {
 }
 
 func TestBuild_ReportsTheFailureThatEndedTheBuild(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	fake.RespondPrefix("podman pull", hostexec.FakeResponse{ExitCode: 125, Stderr: "no such host"})
 	builder, _ := newBuilder(t, fake)
@@ -82,6 +84,7 @@ func TestBuild_ReportsTheFailureThatEndedTheBuild(t *testing.T) {
 // A cache hit does no work, so there is nothing to report: a bar that appeared
 // and vanished would suggest a rebuild that never happened.
 func TestBuild_ReportsNoStepsForACachedImage(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, _ := newBuilder(t, fake)
 	ref := ubuntuRef(t)

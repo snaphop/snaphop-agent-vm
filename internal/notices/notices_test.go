@@ -9,6 +9,7 @@ import (
 // The root files are what a release attaches. The copies embedded here are what
 // the binary contains. They have to stay the same text.
 func TestEmbeddedTextsMatchRepoRoot(t *testing.T) {
+	t.Parallel()
 	for _, name := range []struct {
 		file     string
 		embedded string
@@ -30,6 +31,7 @@ func TestEmbeddedTextsMatchRepoRoot(t *testing.T) {
 // itself says must accompany a copy: the copyright line and the permission
 // terms.
 func TestNoticeCarriesTheRequiredPermissionNotices(t *testing.T) {
+	t.Parallel()
 	for _, want := range []string{
 		"Copyright (c) 2013 TOML authors",
 		"Permission is hereby granted, free of charge",
@@ -53,6 +55,7 @@ func TestNoticeCarriesTheRequiredPermissionNotices(t *testing.T) {
 // A module added to go.mod is linked into the binary, so its name has to appear
 // in NOTICE, which is the prompt to paste that module's license text in too.
 func TestNoticeNamesEveryModuleRequirement(t *testing.T) {
+	t.Parallel()
 	data, err := os.ReadFile("../../go.mod")
 	if err != nil {
 		t.Fatalf("reading go.mod: %v", err)
@@ -69,6 +72,7 @@ func TestNoticeNamesEveryModuleRequirement(t *testing.T) {
 }
 
 func TestRequiredModulesParsesSingleAndBlockForms(t *testing.T) {
+	t.Parallel()
 	got := requiredModules(`
 module example.com/mod
 

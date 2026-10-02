@@ -19,6 +19,7 @@ func stoppedHost(t *testing.T, names ...string) *hostexec.Fake {
 }
 
 func TestStart_StartsAStoppedVM(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -32,6 +33,7 @@ func TestStart_StartsAStoppedVM(t *testing.T) {
 }
 
 func TestStart_RefusesAVMThatIsAlreadyRunning(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -50,6 +52,7 @@ func TestStart_RefusesAVMThatIsAlreadyRunning(t *testing.T) {
 }
 
 func TestStart_ReportsAVMLibvirtHasLost(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name",
@@ -71,6 +74,7 @@ func TestStart_ReportsAVMLibvirtHasLost(t *testing.T) {
 }
 
 func TestStart_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "start", "someone-elses-vm")
@@ -80,6 +84,7 @@ func TestStart_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
 }
 
 func TestStop_AsksTheGuestAndWaitsForIt(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name",
@@ -110,6 +115,7 @@ func TestStop_AsksTheGuestAndWaitsForIt(t *testing.T) {
 }
 
 func TestStop_NeverEscalatesToAForceOffOnItsOwn(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	// The guest ignores the request and keeps running.
 	fake := runningHost(t, "agent-01")
@@ -131,6 +137,7 @@ func TestStop_NeverEscalatesToAForceOffOnItsOwn(t *testing.T) {
 }
 
 func TestStop_ForcePowersOffImmediately(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -148,6 +155,7 @@ func TestStop_ForcePowersOffImmediately(t *testing.T) {
 }
 
 func TestStop_RefusesAVMThatIsNotRunning(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -161,6 +169,7 @@ func TestStop_RefusesAVMThatIsNotRunning(t *testing.T) {
 }
 
 func TestRestart_StopsThenStarts(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name",
@@ -199,6 +208,7 @@ func TestRestart_StopsThenStarts(t *testing.T) {
 }
 
 func TestRestart_DoesNotStartAGuestItCouldNotStop(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -215,6 +225,7 @@ func TestRestart_DoesNotStartAGuestItCouldNotStop(t *testing.T) {
 }
 
 func TestLifecycle_RejectsAMissingName(t *testing.T) {
+	t.Parallel()
 	for _, verb := range []string{"start", "stop", "restart"} {
 		if code, _, _ := cliRun(t, createHost(t), t.TempDir(), verb); code != ExitUsage {
 			t.Errorf("%s with no name: exit code = %d, want %d", verb, code, ExitUsage)
@@ -223,6 +234,7 @@ func TestLifecycle_RejectsAMissingName(t *testing.T) {
 }
 
 func TestLifecycle_AcceptsFlagsAfterTheName(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -234,6 +246,7 @@ func TestLifecycle_AcceptsFlagsAfterTheName(t *testing.T) {
 }
 
 func TestStop_DryRunPrintsTheCommandAndWaitsForNothing(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 

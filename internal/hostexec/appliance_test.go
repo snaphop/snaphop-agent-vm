@@ -9,6 +9,7 @@ import (
 const testApplianceDir = "/var/lib/agent-vm/appliance-kernel/6.8.0-31-generic"
 
 func TestApplianceKernel_SetsSuperminEnvironmentOnLibguestfsTools(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	runner := NewApplianceKernel(fake, func() string { return testApplianceDir })
 
@@ -46,6 +47,7 @@ func TestApplianceKernel_SetsSuperminEnvironmentOnLibguestfsTools(t *testing.T) 
 // virt-install would put three lines of noise on every --dry-run and imply a
 // dependency that is not there.
 func TestApplianceKernel_LeavesOtherToolsAlone(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	runner := NewApplianceKernel(fake, func() string { return testApplianceDir })
 
@@ -64,6 +66,7 @@ func TestApplianceKernel_LeavesOtherToolsAlone(t *testing.T) {
 // A host whose own kernel boots the appliance configures nothing, and its
 // commands must come out exactly as they went in.
 func TestApplianceKernel_UnconfiguredLeavesCommandsUntouched(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	runner := NewApplianceKernel(fake, func() string { return "" })
 
@@ -76,6 +79,7 @@ func TestApplianceKernel_UnconfiguredLeavesCommandsUntouched(t *testing.T) {
 }
 
 func TestApplianceKernel_RenderShowsTheEnvironmentItWouldRunWith(t *testing.T) {
+	t.Parallel()
 	runner := NewApplianceKernel(NewFake(), func() string { return testApplianceDir })
 
 	got := runner.Render(Command{Name: VirtLs.Name, Args: []string{"-a", "/tmp/base.qcow2", "/boot"}, Effect: Read})
@@ -91,6 +95,7 @@ func TestApplianceKernel_RenderShowsTheEnvironmentItWouldRunWith(t *testing.T) {
 // Over the ssh transport the environment has to reach the far side, and the
 // only thing that carries it is the remote command line.
 func TestApplianceKernel_EnvironmentSurvivesTheSSHTransport(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	remote := NewRemote(fake, nil, "kvm@hv.example.com", "")
 	runner := NewApplianceKernel(remote, func() string { return testApplianceDir })
@@ -120,6 +125,7 @@ func TestApplianceKernel_EnvironmentSurvivesTheSSHTransport(t *testing.T) {
 }
 
 func TestApplianceKernelEnv_DerivesTheVersionFromTheDirectoryName(t *testing.T) {
+	t.Parallel()
 	got := ApplianceKernelEnv("/opt/kernels/6.12.4-arch1-1")
 
 	if len(got) != 3 {

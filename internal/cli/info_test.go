@@ -11,6 +11,7 @@ import (
 )
 
 func TestInfo_PrintsTheProvenanceOfAVM(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
@@ -40,6 +41,7 @@ func TestInfo_PrintsTheProvenanceOfAVM(t *testing.T) {
 }
 
 func TestInfo_ReportsWhatTheOverlayActuallyCosts(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
@@ -61,6 +63,7 @@ func TestInfo_ReportsWhatTheOverlayActuallyCosts(t *testing.T) {
 }
 
 func TestInfo_AnUnreadableOverlayStillPrintsTheRecord(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.RespondPrefix("qemu-img info", hostexec.FakeResponse{
@@ -77,6 +80,7 @@ func TestInfo_AnUnreadableOverlayStillPrintsTheRecord(t *testing.T) {
 }
 
 func TestInfo_ReportsAMissingVMAsNotFound(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, _, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir, "info", "agent-99")
@@ -89,6 +93,7 @@ func TestInfo_ReportsAMissingVMAsNotFound(t *testing.T) {
 }
 
 func TestInfo_RejectsAnInvalidVMName(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	// A name that is not a valid VM name is refused before it is used as a
@@ -99,12 +104,14 @@ func TestInfo_RejectsAnInvalidVMName(t *testing.T) {
 }
 
 func TestInfo_RequiresExactlyOneName(t *testing.T) {
+	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "info"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
 	}
 }
 
 func TestInfo_JSONOutputIsTheRecordWithLiveState(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{

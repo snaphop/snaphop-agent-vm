@@ -60,6 +60,7 @@ func tree(t *testing.T, modes ...os.FileMode) (root, leaf string) {
 }
 
 func TestFirstUntraversable_AllowsAPathOfWorldSearchableDirectories(t *testing.T) {
+	t.Parallel()
 	_, leaf := tree(t, 0o755, 0o755, 0o711)
 
 	blocker, err := firstUntraversable(leaf, otherUser())
@@ -74,6 +75,7 @@ func TestFirstUntraversable_AllowsAPathOfWorldSearchableDirectories(t *testing.T
 // A home directory is commonly 0700, and the default state directory sits
 // underneath it. This is the exact shape of the failure this check exists for.
 func TestFirstUntraversable_ReportsAPrivateHomeDirectory(t *testing.T) {
+	t.Parallel()
 	root, leaf := tree(t, 0o700, 0o755, 0o755)
 	want := filepath.Join(root, "a")
 
@@ -89,6 +91,7 @@ func TestFirstUntraversable_ReportsAPrivateHomeDirectory(t *testing.T) {
 // The remedy names one directory at a time, so it must be the shallowest one:
 // fixing a deeper directory first changes nothing.
 func TestFirstUntraversable_ReportsTheShallowestBlockingDirectory(t *testing.T) {
+	t.Parallel()
 	root, leaf := tree(t, 0o700, 0o755, 0o700)
 	want := filepath.Join(root, "a")
 
@@ -104,6 +107,7 @@ func TestFirstUntraversable_ReportsTheShallowestBlockingDirectory(t *testing.T) 
 // create makes the per-VM directory itself, so a state directory that does not
 // exist yet is not a problem as long as its parents are reachable.
 func TestFirstUntraversable_IgnoresDirectoriesThatDoNotExistYet(t *testing.T) {
+	t.Parallel()
 	_, leaf := tree(t, 0o755)
 
 	blocker, err := firstUntraversable(filepath.Join(leaf, "not", "created", "yet"), otherUser())
@@ -116,6 +120,7 @@ func TestFirstUntraversable_IgnoresDirectoriesThatDoNotExistYet(t *testing.T) {
 }
 
 func TestFirstUntraversable_HonoursOwnerPermissions(t *testing.T) {
+	t.Parallel()
 	_, leaf := tree(t, 0o700, 0o700)
 
 	blocker, err := firstUntraversable(leaf, selfUser(t))
@@ -131,6 +136,7 @@ func TestFirstUntraversable_HonoursOwnerPermissions(t *testing.T) {
 // not see the resulting ACL it would keep failing after the operator applied
 // the fix, which is worse than not checking at all.
 func TestFirstUntraversable_HonoursAnACLGrantingSearch(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("setfacl"); err != nil {
 		t.Skip("setfacl is not installed; the ACL decoding itself is covered by TestACL_* below")
 	}
@@ -170,6 +176,7 @@ func aclFixture(t *testing.T) []byte {
 }
 
 func TestACL_DecodesAnAttributeCapturedFromARealDirectory(t *testing.T) {
+	t.Parallel()
 	entries, err := parseACL(aclFixture(t))
 	if err != nil {
 		t.Fatalf("parseACL: %v", err)
@@ -195,6 +202,7 @@ func TestACL_DecodesAnAttributeCapturedFromARealDirectory(t *testing.T) {
 }
 
 func TestACL_GrantsSearchToTheNamedUserAndNobodyElse(t *testing.T) {
+	t.Parallel()
 	entries, err := parseACL(aclFixture(t))
 	if err != nil {
 		t.Fatalf("parseACL: %v", err)
@@ -216,6 +224,7 @@ func TestACL_GrantsSearchToTheNamedUserAndNobodyElse(t *testing.T) {
 // A named entry is capped by the mask, so a mask without execute revokes the
 // grant even though the user entry still carries it.
 func TestACL_AppliesTheMaskToANamedUserEntry(t *testing.T) {
+	t.Parallel()
 	entries := []aclEntry{
 		{Tag: tagUserObj, Perm: 0o7, ID: ^uint32(0)},
 		{Tag: tagUser, Perm: permExecute, ID: 957},
@@ -232,6 +241,7 @@ func TestACL_AppliesTheMaskToANamedUserEntry(t *testing.T) {
 }
 
 func TestACL_RejectsAnAttributeItCannotDecode(t *testing.T) {
+	t.Parallel()
 	for name, data := range map[string][]byte{
 		"truncated header":   {0x02, 0x00},
 		"unknown version":    {0x09, 0x00, 0x00, 0x00},
@@ -244,6 +254,7 @@ func TestACL_RejectsAnAttributeItCannotDecode(t *testing.T) {
 }
 
 func TestQEMUUserFromConf_ReadsAnExplicitSetting(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "qemu.conf")
 	conf := `# The user for QEMU processes run by the system instance.
 #user = "root"
@@ -260,6 +271,7 @@ user = "libvirt-qemu"
 }
 
 func TestQEMUUserFromConf_IgnoresCommentedAndAbsentSettings(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "qemu.conf")
 	if err := os.WriteFile(path, []byte("#user = \"root\"\ngroup = \"kvm\"\n"), 0o600); err != nil {
 		t.Fatalf("writing qemu.conf: %v", err)
@@ -300,6 +312,7 @@ func runDoctorAs(t *testing.T, stateDir string, identity func() (*hypervisorIden
 }
 
 func TestDoctor_StateDirectoryUnreachableByTheHypervisorIsAFailure(t *testing.T) {
+	t.Parallel()
 	root, leaf := tree(t, 0o700, 0o755)
 	blocked := filepath.Join(root, "a")
 
@@ -321,6 +334,7 @@ func TestDoctor_StateDirectoryUnreachableByTheHypervisorIsAFailure(t *testing.T)
 }
 
 func TestDoctor_StateDirectoryReachableByTheHypervisorPasses(t *testing.T) {
+	t.Parallel()
 	_, leaf := tree(t, 0o755, 0o755)
 
 	report := runDoctorAs(t, leaf, func() (*hypervisorIdentity, error) { return otherUser(), nil })
@@ -333,6 +347,7 @@ func TestDoctor_StateDirectoryReachableByTheHypervisorPasses(t *testing.T) {
 // Session mode runs QEMU as the invoking user, so there is no second identity
 // to satisfy and the check does not apply.
 func TestDoctor_StateDirectoryAccessIsSkippedOnTheSessionURI(t *testing.T) {
+	t.Parallel()
 	root, leaf := tree(t, 0o700, 0o755)
 	_ = root
 
@@ -371,6 +386,7 @@ func TestDoctor_StateDirectoryAccessIsSkippedOnTheSessionURI(t *testing.T) {
 // Guessing an account would produce a confident and wrong verdict, so an
 // unidentifiable hypervisor user skips rather than fails.
 func TestDoctor_StateDirectoryAccessIsSkippedWhenTheQEMUUserIsUnknown(t *testing.T) {
+	t.Parallel()
 	_, leaf := tree(t, 0o700)
 
 	report := runDoctorAs(t, leaf, undeterminableHypervisor)
@@ -387,6 +403,7 @@ func TestDoctor_StateDirectoryAccessIsSkippedWhenTheQEMUUserIsUnknown(t *testing
 // The check only stats directories, so unlike the writability check it stays
 // useful on a host being reviewed with --dry-run.
 func TestDoctor_StateDirectoryAccessRunsUnderDryRun(t *testing.T) {
+	t.Parallel()
 	root, leaf := tree(t, 0o700, 0o755)
 	blocked := filepath.Join(root, "a")
 

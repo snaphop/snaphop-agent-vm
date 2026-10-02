@@ -25,6 +25,7 @@ func toolout(t *testing.T, name string) []byte {
 // silently build from a different artifact than the one podman pulled, so this
 // asserts the field, not just that something digest-shaped came back.
 func TestParseImageDigest_ReadsTheImageDigestFromRealPodmanOutput(t *testing.T) {
+	t.Parallel()
 	const (
 		image    = "sha256:1cfa4e2b09e127b9c4ed43578d3f3c18e7d44ea47b9ea98475c0cbe9086525f8"
 		manifest = "sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616"

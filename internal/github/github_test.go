@@ -15,6 +15,7 @@ import (
 const publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ1TfEt0YKXQ+eZmJHCcTKQ0lMSzQFm/kQGHMvhE7Hqx agent@build-01"
 
 func TestAddKey_ReturnsTheIDGitHubAssigned(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	// gh --jq extracts the field, so the whole answer is the id.
 	fake.RespondPrefix("gh api --method POST user/keys", hostexec.FakeResponse{Stdout: "119548016\n"})
@@ -40,6 +41,7 @@ func TestAddKey_ReturnsTheIDGitHubAssigned(t *testing.T) {
 }
 
 func TestAddKey_ReportsOutputItCannotRead(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh api", hostexec.FakeResponse{Stdout: "null\n"})
 
@@ -51,6 +53,7 @@ func TestAddKey_ReportsOutputItCannotRead(t *testing.T) {
 }
 
 func TestAddKey_RefusesAnEmptyKey(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	if _, err := New(fake).AddKey(context.Background(), "agent-vm build-01", "  \n"); err == nil {
 		t.Fatal("an empty key was accepted")
@@ -61,6 +64,7 @@ func TestAddKey_RefusesAnEmptyKey(t *testing.T) {
 }
 
 func TestDeleteKey_RemovesTheKeyByID(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	removed, err := New(fake).DeleteKey(context.Background(), 119548016)
@@ -78,6 +82,7 @@ func TestDeleteKey_RemovesTheKeyByID(t *testing.T) {
 // A key an operator already removed on github.com is the end state that was
 // asked for, so destroy must not fail on it.
 func TestDeleteKey_TreatsAKeyThatIsAlreadyGoneAsDone(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh api --method DELETE", hostexec.FakeResponse{
 		ExitCode: 1,
@@ -94,6 +99,7 @@ func TestDeleteKey_TreatsAKeyThatIsAlreadyGoneAsDone(t *testing.T) {
 }
 
 func TestDeleteKey_ReportsAnyOtherFailure(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh api --method DELETE", hostexec.FakeResponse{
 		ExitCode: 1,
@@ -106,6 +112,7 @@ func TestDeleteKey_ReportsAnyOtherFailure(t *testing.T) {
 }
 
 func TestCheckAuth_NamesTheFixWhenGHIsNotLoggedIn(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
 		ExitCode: 1,
@@ -139,6 +146,7 @@ func authStatus(t *testing.T, scopes string) string {
 }
 
 func TestCheckAuth_RefusesATokenThatCannotAddKeys(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
 		Stdout: authStatus(t, "'read:org', 'repo'"),
@@ -154,6 +162,7 @@ func TestCheckAuth_RefusesATokenThatCannotAddKeys(t *testing.T) {
 }
 
 func TestCheckAuth_AcceptsATokenWithTheKeyScope(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
 		Stdout: authStatus(t, "'admin:public_key', 'read:org', 'repo'"),
@@ -168,6 +177,7 @@ func TestCheckAuth_AcceptsATokenWithTheKeyScope(t *testing.T) {
 // is not refused: the API is the authority, and a missing line is not evidence
 // of a missing scope.
 func TestCheckAuth_AcceptsALoginWithNoScopeLine(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{
 		Stdout: "github.com\n  ✓ Logged in to github.com account wensington (GITHUB_TOKEN)\n",

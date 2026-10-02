@@ -106,6 +106,7 @@ func find(t *testing.T, report doctorReport, name string) check {
 }
 
 func TestDoctor_ChecksEveryToolTheProjectDelegatesTo(t *testing.T) {
+	t.Parallel()
 	report, _ := runDoctorWith(t, healthyHost())
 
 	for _, tool := range hostexec.RequiredTools() {
@@ -116,6 +117,7 @@ func TestDoctor_ChecksEveryToolTheProjectDelegatesTo(t *testing.T) {
 }
 
 func TestDoctor_ReportsAMissingToolAsAFailureWithItsPackage(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Missing["virt-install"] = true
 
@@ -137,6 +139,7 @@ func TestDoctor_ReportsAMissingToolAsAFailureWithItsPackage(t *testing.T) {
 }
 
 func TestDoctor_ReportsAToolBelowItsMinimumVersion(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Respond("virsh --version", hostexec.FakeResponse{Stdout: "8.10.0\n"})
 
@@ -159,6 +162,7 @@ func TestDoctor_ReportsAToolBelowItsMinimumVersion(t *testing.T) {
 }
 
 func TestDoctor_ReportsAFailedLibvirtConnection(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Respond("virsh --connect qemu:///system version", hostexec.FakeResponse{
 		Stderr:   "error: failed to connect to the hypervisor\n",
@@ -179,6 +183,7 @@ func TestDoctor_ReportsAFailedLibvirtConnection(t *testing.T) {
 }
 
 func TestDoctor_UndefinedNATNetworkIsNotAFailure(t *testing.T) {
+	t.Parallel()
 	// create defines the network on demand, so its absence is normal on a host
 	// that has not created a VM yet.
 	fake := healthyHost()
@@ -193,6 +198,7 @@ func TestDoctor_UndefinedNATNetworkIsNotAFailure(t *testing.T) {
 }
 
 func TestDoctor_ValidatesAConfiguredBridge(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
 		Stdout: `[{"ifname":"br0","flags":["BROADCAST","MULTICAST","UP","LOWER_UP"],"operstate":"UP"}]`,
@@ -208,6 +214,7 @@ func TestDoctor_ValidatesAConfiguredBridge(t *testing.T) {
 }
 
 func TestDoctor_NeverChangesHostState(t *testing.T) {
+	t.Parallel()
 	// doctor is a diagnostic. It may inspect anything and must mutate nothing,
 	// which is why every command it issues is declared read-only.
 	fake := healthyHost()
@@ -221,6 +228,7 @@ func TestDoctor_NeverChangesHostState(t *testing.T) {
 }
 
 func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Missing["qemu-img"] = true
 
@@ -251,6 +259,7 @@ func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
 }
 
 func TestDoctor_RejectsArguments(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	app := &App{
 		Stdout: &stdout, Stderr: &stderr,
@@ -266,6 +275,7 @@ func TestDoctor_RejectsArguments(t *testing.T) {
 }
 
 func TestCheckKVM_ReportsTheSubstitutedAccessResult(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		err    error
@@ -324,6 +334,7 @@ func TestCheckKVM_ReportsTheSubstitutedAccessResult(t *testing.T) {
 // substitute a passing check, so this is the one that keeps the failure wired
 // through to the exit code.
 func TestDoctor_MissingKVMFailsTheHost(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	var stdout, stderr bytes.Buffer
 	app := &App{
@@ -360,6 +371,7 @@ func TestDoctor_MissingKVMFailsTheHost(t *testing.T) {
 // gh is optional: it is needed only by --github-ssh-key, so a host without it
 // is still a ready host.
 func TestDoctor_AMissingGHIsReportedWithoutFailingTheHost(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Missing["gh"] = true
 
@@ -404,6 +416,7 @@ CONFIG_VIRTIO_PCI=m
 `
 
 func TestDoctor_PassesTheApplianceCheckOnAGeneralPurposeKernel(t *testing.T) {
+	t.Parallel()
 	report, code := runDoctorWith(t, aarch64Host(generalPurposeKernelConfig))
 
 	if got := find(t, report, "libguestfs appliance"); got.Status != statusPass {
@@ -418,6 +431,7 @@ func TestDoctor_PassesTheApplianceCheckOnAGeneralPurposeKernel(t *testing.T) {
 // with libguestfs reporting only that its appliance "closed the connection
 // unexpectedly" — which names neither the cause nor the fix.
 func TestDoctor_FailsWhenTheHostKernelCannotBootTheAppliance(t *testing.T) {
+	t.Parallel()
 	report, code := runDoctorWith(t, aarch64Host(hardwareSpecificKernelConfig))
 
 	got := find(t, report, "libguestfs appliance")
@@ -443,6 +457,7 @@ func TestDoctor_FailsWhenTheHostKernelCannotBootTheAppliance(t *testing.T) {
 // The symbols are ARM-only, so their absence on any other architecture means
 // nothing at all and must not fail a working host.
 func TestDoctor_SkipsTheKernelSymbolsOnNonARMHosts(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Respond("uname -m", hostexec.FakeResponse{Stdout: "x86_64\n"})
 
@@ -459,6 +474,7 @@ func TestDoctor_SkipsTheKernelSymbolsOnNonARMHosts(t *testing.T) {
 // A kernel that publishes no configuration is not a broken one. Guessing
 // either way would be worse than saying the question could not be answered.
 func TestDoctor_SkipsTheApplianceCheckWhenTheKernelConfigIsUnreadable(t *testing.T) {
+	t.Parallel()
 	fake := healthyHost()
 	fake.Respond("uname -m", hostexec.FakeResponse{Stdout: "aarch64\n"}).
 		Respond("uname -r", hostexec.FakeResponse{Stdout: "6.8.0-31-generic\n"}).
@@ -479,6 +495,7 @@ func TestDoctor_SkipsTheApplianceCheckWhenTheKernelConfigIsUnreadable(t *testing
 // kernel's own shortcomings stop mattering — but a path that is merely wrong
 // must not pass as if it were configured correctly.
 func TestDoctor_ChecksTheConfiguredApplianceKernelInsteadOfTheHostKernel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir() + "/6.8.0-31-generic"
 	fake := aarch64Host(hardwareSpecificKernelConfig)
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
@@ -508,6 +525,7 @@ func TestDoctor_ChecksTheConfiguredApplianceKernelInsteadOfTheHostKernel(t *test
 }
 
 func TestDoctor_FailsWhenTheConfiguredApplianceKernelIsNotThere(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir() + "/6.8.0-31-generic"
 	fake := aarch64Host(generalPurposeKernelConfig)
 	fake.RespondPrefix("test", hostexec.FakeResponse{ExitCode: 1})

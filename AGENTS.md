@@ -18,21 +18,20 @@ hosted service, a secret, or `/dev/kvm`. Booting a guest belongs to the
 integration suite on a local KVM host, and that suite sits outside
 `scripts/check.sh`.
 
-**Full coverage.** Every new or changed line and branch arrives with a test
-that asserts its behaviour. The branches a test may leave are defensive ones
-no input reaches, such as an error from an in-memory writer, from an embedded
-file, or from closing a file, and a guard kept as a backstop. Reach a path
-through behaviour, a fake at the process boundary, a canceled context, or a
-refused tool before adding a seam. A seam stays unexported and changes no
-behaviour. Remove code only once it is proven unreachable.
+**Full coverage.** Every new or changed behaviour arrives with a test that
+asserts it. Reach a path through behaviour, a fake at the process boundary, a
+canceled context, or a refused tool before adding a seam. A seam stays
+unexported and changes no behaviour. Remove code only once it is proven
+unreachable.
 
 **Verification stages.** `scripts/check.sh` runs gofmt, go vet,
 golangci-lint, and the unit tests, in that order, and prints each stage as
 the stage runs. Later stages still run after one stage fails, and the script
 exits non-zero when any stage failed. A stage leaves the other stages'
-inputs alone. Call `t.Parallel()` from a Go test unless it touches
-process-global state: `t.Setenv`, a package variable the test swaps, the
-default `slog` logger, or `os.Chdir`.
+inputs alone. A Go test calls `t.Parallel()` unless it touches process-global
+state: `t.Setenv`, a package variable the test swaps, the default `slog`
+logger, or `os.Chdir`. The integration suite does not call `t.Parallel()`:
+those tests share one hypervisor and fixed guest names.
 
 ## 1. Project Overview
 
@@ -437,8 +436,8 @@ formatting-only changes may be omitted.
 
 ## 7. Testing
 
-[Standards](#standards) is the bar for where a change is verified, which
-lines and branches a test must reach, and when a test calls `t.Parallel()`.
+[Standards](#standards) is the bar for where a change is verified, how a
+behaviour is tested, and when a test calls `t.Parallel()`.
 
 - Add or update tests for every behavior change. A bug fix requires a regression
   test unless the behavior cannot be exercised automatically; if so, explain the

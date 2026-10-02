@@ -24,6 +24,7 @@ func completeLines(t *testing.T, stateDir string, words ...string) []string {
 }
 
 func TestComplete_OffersCommandNamesForTheFirstWord(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "")
 
 	for _, want := range []string{"create", "destroy", "image", "ssh"} {
@@ -34,6 +35,7 @@ func TestComplete_OffersCommandNamesForTheFirstWord(t *testing.T) {
 }
 
 func TestComplete_FiltersCommandNamesByWhatIsTyped(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "de")
 
 	if len(got) != 1 || got[0] != "destroy" {
@@ -42,6 +44,7 @@ func TestComplete_FiltersCommandNamesByWhatIsTyped(t *testing.T) {
 }
 
 func TestComplete_DoesNotOfferTheHiddenHelperItself(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "")
 
 	if contains(got, completeCommandName) {
@@ -50,6 +53,7 @@ func TestComplete_DoesNotOfferTheHiddenHelperItself(t *testing.T) {
 }
 
 func TestComplete_OffersRecordedVMNames(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	for _, command := range []string{"ssh", "info", "start", "stop", "restart", "destroy", "console"} {
@@ -61,6 +65,7 @@ func TestComplete_OffersRecordedVMNames(t *testing.T) {
 }
 
 func TestComplete_OffersNoVMNameOnceOneIsGiven(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	if got := completeLines(t, stateDir, "ssh", "agent-01", ""); len(got) != 0 {
@@ -69,6 +74,7 @@ func TestComplete_OffersNoVMNameOnceOneIsGiven(t *testing.T) {
 }
 
 func TestComplete_OffersACommandsOwnFlags(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "stop", "-")
 
 	want := []string{"--force", "--timeout"}
@@ -78,6 +84,7 @@ func TestComplete_OffersACommandsOwnFlags(t *testing.T) {
 }
 
 func TestComplete_OffersGlobalFlagsBeforeACommand(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "--dry")
 
 	if len(got) != 1 || got[0] != "--dry-run" {
@@ -86,6 +93,7 @@ func TestComplete_OffersGlobalFlagsBeforeACommand(t *testing.T) {
 }
 
 func TestComplete_OffersTheValuesOfAClosedFlag(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		words []string
 		want  []string
@@ -104,6 +112,7 @@ func TestComplete_OffersTheValuesOfAClosedFlag(t *testing.T) {
 }
 
 func TestComplete_OffersImageSubcommands(t *testing.T) {
+	t.Parallel()
 	got := completeLines(t, t.TempDir(), "image", "")
 
 	want := []string{"build", "inspect", "list", "rm"}
@@ -113,6 +122,7 @@ func TestComplete_OffersImageSubcommands(t *testing.T) {
 }
 
 func TestComplete_OffersNothingAfterTheGuestCommandSeparator(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	// Everything after `--` runs in the guest, so completing it with host
@@ -123,6 +133,7 @@ func TestComplete_OffersNothingAfterTheGuestCommandSeparator(t *testing.T) {
 }
 
 func TestComplete_AnUnknownCommandLineSucceedsWithNoCandidates(t *testing.T) {
+	t.Parallel()
 	// A completion helper that failed would print its error where the operator
 	// is typing.
 	if got := completeLines(t, t.TempDir(), "teleport", ""); len(got) != 0 {
@@ -131,6 +142,7 @@ func TestComplete_AnUnknownCommandLineSucceedsWithNoCandidates(t *testing.T) {
 }
 
 func TestComplete_UsesTheStateDirectoryWithoutCreatingIt(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir() + "/absent"
 
 	if got := completeLines(t, stateDir, "ssh", ""); len(got) != 0 {
@@ -142,6 +154,7 @@ func TestComplete_UsesTheStateDirectoryWithoutCreatingIt(t *testing.T) {
 }
 
 func TestCompletion_PrintsAScriptForEachSupportedShell(t *testing.T) {
+	t.Parallel()
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		code, stdout, stderr := cliRun(t, createHost(t), t.TempDir(), "completion", shell)
 		if code != ExitOK {
@@ -154,6 +167,7 @@ func TestCompletion_PrintsAScriptForEachSupportedShell(t *testing.T) {
 }
 
 func TestCompletion_RejectsAnUnsupportedShell(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := cliRun(t, createHost(t), t.TempDir(), "completion", "csh")
 
 	if code != ExitUsage {
@@ -165,6 +179,7 @@ func TestCompletion_RejectsAnUnsupportedShell(t *testing.T) {
 }
 
 func TestCompletion_RequiresExactlyOneShell(t *testing.T) {
+	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "completion"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
 	}
@@ -174,6 +189,7 @@ func TestCompletion_RequiresExactlyOneShell(t *testing.T) {
 // cli_test.go cannot: the shell-facing helper has no heading of its own, so
 // this is what keeps it from being undocumented.
 func TestCompletion_DocumentsTheHiddenHelper(t *testing.T) {
+	t.Parallel()
 	contract, err := os.ReadFile("../../docs/cli.md")
 	if err != nil {
 		t.Fatalf("reading the CLI contract: %v", err)
@@ -192,6 +208,7 @@ var helpFlagPattern = regexp.MustCompile(`(?m)^\s+--([a-z][a-z0-9-]*)`)
 // the flags it prints with the ones completion offers. A flag added without a
 // completion entry fails here rather than being silently uncompletable.
 func TestCompletionSpecs_MatchTheFlagsCommandsRegister(t *testing.T) {
+	t.Parallel()
 	for name, spec := range completionSpecs() {
 		checkSpecFlags(t, []string{name}, spec)
 	}

@@ -17,6 +17,7 @@ func newStore(t *testing.T) *Store {
 }
 
 func TestOpen_CreatesTheDocumentedLayout(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	for _, dir := range []string{"images", "vms", "locks"} {
@@ -32,6 +33,7 @@ func TestOpen_CreatesTheDocumentedLayout(t *testing.T) {
 }
 
 func TestResolve_AcceptsPathsInsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	paths := []string{
@@ -48,6 +50,7 @@ func TestResolve_AcceptsPathsInsideTheStateDirectory(t *testing.T) {
 }
 
 func TestResolve_RefusesPathsOutsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	outside := []struct {
@@ -71,6 +74,7 @@ func TestResolve_RefusesPathsOutsideTheStateDirectory(t *testing.T) {
 }
 
 func TestResolve_RefusesASymlinkPointingOutOfTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	escape := filepath.Join(store.Root(), "vms", "escape")
 	target := t.TempDir()
@@ -89,6 +93,7 @@ func TestResolve_RefusesASymlinkPointingOutOfTheStateDirectory(t *testing.T) {
 }
 
 func TestRemove_RefusesToDeleteOutsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	victim := filepath.Join(t.TempDir(), "important.txt")
 	if err := os.WriteFile(victim, []byte("do not delete"), 0o600); err != nil {
@@ -107,6 +112,7 @@ func TestRemove_RefusesToDeleteOutsideTheStateDirectory(t *testing.T) {
 }
 
 func TestRemove_DeletesInsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	dir := store.VMDir("agent-01")
 	if err := store.MkdirAll(dir); err != nil {
@@ -122,6 +128,7 @@ func TestRemove_DeletesInsideTheStateDirectory(t *testing.T) {
 }
 
 func TestWriteFile_ReplacesAtomicallyAndSetsPermissions(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	path := filepath.Join(store.VMDir("agent-01"), UserDataFile)
 
@@ -159,6 +166,7 @@ func TestWriteFile_ReplacesAtomicallyAndSetsPermissions(t *testing.T) {
 }
 
 func TestWriteFile_RefusesToWriteOutsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	err := store.WriteFile(filepath.Join(t.TempDir(), "escape.txt"), []byte("nope"), 0o600)
@@ -170,6 +178,7 @@ func TestWriteFile_RefusesToWriteOutsideTheStateDirectory(t *testing.T) {
 }
 
 func TestFreeBytes_ReportsSpaceInTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	free, err := store.FreeBytes()

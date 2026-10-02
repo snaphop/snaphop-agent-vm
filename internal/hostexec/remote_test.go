@@ -16,6 +16,7 @@ func newRemoteFake(t *testing.T) (*Remote, *Fake) {
 }
 
 func TestRemote_WrapsHypervisorCommandsInSSH(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if _, err := remote.Run(context.Background(), Command{
@@ -49,6 +50,7 @@ func TestRemote_WrapsHypervisorCommandsInSSH(t *testing.T) {
 // gh and the ssh into a guest use the operator's own credentials and terminal,
 // so they must run here rather than on the hypervisor.
 func TestRemote_RunsClientCommandsLocally(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if _, err := remote.Run(context.Background(), Command{
@@ -63,6 +65,7 @@ func TestRemote_RunsClientCommandsLocally(t *testing.T) {
 }
 
 func TestRemote_ConnectionSharingSocket(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	remote := NewRemote(fake, nil, "hv", "/tmp/agent-vm-ssh-1")
 
@@ -78,6 +81,7 @@ func TestRemote_ConnectionSharingSocket(t *testing.T) {
 }
 
 func TestRemote_PassesPortIdentityAndNoVerify(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	remote := NewRemote(fake, nil, "hv", "")
 	remote.Port = 2222
@@ -99,6 +103,7 @@ func TestRemote_PassesPortIdentityAndNoVerify(t *testing.T) {
 // may not even have, so it is expressed in the remote command rather than
 // applied to ssh.
 func TestRemote_WorkingDirectoryIsRemote(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if _, err := remote.Run(context.Background(), Command{
@@ -119,6 +124,7 @@ func TestRemote_WorkingDirectoryIsRemote(t *testing.T) {
 // A failure has to name the tool the operator asked for, not ssh, and say
 // which machine it ran on so they can rerun it there.
 func TestRemote_ErrorNamesTheToolAndTheHost(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{ExitCode: 1, Stderr: "qemu-img: could not open the image"}
 	remote := NewRemote(fake, nil, "kvm@hv.example.com", "")
@@ -143,6 +149,7 @@ func TestRemote_ErrorNamesTheToolAndTheHost(t *testing.T) {
 // A shell reports a command it cannot find by exiting 127, which is how a tool
 // missing from the hypervisor reaches us.
 func TestRemote_MissingRemoteToolIsNotFound(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{ExitCode: 127, Stderr: "bash: line 1: virt-sysprep: command not found"}
 	remote := NewRemote(fake, nil, "hv", "")
@@ -161,6 +168,7 @@ func TestRemote_MissingRemoteToolIsNotFound(t *testing.T) {
 // ssh failing to connect and a tool failing on the far side need different
 // remedies, so they must not be reported as the same thing.
 func TestRemote_TransportFailureIsDistinct(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{ExitCode: 255, Stderr: "kvm@hv: Permission denied (publickey)."}
 	remote := NewRemote(fake, nil, "kvm@hv", "")
@@ -179,6 +187,7 @@ func TestRemote_TransportFailureIsDistinct(t *testing.T) {
 // A tool that genuinely exits 255 must not be mistaken for ssh failing to
 // connect: its stderr is the tool's, not ssh's.
 func TestRemote_ToolExiting255IsNotATransportFailure(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{ExitCode: 255, Stderr: "virt-install: error: invalid argument"}
 	remote := NewRemote(fake, nil, "hv", "")
@@ -196,6 +205,7 @@ func TestRemote_ToolExiting255IsNotATransportFailure(t *testing.T) {
 }
 
 func TestRemote_TimeoutNamesTheToolAndTheHost(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{Err: &TimeoutError{Tool: "ssh", Timeout: time.Minute}}
 	remote := NewRemote(fake, nil, "hv", "")
@@ -215,6 +225,7 @@ func TestRemote_TimeoutNamesTheToolAndTheHost(t *testing.T) {
 // exec'd: exec would look for a program called "command" and report every tool
 // as missing.
 func TestRemote_LookPathDoesNotExecTheShellBuiltin(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Default = FakeResponse{Stdout: "/usr/bin/virsh\n"}
 	remote := NewRemote(fake, nil, "hv", "")
@@ -233,6 +244,7 @@ func TestRemote_LookPathDoesNotExecTheShellBuiltin(t *testing.T) {
 }
 
 func TestRemote_LookPathForAClientToolAsksThisMachine(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if _, err := remote.LookPath("gh", Client); err != nil {
@@ -246,6 +258,7 @@ func TestRemote_LookPathForAClientToolAsksThisMachine(t *testing.T) {
 // virsh console has to reach the operator's terminal, so becoming the command
 // on the hypervisor asks ssh for a terminal.
 func TestRemote_BecomeAllocatesATerminal(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if err := remote.Become(Command{Name: "virsh", Args: []string{"console", "web"}}); err != nil {
@@ -264,6 +277,7 @@ func TestRemote_BecomeAllocatesATerminal(t *testing.T) {
 // left to share a connection with — and the caller removes the socket's
 // directory first, which an invocation still asking for it would then fail on.
 func TestRemote_BecomeDoesNotAskForTheSharedConnection(t *testing.T) {
+	t.Parallel()
 	f := NewFake()
 	remote := NewRemote(f, nil, "hv", "/tmp/agent-vm-ssh-1")
 
@@ -285,6 +299,7 @@ func TestRemote_BecomeDoesNotAskForTheSharedConnection(t *testing.T) {
 }
 
 func TestRemote_BecomeForAClientCommandIsUnwrapped(t *testing.T) {
+	t.Parallel()
 	remote, fake := newRemoteFake(t)
 
 	if err := remote.Become(Command{Name: "ssh", Args: []string{"agent@192.168.122.10"}, Location: Client}); err != nil {
@@ -298,6 +313,7 @@ func TestRemote_BecomeForAClientCommandIsUnwrapped(t *testing.T) {
 // The remote command is re-split by the hypervisor's shell, so anything that
 // shell would otherwise interpret has to survive intact.
 func TestRemoteQuote(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ in, want string }{
 		{"", "''"},
 		{"virsh", "virsh"},
@@ -322,6 +338,7 @@ func TestRemoteQuote(t *testing.T) {
 // Render is what --dry-run prints for a plan built ahead of time, so it has to
 // show the transport too.
 func TestRemote_RenderShowsTheSSHInvocation(t *testing.T) {
+	t.Parallel()
 	remote, _ := newRemoteFake(t)
 
 	rendered := remote.Render(Command{Name: "virsh", Args: []string{"list"}})

@@ -29,6 +29,7 @@ func sshArgvs(fake *hostexec.Fake) []string {
 }
 
 func TestUpdate_RunsTheDistrosPackageUpdateInTheGuest(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -54,6 +55,7 @@ func TestUpdate_RunsTheDistrosPackageUpdateInTheGuest(t *testing.T) {
 }
 
 func TestUpdate_RunsUnattendedSoItCannotStopAtAPrompt(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -71,6 +73,7 @@ func TestUpdate_RunsUnattendedSoItCannotStopAtAPrompt(t *testing.T) {
 }
 
 func TestUpdate_ReportsAFailingStepAndStopsThatVM(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
@@ -95,6 +98,7 @@ func TestUpdate_ReportsAFailingStepAndStopsThatVM(t *testing.T) {
 }
 
 func TestUpdate_RefusesAVMThatIsNotRunning(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -111,6 +115,7 @@ func TestUpdate_RefusesAVMThatIsNotRunning(t *testing.T) {
 }
 
 func TestUpdate_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "update", "someone-elses-vm")
@@ -120,6 +125,7 @@ func TestUpdate_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
 }
 
 func TestUpdate_AllSkipsStoppedVMsInsteadOfStartingThem(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -138,6 +144,7 @@ func TestUpdate_AllSkipsStoppedVMsInsteadOfStartingThem(t *testing.T) {
 }
 
 func TestUpdate_AllAttemptsEveryVMEvenAfterOneFails(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	if code, _, stderr := cliRun(t, createHost(t), stateDir, "create", "agent-02",
 		"--ssh-key", keyFile(t)); code != ExitOK {
@@ -183,6 +190,7 @@ func keyFile(t *testing.T) string {
 }
 
 func TestUpdate_JSONReportsEachVM(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, stdout, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir,
@@ -204,6 +212,7 @@ func TestUpdate_JSONReportsEachVM(t *testing.T) {
 }
 
 func TestUpdate_WithoutATargetIsAUsageError(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "update")
@@ -221,6 +230,7 @@ func TestUpdate_WithoutATargetIsAUsageError(t *testing.T) {
 }
 
 func TestUpdate_DryRunPrintsTheGuestCommandsAndRunsNone(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -237,6 +247,7 @@ func TestUpdate_DryRunPrintsTheGuestCommandsAndRunsNone(t *testing.T) {
 }
 
 func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -266,6 +277,7 @@ func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
 }
 
 func TestUpdate_SkipsToolingTheGuestDoesNotHave(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	// A base image built before codex was part of it: every other probe answers
@@ -299,6 +311,7 @@ func TestUpdate_SkipsToolingTheGuestDoesNotHave(t *testing.T) {
 }
 
 func TestUpdate_ReportsAConnectionThatDropsDuringAProbe(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	// 255 is ssh's own failure, not a guest answering "no such command": it

@@ -10,6 +10,7 @@ import (
 )
 
 func TestCreateOverlay_BacksTheNewDiskWithTheImmutableBase(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	err := manager(fake).CreateOverlay(context.Background(),
@@ -34,6 +35,7 @@ func TestCreateOverlay_BacksTheNewDiskWithTheImmutableBase(t *testing.T) {
 }
 
 func TestCreateOverlay_RejectsARelativePath(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	err := manager(fake).CreateOverlay(context.Background(),
@@ -47,6 +49,7 @@ func TestCreateOverlay_RejectsARelativePath(t *testing.T) {
 }
 
 func TestInspectDisk_ReadsRealQemuImgOutput(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("qemu-img info -U --output=json", hostexec.FakeResponse{
 		Stdout: toolout(t, "qemu-img-info-json-overlay.json"),
@@ -70,6 +73,7 @@ func TestInspectDisk_ReadsRealQemuImgOutput(t *testing.T) {
 }
 
 func TestInspectDisk_AsksQemuImgToIgnoreTheRunningDomainsLock(t *testing.T) {
+	t.Parallel()
 	// A running domain holds a write lock on its overlay. Without -U, qemu-img
 	// refuses to open it at all, so `agent-vm info` loses its disk detail for
 	// exactly the VMs someone is most likely to be asking about.
@@ -87,6 +91,7 @@ func TestInspectDisk_AsksQemuImgToIgnoreTheRunningDomainsLock(t *testing.T) {
 }
 
 func TestInspectDisk_UnreadableOutputIsAnError(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("qemu-img info", hostexec.FakeResponse{Stdout: "qemu-img: Could not open"})
 

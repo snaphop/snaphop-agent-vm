@@ -37,6 +37,7 @@ func runningHost(t *testing.T, names ...string) *hostexec.Fake {
 }
 
 func TestList_ReportsStateAndAddressForARecordedVM(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, stdout, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir, "list")
@@ -51,6 +52,7 @@ func TestList_ReportsStateAndAddressForARecordedVM(t *testing.T) {
 }
 
 func TestList_AVMLibvirtHasLostIsReportedAsMissing(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	// libvirt no longer knows the domain — someone undefined it by hand.
@@ -67,6 +69,7 @@ func TestList_AVMLibvirtHasLostIsReportedAsMissing(t *testing.T) {
 }
 
 func TestList_DoesNotListDomainsThisToolDidNotCreate(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01", "someone-elses-vm")
 
@@ -82,6 +85,7 @@ func TestList_DoesNotListDomainsThisToolDidNotCreate(t *testing.T) {
 }
 
 func TestList_AnEmptyStateDirectoryListsNothingAndSucceeds(t *testing.T) {
+	t.Parallel()
 	code, stdout, stderr := cliRun(t, createHost(t), t.TempDir(), "list")
 
 	if code != ExitOK {
@@ -93,6 +97,7 @@ func TestList_AnEmptyStateDirectoryListsNothingAndSucceeds(t *testing.T) {
 }
 
 func TestList_StoppedVMsHaveNoAddress(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name",
@@ -115,6 +120,7 @@ func TestList_StoppedVMsHaveNoAddress(t *testing.T) {
 }
 
 func TestList_QueriesLibvirtOncePerConnection(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	for _, name := range []string{"agent-01", "agent-02"} {
 		if code, _, stderr := cliRun(t, createHost(t), stateDir, "create", name, "--ssh-key", keyPath); code != ExitOK {
@@ -141,6 +147,7 @@ func TestList_QueriesLibvirtOncePerConnection(t *testing.T) {
 }
 
 func TestList_JSONOutputCarriesTheStoredRecordPlusLiveState(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	var stdout, stderr bytes.Buffer
@@ -176,12 +183,14 @@ func TestList_JSONOutputCarriesTheStoredRecordPlusLiveState(t *testing.T) {
 }
 
 func TestList_RejectsAnArgument(t *testing.T) {
+	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "list", "agent-01"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
 	}
 }
 
 func TestResourceRendering_NamesTheCeilingOnlyWhenThereIsOne(t *testing.T) {
+	t.Parallel()
 	fixed := state.VMResources{VCPUs: 2, Memory: 4 * config.GiB, Disk: 50 * config.GiB}
 	growable := fixed
 	growable.MaxMemory = 16 * config.GiB

@@ -8,6 +8,7 @@ import (
 )
 
 func TestValidateVMName(t *testing.T) {
+	t.Parallel()
 	valid := []string{"agent-01", "vm", "a0", "agent-vm-test-run-1", strings.Repeat("a", 32)}
 	for _, name := range valid {
 		if err := ValidateVMName(name); err != nil {
@@ -48,6 +49,7 @@ func writeKey(t *testing.T, name, contents string) string {
 }
 
 func TestValidateSSHPublicKey_AcceptsOpenSSHPublicKeys(t *testing.T) {
+	t.Parallel()
 	keys := []string{
 		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyMaterialHere operator@host\n",
 		"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQExample operator@host",
@@ -62,6 +64,7 @@ func TestValidateSSHPublicKey_AcceptsOpenSSHPublicKeys(t *testing.T) {
 }
 
 func TestValidateSSHPublicKey_RefusesAPrivateKey(t *testing.T) {
+	t.Parallel()
 	// Accepting this would copy private key material into a cloud-init seed,
 	// which SECURITY.md forbids outright.
 	path := writeKey(t, "id_ed25519",
@@ -77,6 +80,7 @@ func TestValidateSSHPublicKey_RefusesAPrivateKey(t *testing.T) {
 }
 
 func TestValidateSSHPublicKey_ErrorDoesNotLeakKeyContents(t *testing.T) {
+	t.Parallel()
 	const material = "b3BlbnNzaC1rZXktdjEAAAAAsecretmaterial"
 	path := writeKey(t, "id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----\n"+material+"\n")
 
@@ -90,6 +94,7 @@ func TestValidateSSHPublicKey_ErrorDoesNotLeakKeyContents(t *testing.T) {
 }
 
 func TestValidateSSHPublicKey_RejectsMissingAndUnrecognizedFiles(t *testing.T) {
+	t.Parallel()
 	if err := ValidateSSHPublicKey(filepath.Join(t.TempDir(), "absent.pub")); err == nil {
 		t.Error("ValidateSSHPublicKey accepted a missing file")
 	}

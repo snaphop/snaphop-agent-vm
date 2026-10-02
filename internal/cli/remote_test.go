@@ -44,6 +44,7 @@ func checkNamed(t *testing.T, report doctorReport, name string) check {
 // it. Handing it the remote URI would send it back over ssh to the machine it
 // is already on (ADR-0010).
 func TestRemote_VirshIsGivenTheHypervisorsOwnURI(t *testing.T) {
+	t.Parallel()
 	fake := remoteHost()
 	runRemoteDoctor(t, fake)
 
@@ -59,6 +60,7 @@ func TestRemote_VirshIsGivenTheHypervisorsOwnURI(t *testing.T) {
 // /dev/kvm on this machine says nothing about the hypervisor's, so the question
 // is asked there.
 func TestDoctor_RemoteKVMIsCheckedOnTheHypervisor(t *testing.T) {
+	t.Parallel()
 	fake := remoteHost()
 	report, _ := runRemoteDoctor(t, fake)
 
@@ -75,6 +77,7 @@ func TestDoctor_RemoteKVMIsCheckedOnTheHypervisor(t *testing.T) {
 }
 
 func TestDoctor_RemoteKVMMissingFails(t *testing.T) {
+	t.Parallel()
 	fake := remoteHost()
 	fake.Respond("test -e /dev/kvm", hostexec.FakeResponse{ExitCode: 1})
 	report, code := runRemoteDoctor(t, fake)
@@ -89,6 +92,7 @@ func TestDoctor_RemoteKVMMissingFails(t *testing.T) {
 }
 
 func TestDoctor_RemoteGroupsAreTheHypervisorsAccount(t *testing.T) {
+	t.Parallel()
 	fake := remoteHost()
 	fake.Respond("id -nG", hostexec.FakeResponse{Stdout: "kvm users\n"})
 	report, _ := runRemoteDoctor(t, fake)
@@ -106,6 +110,7 @@ func TestDoctor_RemoteGroupsAreTheHypervisorsAccount(t *testing.T) {
 // hypervisor's. A verdict computed from this machine's would be confidently
 // wrong, so the checks say they did not run instead.
 func TestDoctor_LocalOnlyChecksAreSkippedForARemoteHypervisor(t *testing.T) {
+	t.Parallel()
 	report, _ := runRemoteDoctor(t, remoteHost())
 
 	for _, name := range []string{"host firewall forwarding", "state directory access"} {
@@ -122,6 +127,7 @@ func TestDoctor_LocalOnlyChecksAreSkippedForARemoteHypervisor(t *testing.T) {
 // Everything below the transport depends on it, so an unreachable hypervisor is
 // reported once rather than as eight failures with the same cause.
 func TestDoctor_UnreachableHypervisorStopsAtTheTransport(t *testing.T) {
+	t.Parallel()
 	fake := remoteHost()
 	fake.Respond("true", hostexec.FakeResponse{
 		Err: &hostexec.TransportError{Destination: "kvm@hv.example.com", Stderr: "Permission denied (publickey)."},
@@ -147,6 +153,7 @@ func TestDoctor_UnreachableHypervisorStopsAtTheTransport(t *testing.T) {
 // A local connection has no transport to report, so nothing about a hypervisor
 // host appears.
 func TestDoctor_LocalConnectionReportsNoTransport(t *testing.T) {
+	t.Parallel()
 	report, _ := runDoctorWith(t, healthyHost())
 
 	for _, c := range report.Checks {
@@ -159,6 +166,7 @@ func TestDoctor_LocalConnectionReportsNoTransport(t *testing.T) {
 // A guest sits on a network that exists only on the hypervisor, so it is
 // reached through that host rather than directly.
 func TestSSH_RemoteGuestIsReachedThroughTheHypervisor(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := asRemote(createHost(t))
 	if code, _, stderr := cliRun(t, fake, stateDir,
@@ -189,6 +197,7 @@ func TestSSH_RemoteGuestIsReachedThroughTheHypervisor(t *testing.T) {
 // With a local hypervisor the guest is directly reachable, so nothing is
 // jumped through.
 func TestSSH_LocalGuestIsReachedDirectly(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -204,6 +213,7 @@ func TestSSH_LocalGuestIsReachedDirectly(t *testing.T) {
 // transport included: that record is what makes a VM's provenance auditable,
 // and it is localized only where virsh is actually invoked.
 func TestRemote_VMRecordKeepsTheOperatorsURI(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := asRemote(createHost(t))
 	if code, _, stderr := cliRun(t, fake, stateDir,
@@ -228,6 +238,7 @@ func TestRemote_VMRecordKeepsTheOperatorsURI(t *testing.T) {
 // control socket's directory has to be released before `agent-vm ssh` or
 // `agent-vm console` execs — otherwise each one orphans a directory in /tmp.
 func TestRemote_BecomingACommandReleasesTheRunsResourcesFirst(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := asRemote(createHost(t))
 	if code, _, stderr := cliRun(t, fake, stateDir,
@@ -263,6 +274,7 @@ func TestRemote_BecomingACommandReleasesTheRunsResourcesFirst(t *testing.T) {
 // An unsupported transport reaches libvirt but gives agent-vm no shell on the
 // hypervisor, so it is refused as a usage error before anything runs.
 func TestRemote_RejectsATransportWithoutAShell(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	app := &App{
 		Stdout: &stdout, Stderr: &stderr,

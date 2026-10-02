@@ -11,6 +11,7 @@ import (
 )
 
 func TestPlan_MatchesTheInvocationsABuildActuallyRuns(t *testing.T) {
+	t.Parallel()
 	// The plan is what --dry-run prints, so it has to describe the real
 	// pipeline. Comparing it against the golden file the build test produces
 	// keeps the two from drifting apart.
@@ -66,6 +67,7 @@ func toolAndSubcommand(argv string) string {
 }
 
 func TestPlan_UsesConspicuousPlaceholdersForValuesItCannotKnow(t *testing.T) {
+	t.Parallel()
 	// A printed plan must not look like it knows a digest it cannot know.
 	lines := []string{}
 	for _, cmd := range Plan(state.NewLayout("/state"), BuildOptions{Ref: ubuntuRef(t)}) {
@@ -84,6 +86,7 @@ func TestPlan_UsesConspicuousPlaceholdersForValuesItCannotKnow(t *testing.T) {
 }
 
 func TestPlan_TouchesNothingOnDisk(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	stateDir := filepath.Join(dir, "state")
 
@@ -96,6 +99,7 @@ func TestPlan_TouchesNothingOnDisk(t *testing.T) {
 }
 
 func TestPlanNotes_DescribeTheFileOperationsAndTheCommitStep(t *testing.T) {
+	t.Parallel()
 	notes := strings.Join(PlanNotes(state.NewLayout("/state"), ubuntuRef(t)), "\n")
 
 	for _, want := range []string{"manifest.json", "Containerfile", "/state/images/ubuntu/24.04"} {

@@ -19,6 +19,7 @@ func toolout(t *testing.T, name string) string {
 }
 
 func TestParseToolVersion_FromCapturedToolOutput(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		tool    Tool
@@ -53,6 +54,7 @@ func TestParseToolVersion_FromCapturedToolOutput(t *testing.T) {
 }
 
 func TestParseToolVersion_UnrecognizedOutputIsAnError(t *testing.T) {
+	t.Parallel()
 	// A tool changing its output must fail loudly rather than be read as
 	// version 0.0.0, which would look like "too old" instead of "unparseable".
 	_, err := parseToolVersion(QemuImg, "qemu-img: the world has moved on\n")
@@ -66,6 +68,7 @@ func TestParseToolVersion_UnrecognizedOutputIsAnError(t *testing.T) {
 }
 
 func TestVersionAtLeast(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		got, min string
 		want     bool
@@ -93,6 +96,7 @@ func TestVersionAtLeast(t *testing.T) {
 }
 
 func TestParseVersion_IgnoresTrailingQualifier(t *testing.T) {
+	t.Parallel()
 	got, err := ParseVersion("1.50.1rc2")
 	if err != nil {
 		t.Fatalf("ParseVersion: %v", err)
@@ -103,6 +107,7 @@ func TestParseVersion_IgnoresTrailingQualifier(t *testing.T) {
 }
 
 func TestVersionsRequire_RejectsToolBelowMinimum(t *testing.T) {
+	t.Parallel()
 	fake := NewFake().Respond("virsh --version", FakeResponse{Stdout: "8.10.0\n"})
 	_, err := NewVersions(fake).Require(context.Background(), Virsh)
 
@@ -116,6 +121,7 @@ func TestVersionsRequire_RejectsToolBelowMinimum(t *testing.T) {
 }
 
 func TestVersionsRequire_AcceptsToolAtMinimum(t *testing.T) {
+	t.Parallel()
 	fake := NewFake().Respond("virt-install --version", FakeResponse{Stdout: "4.0.0\n"})
 	got, err := NewVersions(fake).Require(context.Background(), VirtInstall)
 	if err != nil {
@@ -127,6 +133,7 @@ func TestVersionsRequire_AcceptsToolAtMinimum(t *testing.T) {
 }
 
 func TestVersionsGet_ReportsMissingToolWithItsPackage(t *testing.T) {
+	t.Parallel()
 	fake := NewFake()
 	fake.Missing["virt-make-fs"] = true
 
@@ -142,6 +149,7 @@ func TestVersionsGet_ReportsMissingToolWithItsPackage(t *testing.T) {
 }
 
 func TestVersionsGet_ProbesEachToolOnce(t *testing.T) {
+	t.Parallel()
 	fake := NewFake().Respond("virsh --version", FakeResponse{Stdout: "12.6.0\n"})
 	versions := NewVersions(fake)
 	ctx := context.Background()

@@ -21,6 +21,7 @@ import (
 // route and resolved itself all look healthy. Only the forcing form (`L+`)
 // repairs it, and it has to be there for every family.
 func TestContainerfiles_ForceTheResolvConfSymlink(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -61,6 +62,7 @@ func TestContainerfiles_ForceTheResolvConfSymlink(t *testing.T) {
 // it out and cloud-init falls back to the literal string UNAVAILABLE — every
 // repository then 404s. The recipe has to name it explicitly.
 func TestUbuntuContainerfile_InstallsLsbRelease(t *testing.T) {
+	t.Parallel()
 	contents, err := templates.FS.ReadFile("distro/" + distro.Ubuntu.Containerfile)
 	if err != nil {
 		t.Fatalf("reading %s: %v", distro.Ubuntu.Containerfile, err)
@@ -87,6 +89,7 @@ func TestUbuntuContainerfile_InstallsLsbRelease(t *testing.T) {
 // actually uses; a family that grows a fourth spelling belongs in this table
 // rather than in a loosened assertion.
 func TestContainerfiles_InstallCommonGuestTooling(t *testing.T) {
+	t.Parallel()
 	packages := map[string][]string{
 		distro.Ubuntu.Containerfile: {
 			"iputils-ping", "curl", "wget", "git", "build-essential",
@@ -162,6 +165,7 @@ func TestContainerfiles_InstallCommonGuestTooling(t *testing.T) {
 // into the login user cloud-init creates, and /root, whose home directory
 // already exists by then and so never consults skel.
 func TestContainerfiles_InstallTheGuestTmuxConfig(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -195,6 +199,7 @@ func TestContainerfiles_InstallTheGuestTmuxConfig(t *testing.T) {
 // script: a prompt reached by `ssh <vm> some-command`, or by an agent driving
 // the VM, is a hang with no one there to answer it.
 func TestContainerfiles_InstallTheTmuxSessionMenu(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -216,6 +221,7 @@ func TestContainerfiles_InstallTheTmuxSessionMenu(t *testing.T) {
 // TestTmuxMenu_OnlyRunsWhereAPersonIsWatching guards the profile script's
 // guards. Each one prevents a hang rather than a cosmetic problem.
 func TestTmuxMenu_OnlyRunsWhereAPersonIsWatching(t *testing.T) {
+	t.Parallel()
 	profile := readTemplate(t, "distro/tmux-menu-profile.sh")
 
 	for _, guard := range []struct{ needle, why string }{
@@ -234,6 +240,7 @@ func TestTmuxMenu_OnlyRunsWhereAPersonIsWatching(t *testing.T) {
 // prompt in front of every login: a menu a person cannot leave has taken the
 // VM away from them.
 func TestTmuxMenu_AlwaysLeavesAWayOut(t *testing.T) {
+	t.Parallel()
 	menu := readTemplate(t, "distro/tmux-menu.sh")
 
 	if !strings.Contains(menu, "q | Q) break") {
@@ -258,6 +265,7 @@ func TestTmuxMenu_AlwaysLeavesAWayOut(t *testing.T) {
 // has to produce one on an image where /usr/share/dict/words is missing or
 // holds nothing matching the filter.
 func TestTmuxMenu_GeneratesNamesWithoutAWordList(t *testing.T) {
+	t.Parallel()
 	menu := readTemplate(t, "distro/tmux-menu.sh")
 
 	if !strings.Contains(menu, "/proc/sys/kernel/random/uuid") {
@@ -272,6 +280,7 @@ func TestTmuxMenu_GeneratesNamesWithoutAWordList(t *testing.T) {
 // package name differs per family; without it every generated session name
 // falls back to a hex suffix, which is what the two-word names replaced.
 func TestContainerfiles_InstallAWordList(t *testing.T) {
+	t.Parallel()
 	wordList := map[string]string{
 		distro.Ubuntu.Containerfile: "wamerican",
 		distro.Fedora.Containerfile: "words",
@@ -298,6 +307,7 @@ func TestContainerfiles_InstallAWordList(t *testing.T) {
 // not in the build context fails the build minutes in, after the package
 // installation has already been paid for.
 func TestTmuxConfig_IsShippedInTheBuildContext(t *testing.T) {
+	t.Parallel()
 	if !slices.Contains(buildContextFiles, "tmux.conf") {
 		t.Fatalf("tmux.conf is not in buildContextFiles %v, so podman's build context will not contain it", buildContextFiles)
 	}
@@ -352,6 +362,7 @@ func shimLoopCommands(recipe string) ([]string, bool) {
 // would pull them in by accident: if a recipe stops naming one, guests simply
 // stop having it, and that only shows up when someone SSHes in.
 func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -432,6 +443,7 @@ func TestContainerfiles_InstallTheCodingAgents(t *testing.T) {
 // login user cloud-init creates, and /root, whose home already exists in the
 // image and so never consults skel.
 func TestContainerfiles_ConfigureTheAgentsForUnattendedUse(t *testing.T) {
+	t.Parallel()
 	configs := []struct{ file, dest string }{
 		{"claude-settings.json", "/etc/skel/.claude/settings.json"},
 		{"codex-config.toml", "/etc/skel/.codex/config.toml"},
@@ -472,6 +484,7 @@ func TestContainerfiles_ConfigureTheAgentsForUnattendedUse(t *testing.T) {
 // rather than that a file exists. A config file shipped with a default or
 // misspelled value is worse than none: it looks configured and still blocks.
 func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
+	t.Parallel()
 	claude := struct {
 		Permissions struct {
 			DefaultMode string `json:"defaultMode"`
@@ -531,6 +544,7 @@ func TestAgentConfigs_SelectTheMostPermissiveMode(t *testing.T) {
 // to every guest and every operator who copied the cache. Credentials belong
 // in per-VM cloud-init, never here.
 func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
+	t.Parallel()
 	secretish := []string{"api_key", "apikey", "api-key", "token", "secret", "password", "sk-", "bearer"}
 
 	for _, name := range buildContextFiles {
@@ -548,6 +562,7 @@ func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
 // file missing from the build context fails the build minutes in, after the
 // package installation has already been paid for.
 func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"claude-settings.json", "codex-config.toml", "opencode.json", "grok-config.toml", "agent-aliases.sh", "codex-remote-control.sh"} {
 		if !slices.Contains(buildContextFiles, name) {
 			t.Errorf("%s is not in buildContextFiles %v, so podman's build context will not contain it", name, buildContextFiles)
@@ -565,6 +580,7 @@ func TestAgentConfigs_AreShippedInTheBuildContext(t *testing.T) {
 // release. Each has to be reachable without a profile script: the
 // `ssh <vm> go build` an agent runs is not a login shell.
 func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -642,6 +658,7 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 // SSH. Ubuntu's cloud-init pulls growpart in as a dependency; Fedora's and
 // Arch's do not.
 func TestContainerfiles_CanGrowTheRootFilesystem(t *testing.T) {
+	t.Parallel()
 	growpart := map[string]string{
 		"fedora": "cloud-utils-growpart",
 		"arch":   "cloud-guest-utils",
@@ -669,6 +686,7 @@ func TestContainerfiles_CanGrowTheRootFilesystem(t *testing.T) {
 // the toolchains themselves on the path through it would make them invisible
 // to every non-interactive command.
 func TestToolchainProfile_LeavesTheToolchainsOutOfPath(t *testing.T) {
+	t.Parallel()
 	script := readTemplate(t, "distro/toolchains.sh")
 
 	for _, dir := range []string{"$HOME/go/bin", "$HOME/.cargo/bin"} {
@@ -710,6 +728,7 @@ func readJSON(t *testing.T, path string, into any) {
 // future packaging change fails the build instead of shipping a guest whose
 // agents do not work.
 func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -742,6 +761,7 @@ func TestContainerfiles_SmokeTestTheAgents(t *testing.T) {
 // at build time, because whether it sorts last depends on files this project
 // does not control.
 func TestContainerfiles_PinTheDatasourceSoItActuallyWins(t *testing.T) {
+	t.Parallel()
 	const pinFile = "/etc/cloud/cloud.cfg.d/99-agent-vm-datasource.cfg"
 
 	for _, name := range distro.Names() {
@@ -775,6 +795,7 @@ func TestContainerfiles_PinTheDatasourceSoItActuallyWins(t *testing.T) {
 // satisfy, and it fails on exactly the comparison that was originally got
 // wrong.
 func TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt(t *testing.T) {
+	t.Parallel()
 	const ours = "99-agent-vm-datasource.cfg"
 
 	// Files shipped by the supported families that set datasource_list.
@@ -802,6 +823,7 @@ func TestDatasourcePinFilename_SortsAfterTheDistroFilesThatSetIt(t *testing.T) {
 // Ubuntu's chromium package is a snap stub, useless in a VM, so the only
 // Chromium in the image is the one Playwright pins.
 func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
+	t.Parallel()
 	ghPackage := map[string]string{
 		distro.Ubuntu.Containerfile: "gh",
 		distro.Fedora.Containerfile: "gh",
@@ -911,6 +933,7 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 // user agent-vm asks for, and a private key must never be written into a seed
 // (SECURITY.md).
 func TestUserSetupScript_DoesEveryJobItIsThereFor(t *testing.T) {
+	t.Parallel()
 	script := readTemplate(t, "distro/user-setup.sh")
 
 	for _, group := range []string{"docker", "libvirt", "kvm"} {
@@ -967,6 +990,7 @@ func TestUserSetupScript_DoesEveryJobItIsThereFor(t *testing.T) {
 // alone — a VM unreachable because a daemon nobody asked for could not
 // authenticate would be far worse than one without remote control.
 func TestCodexRemoteControl_StartsAtEveryBootWithoutBreakingIt(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1028,6 +1052,7 @@ func TestCodexRemoteControl_StartsAtEveryBootWithoutBreakingIt(t *testing.T) {
 // the VM. Each account's server is an instance of a template unit so systemd
 // supervises it rather than this project's shell script.
 func TestHerdr_RunsAsADaemonForEveryAccount(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1109,6 +1134,7 @@ func TestHerdr_RunsAsADaemonForEveryAccount(t *testing.T) {
 // them can run agent-vm — and the guest half of nested virtualization is
 // worthless without them. Names differ per family; the commands do not.
 func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
+	t.Parallel()
 	packages := map[string][]string{
 		distro.Ubuntu.Containerfile: {
 			"qemu-kvm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
@@ -1171,6 +1197,7 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 // the `ssh <vm> node script.js` an agent actually runs, which reads
 // /etc/environment through PAM but never sources a profile script.
 func TestContainerfiles_ShareTheBrowsersThroughTheEnvironment(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1199,6 +1226,7 @@ func TestContainerfiles_ShareTheBrowsersThroughTheEnvironment(t *testing.T) {
 // perfectly and dies the instant it is launched, so only launching it during
 // the build says anything about whether a guest can drive a page.
 func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1260,6 +1288,7 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 // and the agent user gets "missing cap_net_raw+p capability" — which reads as
 // a broken network on a guest that has a lease, a route and working TCP.
 func TestContainerfiles_AllowUnprivilegedPing(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1296,6 +1325,7 @@ func TestContainerfiles_AllowUnprivilegedPing(t *testing.T) {
 // and their /usr/lib/binfmt.d rules are re-registered by systemd-binfmt.service
 // on every boot.
 func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
+	t.Parallel()
 	// The package that carries the interpreters, per family. Fedora splits
 	// them per target architecture; Ubuntu and Arch ship one package for
 	// every target, and Arch keeps the binfmt_misc rules in a second one.
@@ -1354,6 +1384,7 @@ func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
 // lock: Permission denied". The build removes its own copy, and a tmpfiles.d
 // rule recreates the directory at boot with /tmp's own permissions.
 func TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1393,6 +1424,7 @@ func TestContainerfiles_LeaveMisesLockDirectoryWritableByEveryAccount(t *testing
 // this exact path — started before resolved could answer, it never acquired a
 // server and never retried — and Fedora ships its unit disabled.
 func TestContainerfiles_SynchronizeTheGuestClock(t *testing.T) {
+	t.Parallel()
 	for _, name := range distro.Names() {
 		d, ok := distro.Lookup(name)
 		if !ok {
@@ -1527,6 +1559,7 @@ var bootAndCloudInitContract = []struct{ needle, why string }{
 // that removes one from the full recipe fails here too, rather than leaving
 // this list quietly checking something nothing produces any more.
 func TestSlimContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
+	t.Parallel()
 	for slimName, pair := range slimRecipes(t) {
 		full, slim := pair[0], pair[1]
 		for _, want := range bootAndCloudInitContract {
@@ -1552,6 +1585,7 @@ func TestSlimContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
 // everything the full recipe installs for a coding agent is most of the build
 // time and most of the image, and a slim guest pays for none of it.
 func TestSlimContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
+	t.Parallel()
 	// Named as they appear in an instruction, lower-cased for comparison.
 	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "docker", "libvirt", "codex", "herdr", "npm"}
 
@@ -1585,6 +1619,7 @@ func TestSlimContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 // TestSlimContainerfiles_InstallTheCommonTooling keeps the promise the name
 // makes: a slim guest is a working Linux machine, not a stripped one.
 func TestSlimContainerfiles_InstallTheCommonTooling(t *testing.T) {
+	t.Parallel()
 	packages := map[string][]string{
 		distro.Ubuntu.SlimContainerfile: {"iputils-ping", "curl", "wget", "git", "build-essential", "python3", "jq", "vim", "tmux", "rsync"},
 		distro.Fedora.SlimContainerfile: {"iputils", "curl", "wget", "git", "gcc", "make", "python3", "jq", "vim", "tmux", "rsync"},
@@ -1613,6 +1648,7 @@ func TestSlimContainerfiles_InstallTheCommonTooling(t *testing.T) {
 // the full recipe fails in both places rather than leaving either quietly
 // checking something nothing produces any more.
 func TestNixContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
+	t.Parallel()
 	for nixName, pair := range nixRecipes(t) {
 		full, nix := pair[0], pair[1]
 		for _, want := range bootAndCloudInitContract {
@@ -1639,6 +1675,7 @@ func TestNixContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
 // a working multi-user nix rather than a root-owned store nobody else can add
 // to.
 func TestNixContainerfiles_InstallTheToolingFromNix(t *testing.T) {
+	t.Parallel()
 	required := []struct{ needle, why string }{
 		{"https://nixos.org/nix/install", "there would be no nix in the image to install anything with"},
 		{"--no-daemon", "a multi-user install cannot complete in a build with no running systemd"},
@@ -1670,6 +1707,7 @@ func TestNixContainerfiles_InstallTheToolingFromNix(t *testing.T) {
 // image two sources for the same tool and no way to say which one a guest is
 // running, which is the ambiguity the nix variant removes.
 func TestNixContainerfiles_LeaveTheToolingToTheNixFile(t *testing.T) {
+	t.Parallel()
 	allowed := []string{"pi", "herdr", "agy", "npm:@xai-official/grok"}
 
 	for nixName, pair := range nixRecipes(t) {
@@ -1738,6 +1776,7 @@ func TestNixContainerfiles_LeaveTheToolingToTheNixFile(t *testing.T) {
 // every guest — which is exactly what dropping mise from these recipes would
 // have caused.
 func TestNixContainerfiles_KeepTheServicesAGuestStillRuns(t *testing.T) {
+	t.Parallel()
 	for nixName, pair := range nixRecipes(t) {
 		nix := pair[1]
 		for _, unit := range []string{"docker.service", "libvirtd.service"} {
@@ -1760,6 +1799,7 @@ func TestNixContainerfiles_KeepTheServicesAGuestStillRuns(t *testing.T) {
 // recipes COPY a file the builder never writes: podman fails late, after the
 // pull and most of the build, with a message about a missing context file.
 func TestAgentToolsNix_IsShippedInTheBuildContext(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"agent-tools.nix", "nix.sh"} {
 		if !slices.Contains(buildContextFiles, name) {
 			t.Errorf("%s is not in buildContextFiles; every nix build would fail on the COPY", name)
@@ -1774,6 +1814,7 @@ func TestAgentToolsNix_IsShippedInTheBuildContext(t *testing.T) {
 // movable. Two builds of the same image name and tag should install the same
 // versions, and the only thing that decides that is which nixpkgs is fetched.
 func TestAgentToolsNix_PinsItsNixpkgsInOnePlace(t *testing.T) {
+	t.Parallel()
 	contents, err := templates.FS.ReadFile("distro/agent-tools.nix")
 	if err != nil {
 		t.Fatalf("reading distro/agent-tools.nix: %v", err)
@@ -1801,6 +1842,7 @@ func TestAgentToolsNix_PinsItsNixpkgsInOnePlace(t *testing.T) {
 // configuration files get. A base image is shared by every VM built on it, so
 // nothing per-VM and nothing secret may be in a file it ships (SECURITY.md).
 func TestAgentToolsNix_CarriesNoCredentials(t *testing.T) {
+	t.Parallel()
 	contents, err := templates.FS.ReadFile("distro/agent-tools.nix")
 	if err != nil {
 		t.Fatalf("reading distro/agent-tools.nix: %v", err)

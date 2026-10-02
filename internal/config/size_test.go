@@ -3,6 +3,7 @@ package config
 import "testing"
 
 func TestParseSize_AcceptsTheFormsOperatorsWrite(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in   string
 		want Size
@@ -30,6 +31,7 @@ func TestParseSize_AcceptsTheFormsOperatorsWrite(t *testing.T) {
 }
 
 func TestParseSize_RejectsMalformedValues(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{"", "G", "abc", "4X", "-4G", "4 4G", "0x10"} {
 		if got, err := ParseSize(in); err == nil {
 			t.Errorf("ParseSize(%q) = %d, want an error", in, got)
@@ -38,6 +40,7 @@ func TestParseSize_RejectsMalformedValues(t *testing.T) {
 }
 
 func TestSizeString_RoundTrips(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		size Size
 		want string
@@ -64,6 +67,7 @@ func TestSizeString_RoundTrips(t *testing.T) {
 }
 
 func TestSizeMiBValue_IsWhatVirtInstallMemoryTakes(t *testing.T) {
+	t.Parallel()
 	if got := (4 * GiB).MiBValue(); got != 4096 {
 		t.Errorf("(4G).MiBValue() = %d, want 4096", got)
 	}

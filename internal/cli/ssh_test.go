@@ -21,6 +21,7 @@ func becameArgv(t *testing.T, fake *hostexec.Fake) string {
 }
 
 func TestSSH_ExecsSSHToTheGuestAsTheGuestUser(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -44,6 +45,7 @@ func TestSSH_ExecsSSHToTheGuestAsTheGuestUser(t *testing.T) {
 }
 
 func TestSSH_RunsACommandInTheGuest(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -63,6 +65,7 @@ func TestSSH_RunsACommandInTheGuest(t *testing.T) {
 }
 
 func TestSSH_DoesNotReadOurOwnFlagsAfterTheSeparator(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -77,6 +80,7 @@ func TestSSH_DoesNotReadOurOwnFlagsAfterTheSeparator(t *testing.T) {
 }
 
 func TestSSH_OffersThePrivateKeyThatMatchesTheAuthorizedOne(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	// The usual pair: id_ed25519.pub beside id_ed25519.
 	private := strings.TrimSuffix(keyPath, ".pub")
@@ -103,6 +107,7 @@ func TestSSH_OffersThePrivateKeyThatMatchesTheAuthorizedOne(t *testing.T) {
 }
 
 func TestSSH_FallsBackToTheOperatorsDefaultKeys(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -116,6 +121,7 @@ func TestSSH_FallsBackToTheOperatorsDefaultKeys(t *testing.T) {
 }
 
 func TestSSH_RefusesAVMThatIsNotRunning(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -132,6 +138,7 @@ func TestSSH_RefusesAVMThatIsNotRunning(t *testing.T) {
 }
 
 func TestSSH_ReportsAGuestWithNoAddressYet(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	fake.RespondPrefix("virsh --connect qemu:///system domifaddr", hostexec.FakeResponse{
@@ -149,6 +156,7 @@ func TestSSH_ReportsAGuestWithNoAddressYet(t *testing.T) {
 }
 
 func TestSSH_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 
 	code, _, _ := cliRun(t, runningHost(t, "agent-01"), stateDir, "ssh", "someone-elses-vm")
@@ -158,6 +166,7 @@ func TestSSH_ReportsAVMThatIsNotRecordedHere(t *testing.T) {
 }
 
 func TestSSH_DryRunPrintsTheCommandInsteadOfRunningIt(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -172,6 +181,7 @@ func TestSSH_DryRunPrintsTheCommandInsteadOfRunningIt(t *testing.T) {
 }
 
 func TestConsole_ExecsVirshConsole(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 
@@ -185,6 +195,7 @@ func TestConsole_ExecsVirshConsole(t *testing.T) {
 }
 
 func TestConsole_RefusesAStoppedVMAndNamesItsLog(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := stoppedHost(t, "agent-01")
 
@@ -200,6 +211,7 @@ func TestConsole_RefusesAStoppedVMAndNamesItsLog(t *testing.T) {
 }
 
 func TestConsole_RequiresAName(t *testing.T) {
+	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "console"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
 	}

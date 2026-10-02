@@ -16,6 +16,7 @@ func quietLogger() *slog.Logger {
 }
 
 func TestRun_ReturnsToolErrorCarryingArgvExitStatusAndStderr(t *testing.T) {
+	t.Parallel()
 	runner := New(quietLogger())
 
 	_, err := runner.Run(context.Background(), Command{
@@ -36,6 +37,7 @@ func TestRun_ReturnsToolErrorCarryingArgvExitStatusAndStderr(t *testing.T) {
 }
 
 func TestRun_MissingToolIsANotFoundError(t *testing.T) {
+	t.Parallel()
 	runner := New(quietLogger())
 
 	_, err := runner.Run(context.Background(), Command{Name: "agent-vm-no-such-tool", Effect: Read})
@@ -47,6 +49,7 @@ func TestRun_MissingToolIsANotFoundError(t *testing.T) {
 }
 
 func TestRun_CapturesStdoutAndStderrSeparately(t *testing.T) {
+	t.Parallel()
 	runner := New(quietLogger())
 
 	// `env` needs no shell and writes only to stdout, which is the point: this
@@ -68,6 +71,7 @@ func TestRun_CapturesStdoutAndStderrSeparately(t *testing.T) {
 }
 
 func TestRun_TimeoutIsReportedAsATimeoutError(t *testing.T) {
+	t.Parallel()
 	runner := New(quietLogger())
 
 	_, err := runner.Run(context.Background(), Command{
@@ -84,6 +88,7 @@ func TestRun_TimeoutIsReportedAsATimeoutError(t *testing.T) {
 }
 
 func TestDryRun_PrintsMutatingCommandsAndRunsReadOnlyOnes(t *testing.T) {
+	t.Parallel()
 	inner := NewFake().Respond("virsh net-list --name", FakeResponse{Stdout: "agent-vm-nat\n"})
 	var out bytes.Buffer
 	dry := NewDryRun(inner, &out)
@@ -117,6 +122,7 @@ func TestDryRun_PrintsMutatingCommandsAndRunsReadOnlyOnes(t *testing.T) {
 }
 
 func TestCommandString_QuotesArgumentsForDisplay(t *testing.T) {
+	t.Parallel()
 	c := Command{
 		Name: "virt-install",
 		Args: []string{"--boot", "kernel=/var/lib/vmlinuz,kernel_args=root=/dev/vda1 console=ttyS0"},
@@ -128,6 +134,7 @@ func TestCommandString_QuotesArgumentsForDisplay(t *testing.T) {
 }
 
 func TestToolError_StderrExcerptIsBounded(t *testing.T) {
+	t.Parallel()
 	// libguestfs can emit megabytes of appliance output; an error is not a log.
 	huge := strings.Repeat("appliance noise\n", 2000)
 	got := excerpt([]byte(huge + "libguestfs: error: could not create appliance"))
@@ -164,6 +171,7 @@ func TestRun_EnvironmentAddsToTheInheritedOne(t *testing.T) {
 }
 
 func TestCommandString_RendersTheEnvironmentAsAPastableAssignmentPrefix(t *testing.T) {
+	t.Parallel()
 	c := Command{
 		Name: "virt-make-fs",
 		Args: []string{"--type=ext4", "/tmp/a b.tar", "/tmp/base.qcow2"},

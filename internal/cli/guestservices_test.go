@@ -19,6 +19,7 @@ func natConfig() *config.Config {
 // systemd-networkd-wait-online forever, and never gets an address — while
 // doctor reported the host as ready.
 func TestCheckGuestServices_WarnsWhenDHCPIsDropped(t *testing.T) {
+	t.Parallel()
 	rules := "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0\n-A ufw-user-input -p tcp --dport 22 -j ACCEPT\n"
 	got := guestServicesCheckWithRules(t, enabledAndDropping, rules, natConfig(), "virbr1")
 
@@ -48,6 +49,7 @@ func TestCheckGuestServices_WarnsWhenDHCPIsDropped(t *testing.T) {
 // remedy cannot name an interface, so it must say how to find one instead of
 // guessing virbr0.
 func TestCheckGuestServices_TellsTheOperatorToLookUpAnUnknownBridge(t *testing.T) {
+	t.Parallel()
 	got := guestServicesCheckWithRules(t, enabledAndDropping, noRules, natConfig(), "")
 
 	if got.Status != statusWarn {
@@ -63,6 +65,7 @@ func TestCheckGuestServices_TellsTheOperatorToLookUpAnUnknownBridge(t *testing.T
 // TestCheckGuestServices_PassesOnceTheRulesExist covers the fix an operator
 // applies after the warning: doctor must stop warning about a host that works.
 func TestCheckGuestServices_PassesOnceTheRulesExist(t *testing.T) {
+	t.Parallel()
 	got := guestServicesCheckWithRules(t, enabledAndDropping, allRules, natConfig(), "virbr1")
 
 	if got.Status != statusPass {
@@ -76,6 +79,7 @@ func TestCheckGuestServices_PassesOnceTheRulesExist(t *testing.T) {
 // TestCheckGuestServices_WarnsAboutOnlyTheMissingService keeps the report
 // honest when one of the two rules is already there.
 func TestCheckGuestServices_WarnsAboutOnlyTheMissingService(t *testing.T) {
+	t.Parallel()
 	rules := "-A ufw-user-input -i virbr1 -p udp --dport 67 -j ACCEPT\n"
 	got := guestServicesCheckWithRules(t, enabledAndDropping, rules, natConfig(), "virbr1")
 
@@ -93,6 +97,7 @@ func TestCheckGuestServices_WarnsAboutOnlyTheMissingService(t *testing.T) {
 // An input rule on some other interface must not be credited to the bridge the
 // guest is actually on.
 func TestCheckGuestServices_DoesNotCreditAnotherInterfacesRules(t *testing.T) {
+	t.Parallel()
 	rules := `-A ufw-user-input -i docker0 -p udp --dport 67 -j ACCEPT
 -A ufw-user-input -i docker0 -p udp --dport 53 -j ACCEPT
 `
@@ -108,6 +113,7 @@ func TestCheckGuestServices_DoesNotCreditAnotherInterfacesRules(t *testing.T) {
 // A rule naming no interface applies to every interface, so it covers the
 // bridge too.
 func TestCheckGuestServices_AcceptsInterfacelessInputRules(t *testing.T) {
+	t.Parallel()
 	rules := `-A ufw-user-input -p udp --dport 67 -j ACCEPT
 -A ufw-user-input -p udp --dport 53 -j ACCEPT
 `
@@ -118,6 +124,7 @@ func TestCheckGuestServices_AcceptsInterfacelessInputRules(t *testing.T) {
 }
 
 func TestCheckGuestServices_PassesWhenTheHostCannotBlockTheGuest(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name     string
 		conf     string
@@ -139,6 +146,7 @@ func TestCheckGuestServices_PassesWhenTheHostCannotBlockTheGuest(t *testing.T) {
 // An unreadable rules file must not be mistaken for a permissive one: on the
 // distributions where it is root-only, saying so is the honest answer.
 func TestCheckGuestServices_WarnsWhenTheRulesCannotBeRead(t *testing.T) {
+	t.Parallel()
 	got := guestServicesCheck(natConfig(), ufwState{
 		Installed: true, Enabled: true, InputPolicy: "DROP", RulesReadable: false,
 	}, "virbr1")
@@ -154,6 +162,7 @@ func TestCheckGuestServices_WarnsWhenTheRulesCannotBeRead(t *testing.T) {
 // A bridged guest gets its lease and its resolver from the LAN, so the host's
 // input hook never sees it.
 func TestCheckGuestServices_SkipsBridgedMode(t *testing.T) {
+	t.Parallel()
 	cfg := natConfig()
 	cfg.Network = config.NetworkBridge
 	cfg.Bridge = "br0"
@@ -167,6 +176,7 @@ func TestCheckGuestServices_SkipsBridgedMode(t *testing.T) {
 // A default bridge in the configuration does not mean VMs are created bridged,
 // so the check must still report on a NAT host that has one.
 func TestCheckGuestServices_ReportsNATEvenWithADefaultBridgeConfigured(t *testing.T) {
+	t.Parallel()
 	cfg := natConfig()
 	cfg.Network = config.NetworkNAT
 	cfg.Bridge = "br0"
@@ -180,6 +190,7 @@ func TestCheckGuestServices_ReportsNATEvenWithADefaultBridgeConfigured(t *testin
 // The firewall that matters for a remote hypervisor is that host's, and these
 // files describe this one.
 func TestCheckGuestServices_SkipsARemoteHypervisor(t *testing.T) {
+	t.Parallel()
 	got := checkGuestServices(natConfig(), &config.Connection{Remote: true, SSHDestination: "kvm-host"}, "")
 	if got.Status != statusSkip {
 		t.Fatalf("status = %q, want %q", got.Status, statusSkip)

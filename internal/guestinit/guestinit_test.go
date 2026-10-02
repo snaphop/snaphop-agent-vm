@@ -27,6 +27,7 @@ func options() Options {
 }
 
 func TestGenerate_MatchesTheUserDataContract(t *testing.T) {
+	t.Parallel()
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -35,6 +36,7 @@ func TestGenerate_MatchesTheUserDataContract(t *testing.T) {
 }
 
 func TestGenerate_StartsWithTheCloudConfigHeader(t *testing.T) {
+	t.Parallel()
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -47,6 +49,7 @@ func TestGenerate_StartsWithTheCloudConfigHeader(t *testing.T) {
 }
 
 func TestGenerate_AuthorizesEveryKeyAndNoPassword(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	second := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ other@example"
 	opts.SSHAuthorizedKeys = append(opts.SSHAuthorizedKeys, second)
@@ -63,6 +66,7 @@ func TestGenerate_AuthorizesEveryKeyAndNoPassword(t *testing.T) {
 }
 
 func TestGenerate_PutsTheLoginUserInTheGuestToolingGroups(t *testing.T) {
+	t.Parallel()
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -83,6 +87,7 @@ func TestGenerate_PutsTheLoginUserInTheGuestToolingGroups(t *testing.T) {
 }
 
 func TestGenerate_RejectsAVMWithNoAuthorizedKey(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.SSHAuthorizedKeys = nil
 
@@ -92,6 +97,7 @@ func TestGenerate_RejectsAVMWithNoAuthorizedKey(t *testing.T) {
 }
 
 func TestGenerate_RejectsAnInvalidHostname(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.Hostname = "Agent VM"
 
@@ -101,6 +107,7 @@ func TestGenerate_RejectsAnInvalidHostname(t *testing.T) {
 }
 
 func TestGenerate_RejectsPrivateKeyMaterial(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.SSHAuthorizedKeys = []string{"-----BEGIN OPENSSH PRIVATE KEY-----"}
 
@@ -114,6 +121,7 @@ func TestGenerate_RejectsPrivateKeyMaterial(t *testing.T) {
 }
 
 func TestGenerate_QuotesAKeyCommentThatWouldChangeTheYAML(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.SSHAuthorizedKeys = []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 agent: #comment"}
 
@@ -127,6 +135,7 @@ func TestGenerate_QuotesAKeyCommentThatWouldChangeTheYAML(t *testing.T) {
 }
 
 func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.ExtraUserData = []byte("#cloud-config\npackages:\n  - ripgrep\n")
 	opts.ExtraSource = "/home/operator/extra.yaml"
@@ -155,6 +164,7 @@ func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
 }
 
 func TestGenerate_ClassifiesAShellScriptUserData(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.ExtraUserData = []byte("#!/bin/sh\necho hello\n")
 
@@ -169,6 +179,7 @@ func TestGenerate_ClassifiesAShellScriptUserData(t *testing.T) {
 }
 
 func TestGenerate_RejectsUserDataCloudInitWouldIgnore(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.ExtraUserData = []byte("packages:\n  - ripgrep\n")
 	opts.ExtraSource = "/home/operator/extra.yaml"
@@ -186,6 +197,7 @@ func TestGenerate_RejectsUserDataCloudInitWouldIgnore(t *testing.T) {
 }
 
 func TestGenerate_IsDeterministic(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.ExtraUserData = []byte("#cloud-config\npackages:\n  - ripgrep\n")
 
@@ -203,6 +215,7 @@ func TestGenerate_IsDeterministic(t *testing.T) {
 }
 
 func TestLoadPublicKeys_ReadsKeysAndDropsDuplicates(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	first := writeFile(t, dir, "id_ed25519.pub", testKey+"\n")
 	second := writeFile(t, dir, "copy.pub", testKey+"\n# the same key, given twice\n")
@@ -217,6 +230,7 @@ func TestLoadPublicKeys_ReadsKeysAndDropsDuplicates(t *testing.T) {
 }
 
 func TestLoadPublicKeys_RefusesAPrivateKeyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, "id_ed25519",
 		"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n")
@@ -231,6 +245,7 @@ func TestLoadPublicKeys_RefusesAPrivateKeyFile(t *testing.T) {
 }
 
 func TestLoadPublicKeys_ReportsAnEmptyKeyFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, "empty.pub", "\n\n")
 
@@ -240,12 +255,14 @@ func TestLoadPublicKeys_ReportsAnEmptyKeyFile(t *testing.T) {
 }
 
 func TestLoadPublicKeys_ReportsAMissingFile(t *testing.T) {
+	t.Parallel()
 	if _, err := LoadPublicKeys([]string{filepath.Join(t.TempDir(), "absent.pub")}); err == nil {
 		t.Fatal("want an error naming the missing key file")
 	}
 }
 
 func TestLoadAuthorizedKeys_ReadsEveryKeyAndSkipsComments(t *testing.T) {
+	t.Parallel()
 	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ other@example"
 	path := writeFile(t, t.TempDir(), "authorized_keys",
 		"# laptop\n"+testKey+"\n\n"+other+"\n"+testKey+"\n")
@@ -263,6 +280,7 @@ func TestLoadAuthorizedKeys_ReadsEveryKeyAndSkipsComments(t *testing.T) {
 }
 
 func TestLoadAuthorizedKeys_MergesEveryFileAndSkipsTheAbsentOnes(t *testing.T) {
+	t.Parallel()
 	other := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDS8kRJ other@example"
 	dir := t.TempDir()
 	first := writeFile(t, dir, "authorized_keys", testKey+"\n")
@@ -283,6 +301,7 @@ func TestLoadAuthorizedKeys_MergesEveryFileAndSkipsTheAbsentOnes(t *testing.T) {
 }
 
 func TestLoadAuthorizedKeys_RefusesEntriesCarryingOptions(t *testing.T) {
+	t.Parallel()
 	// Honoring the restriction in the guest and dropping it are both decisions
 	// this tool does not get to make for the operator, so it refuses instead.
 	path := writeFile(t, t.TempDir(), "authorized_keys",
@@ -298,6 +317,7 @@ func TestLoadAuthorizedKeys_RefusesEntriesCarryingOptions(t *testing.T) {
 }
 
 func TestLoadAuthorizedKeys_ReportsWhenNoFileHoldsAKey(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	empty := writeFile(t, dir, "authorized_keys", "# no keys here\n")
 
@@ -392,6 +412,7 @@ const testOpencodeConfig = `{
 `
 
 func TestGenerate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.OpencodeConfig = []byte(testOpencodeConfig)
 	opts.OpencodeSource = "/home/operator/opencode.json"
@@ -425,6 +446,7 @@ func TestGenerate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
 }
 
 func TestGenerate_OmitsWriteFilesWithoutAnOpencodeConfig(t *testing.T) {
+	t.Parallel()
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -435,6 +457,7 @@ func TestGenerate_OmitsWriteFilesWithoutAnOpencodeConfig(t *testing.T) {
 }
 
 func TestGenerate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	// A YAML file named opencode.json is the mistake worth catching: opencode
 	// would refuse to start, minutes after create reported success.
@@ -457,6 +480,7 @@ func TestGenerate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
 // seed. It is a public contract for the same reason user-data is: it is what
 // cloud-init reads to decide the guest is a new instance.
 func TestGenerateMetaData_MatchesTheMetaDataContract(t *testing.T) {
+	t.Parallel()
 	got, err := GenerateMetaData(options())
 	if err != nil {
 		t.Fatalf("GenerateMetaData: %v", err)
@@ -468,6 +492,7 @@ func TestGenerateMetaData_MatchesTheMetaDataContract(t *testing.T) {
 // modules when the id changes, and two VMs sharing one would each believe they
 // had already been configured as the other.
 func TestGenerateMetaData_NamesTheInstanceAfterTheVM(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.Hostname = "agent-42"
 
@@ -485,6 +510,7 @@ func TestGenerateMetaData_NamesTheInstanceAfterTheVM(t *testing.T) {
 // meta-data is written before the keys are known to be usable, so it must not
 // borrow user-data's validation: a VM name is all it needs.
 func TestGenerateMetaData_NeedsNoSSHKeys(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.SSHAuthorizedKeys = nil
 
@@ -494,6 +520,7 @@ func TestGenerateMetaData_NeedsNoSSHKeys(t *testing.T) {
 }
 
 func TestGenerateMetaData_RejectsAnInvalidVMName(t *testing.T) {
+	t.Parallel()
 	opts := options()
 	opts.Hostname = "../etc/passwd"
 

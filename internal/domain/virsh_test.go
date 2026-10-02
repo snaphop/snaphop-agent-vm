@@ -29,6 +29,7 @@ func toolout(t *testing.T, name string) string {
 func manager(fake *hostexec.Fake) *Manager { return New(fake, uri) }
 
 func TestParseDomifaddr_ReadsARealVirshTable(t *testing.T) {
+	t.Parallel()
 	got, err := parseDomifaddr([]byte(toolout(t, "virsh-domifaddr.txt")))
 	if err != nil {
 		t.Fatalf("parseDomifaddr: %v", err)
@@ -43,6 +44,7 @@ func TestParseDomifaddr_ReadsARealVirshTable(t *testing.T) {
 }
 
 func TestParseDomifaddr_AGuestWithNoAddressYetIsNotAnError(t *testing.T) {
+	t.Parallel()
 	// virsh prints the header and nothing under it until the guest has an
 	// address, which is the normal state for the first seconds of a boot.
 	header := " Name       MAC address         Protocol   Address\n" +
@@ -58,12 +60,14 @@ func TestParseDomifaddr_AGuestWithNoAddressYetIsNotAnError(t *testing.T) {
 }
 
 func TestParseDomifaddr_UnreadableOutputIsAnErrorNotAnEmptyResult(t *testing.T) {
+	t.Parallel()
 	if _, err := parseDomifaddr([]byte("error: failed to get domain 'agent-01'\n")); err == nil {
 		t.Fatal("want an error: reporting 'no addresses' here would look like a booting guest")
 	}
 }
 
 func TestIPv4Address_SkipsTheGuestsLoopbackInterface(t *testing.T) {
+	t.Parallel()
 	// The guest agent reports every interface, and lists lo with 127.0.0.1
 	// first. Returning it sends ssh to the host's own sshd, where it either
 	// hangs on an unrelated host or is reset — a failure that looks like the
@@ -83,6 +87,7 @@ func TestIPv4Address_SkipsTheGuestsLoopbackInterface(t *testing.T) {
 }
 
 func TestAddresses_FallsBackFromTheGuestAgentToTheDHCPLease(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	// A guest whose agent is not up yet: virsh fails the agent query outright.
 	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source agent", hostexec.FakeResponse{
@@ -103,6 +108,7 @@ func TestAddresses_FallsBackFromTheGuestAgentToTheDHCPLease(t *testing.T) {
 }
 
 func TestAddresses_ReportsFailureWhenNoSourceAnswers(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Default = hostexec.FakeResponse{ExitCode: 1, Stderr: "error: failed to get domain 'agent-01'"}
 
@@ -112,6 +118,7 @@ func TestAddresses_ReportsFailureWhenNoSourceAnswers(t *testing.T) {
 }
 
 func TestAddresses_AGuestThatSimplyHasNoAddressIsNotAFailure(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Default = hostexec.FakeResponse{
 		Stdout: " Name       MAC address         Protocol   Address\n" +
@@ -128,6 +135,7 @@ func TestAddresses_AGuestThatSimplyHasNoAddressIsNotAFailure(t *testing.T) {
 }
 
 func TestMAC_ReadsTheFirstInterfaceFromARealDomiflistTable(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" domiflist agent-01", hostexec.FakeResponse{
 		Stdout: toolout(t, "virsh-domiflist.txt"),
@@ -147,6 +155,7 @@ func TestMAC_ReadsTheFirstInterfaceFromARealDomiflistTable(t *testing.T) {
 // real tool emits, so the trailing newline being there is a fact rather than
 // something a test author remembered.
 func TestListNames_DropsTheBlankLineVirshPrints(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{
 		Stdout: toolout(t, "virsh-list-all-name.txt"),
@@ -162,6 +171,7 @@ func TestListNames_DropsTheBlankLineVirshPrints(t *testing.T) {
 }
 
 func TestState_ReadsTheStateOfADefinedDomain(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{Stdout: "agent-01\n\n"})
 	fake.Respond("virsh --connect "+uri+" domstate agent-01", hostexec.FakeResponse{
@@ -178,6 +188,7 @@ func TestState_ReadsTheStateOfADefinedDomain(t *testing.T) {
 }
 
 func TestState_ADomainLibvirtNoLongerHasIsMissing(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{Stdout: "other-vm\n"})
 
@@ -198,6 +209,7 @@ func TestState_ADomainLibvirtNoLongerHasIsMissing(t *testing.T) {
 }
 
 func TestUndefine_NeverRemovesStorage(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	if err := manager(fake).Undefine(context.Background(), "agent-01"); err != nil {
@@ -216,6 +228,7 @@ func TestUndefine_NeverRemovesStorage(t *testing.T) {
 }
 
 func TestShutdown_RequestsAGracefulStopAndNeverForcesOne(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	if err := manager(fake).Shutdown(context.Background(), "agent-01"); err != nil {
@@ -232,6 +245,7 @@ func TestShutdown_RequestsAGracefulStopAndNeverForcesOne(t *testing.T) {
 }
 
 func TestCreate_RunsVirtInstallAndReturnsTheArgvItRan(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	argv, err := manager(fake).Create(context.Background(), natOptions())
@@ -248,6 +262,7 @@ func TestCreate_RunsVirtInstallAndReturnsTheArgvItRan(t *testing.T) {
 }
 
 func TestCreate_RejectsBadOptionsBeforeTouchingTheHost(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	opts := natOptions()
 	opts.Name = "Agent VM"
@@ -261,6 +276,7 @@ func TestCreate_RejectsBadOptionsBeforeTouchingTheHost(t *testing.T) {
 }
 
 func TestWaitForAddress_ReturnsTheAddressAsSoonAsItAppears(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("virsh --connect "+uri+" domifaddr", hostexec.FakeResponse{
 		Stdout: toolout(t, "virsh-domifaddr.txt"),
@@ -276,6 +292,7 @@ func TestWaitForAddress_ReturnsTheAddressAsSoonAsItAppears(t *testing.T) {
 }
 
 func TestWaitForAddress_TimesOutWithAnActionableError(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.RespondPrefix("virsh --connect "+uri+" domifaddr", hostexec.FakeResponse{
 		Stdout: " Name       MAC address         Protocol   Address\n" +
@@ -294,6 +311,7 @@ func TestWaitForAddress_TimesOutWithAnActionableError(t *testing.T) {
 }
 
 func TestWaitForShutdown_ReturnsWhenTheGuestStops(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{Stdout: "agent-01\n"})
 	fake.Respond("virsh --connect "+uri+" domstate agent-01", hostexec.FakeResponse{Stdout: "shut off\n"})
@@ -304,6 +322,7 @@ func TestWaitForShutdown_ReturnsWhenTheGuestStops(t *testing.T) {
 }
 
 func TestWaitForShutdown_TimesOutWhenTheGuestIgnoresTheRequest(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" list --all --name", hostexec.FakeResponse{Stdout: "agent-01\n"})
 	fake.Respond("virsh --connect "+uri+" domstate agent-01", hostexec.FakeResponse{Stdout: "running\n"})
@@ -319,6 +338,7 @@ func TestWaitForShutdown_TimesOutWhenTheGuestIgnoresTheRequest(t *testing.T) {
 }
 
 func TestConsoleCommand_IsTheVirshInvocationToExec(t *testing.T) {
+	t.Parallel()
 	got := manager(hostexec.NewFake()).ConsoleCommand("agent-01")
 	if want := "virsh --connect " + uri + " console agent-01"; got.String() != want {
 		t.Errorf("ConsoleCommand = %q, want %q", got.String(), want)
@@ -326,6 +346,7 @@ func TestConsoleCommand_IsTheVirshInvocationToExec(t *testing.T) {
 }
 
 func TestHostArch_ReadsTheArchitectureFromRealCapabilities(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" capabilities", hostexec.FakeResponse{
 		Stdout: toolout(t, "virsh-capabilities.txt"),
@@ -343,6 +364,7 @@ func TestHostArch_ReadsTheArchitectureFromRealCapabilities(t *testing.T) {
 }
 
 func TestHostArch_FailsWhenCapabilitiesNamesNoArchitecture(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Respond("virsh --connect "+uri+" capabilities", hostexec.FakeResponse{
 		Stdout: "<capabilities>\n  <host/>\n</capabilities>\n",

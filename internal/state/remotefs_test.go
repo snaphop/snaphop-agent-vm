@@ -31,6 +31,7 @@ func remoteStore(t *testing.T, fake *hostexec.Fake) *Store {
 // destination, then moved onto it, so a dropped connection leaves a temporary
 // file rather than a truncated record.
 func TestRemoteFS_WriteFileIsAtomic(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 
@@ -52,6 +53,7 @@ func TestRemoteFS_WriteFileIsAtomic(t *testing.T) {
 }
 
 func TestRemoteFS_ReadFileReportsAMissingFileAsNotExist(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 	base := fake.MatchFunc
@@ -78,6 +80,7 @@ func TestRemoteFS_ReadFileReportsAMissingFileAsNotExist(t *testing.T) {
 // An unreadable file and a missing one are different problems, and the caller
 // treats a not-exist error as "no such VM".
 func TestRemoteFS_UnreadableFileIsNotReportedAsMissing(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 	base := fake.MatchFunc
@@ -105,6 +108,7 @@ func TestRemoteFS_UnreadableFileIsNotReportedAsMissing(t *testing.T) {
 // a symlink planted inside the state directory cannot be used to reach out of
 // it (SECURITY.md).
 func TestRemoteFS_RefusesToTouchAnythingOutsideTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Hypervisor = "hv"
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
@@ -137,6 +141,7 @@ func TestRemoteFS_RefusesToTouchAnythingOutsideTheStateDirectory(t *testing.T) {
 }
 
 func TestRemoteFS_SubdirectoriesListsVMs(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 	base := fake.MatchFunc
@@ -162,6 +167,7 @@ func TestRemoteFS_SubdirectoriesListsVMs(t *testing.T) {
 }
 
 func TestRemoteFS_SubdirectoriesOfAMissingDirectoryIsEmpty(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 	base := fake.MatchFunc
@@ -191,6 +197,7 @@ func TestRemoteFS_SubdirectoriesOfAMissingDirectoryIsEmpty(t *testing.T) {
 // standard input, so it is released when this process dies just as a local one
 // would be.
 func TestRemoteFS_TryLockHoldsAProcessOnTheHypervisor(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Default = hostexec.FakeResponse{Stdout: lockReadyToken}
 	store := remoteStore(t, fake)
@@ -215,6 +222,7 @@ func TestRemoteFS_TryLockHoldsAProcessOnTheHypervisor(t *testing.T) {
 // A lock another process holds is an ordinary outcome that has to name the
 // holder, not a transport failure.
 func TestRemoteFS_TryLockReportsTheHolderWhenBusy(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 	store := remoteStore(t, fake)
 	base := fake.MatchFunc
@@ -247,6 +255,7 @@ func TestRemoteFS_TryLockReportsTheHolderWhenBusy(t *testing.T) {
 }
 
 func TestParseDFAvailable(t *testing.T) {
+	t.Parallel()
 	out := "Filesystem     1B-blocks         Used    Available Capacity Mounted on\n" +
 		"/dev/mapper/vg-root 494384795648 120795955200 348362203136      26% /\n"
 
@@ -262,6 +271,7 @@ func TestParseDFAvailable(t *testing.T) {
 // A device name long enough to wrap is the one shape POSIX df output allows
 // that a naive column read would get wrong.
 func TestParseDFAvailable_WrappedDeviceName(t *testing.T) {
+	t.Parallel()
 	out := "Filesystem 1B-blocks Used Available Capacity Mounted on\n" +
 		"/dev/disk/by-uuid/6f1c9d3a-0b2e-4c77-9a71-2f0b6d5c8e14\n" +
 		"                 494384795648 120795955200 348362203136 26% /srv\n"
@@ -276,6 +286,7 @@ func TestParseDFAvailable_WrappedDeviceName(t *testing.T) {
 }
 
 func TestParseDFAvailable_RejectsUnreadableOutput(t *testing.T) {
+	t.Parallel()
 	for _, out := range []string{"", "Filesystem 1B-blocks Used Available Capacity Mounted on\n", "nonsense\nalso nonsense\n"} {
 		if _, err := parseDFAvailable(out); err == nil {
 			t.Errorf("parseDFAvailable(%q) = nil error, want a parse failure", out)
@@ -284,6 +295,7 @@ func TestParseDFAvailable_RejectsUnreadableOutput(t *testing.T) {
 }
 
 func TestDescribeHolder(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"host=laptop pid=4242 operation=create": "pid 4242 on laptop, operation=create",
 		"pid=7 operation=image build":           "pid 7, operation=image",

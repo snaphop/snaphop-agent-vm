@@ -30,6 +30,7 @@ func run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 }
 
 func TestRun_NoCommandIsAUsageError(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t)
 
 	if code != ExitUsage {
@@ -41,6 +42,7 @@ func TestRun_NoCommandIsAUsageError(t *testing.T) {
 }
 
 func TestRun_UnknownCommandIsAUsageError(t *testing.T) {
+	t.Parallel()
 	code, _, _ := run(t, "teleport")
 
 	if code != ExitUsage {
@@ -49,6 +51,7 @@ func TestRun_UnknownCommandIsAUsageError(t *testing.T) {
 }
 
 func TestRun_UnknownFlagIsAUsageError(t *testing.T) {
+	t.Parallel()
 	code, _, _ := run(t, "--wat", "doctor")
 
 	if code != ExitUsage {
@@ -57,6 +60,7 @@ func TestRun_UnknownFlagIsAUsageError(t *testing.T) {
 }
 
 func TestRun_InvalidOutputFormatIsAUsageError(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "--output", "yaml", "doctor")
 
 	if code != ExitUsage {
@@ -68,6 +72,7 @@ func TestRun_InvalidOutputFormatIsAUsageError(t *testing.T) {
 }
 
 func TestRun_InvalidResourceValueIsAUsageError(t *testing.T) {
+	t.Parallel()
 	// Configuration is validated before anything on the host is touched.
 	var out, errOut bytes.Buffer
 	app := &App{Stdout: &out, Stderr: &errOut, Env: func(key string) string {
@@ -85,6 +90,7 @@ func TestRun_InvalidResourceValueIsAUsageError(t *testing.T) {
 }
 
 func TestRun_EveryCommandInTheDocumentedContractExists(t *testing.T) {
+	t.Parallel()
 	// docs/cli.md is the specification this package must satisfy, so a command
 	// documented there and missing here is a bug in one of the two. Reading the
 	// document is what keeps them from drifting apart quietly.
@@ -129,6 +135,7 @@ func TestRun_EveryCommandInTheDocumentedContractExists(t *testing.T) {
 }
 
 func TestRun_VersionReportsAgentVMAndHostTools(t *testing.T) {
+	t.Parallel()
 	code, stdout, _ := run(t, "--version")
 
 	if code != ExitOK {
@@ -148,6 +155,7 @@ func TestRun_VersionReportsAgentVMAndHostTools(t *testing.T) {
 }
 
 func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -177,6 +185,7 @@ func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
 }
 
 func TestCleanupError_ListsWhatRemainsOnTheHost(t *testing.T) {
+	t.Parallel()
 	// Reporting success while host state is left behind is forbidden; the
 	// operator must be told exactly what to clean up.
 	err := &CleanupError{
@@ -199,6 +208,7 @@ func TestCleanupError_ListsWhatRemainsOnTheHost(t *testing.T) {
 // it. Handing that cache back is how every `create` flag came to be silently
 // ignored: the VM was created, and at the default size whatever was asked for.
 func TestConfigWith_ResolvesAgainAfterConfigHasAlreadyCachedOne(t *testing.T) {
+	t.Parallel()
 	app := &App{Env: func(string) string { return "" }}
 
 	if _, err := app.Config(); err != nil {
@@ -231,6 +241,7 @@ func TestConfigWith_ResolvesAgainAfterConfigHasAlreadyCachedOne(t *testing.T) {
 // through the error returned to us, so an unknown flag used to be reported
 // twice in a spelling this tool does not accept.
 func TestRun_UnknownFlagIsReportedOnceWithTwoDashes(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "image", "build", "--test")
 
 	if code != ExitUsage {
@@ -261,6 +272,7 @@ func TestRun_UnknownFlagIsReportedOnceWithTwoDashes(t *testing.T) {
 // A wrong argument gets the same listing: the operator is told what the
 // command takes, not only that what they typed was wrong.
 func TestRun_UsageErrorListsTheCommandsFlags(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "destroy")
 
 	if code != ExitUsage {
@@ -281,6 +293,7 @@ func TestRun_UsageErrorListsTheCommandsFlags(t *testing.T) {
 // did; one whose value this tool resolves from configuration does not, because
 // its flag default is the empty string and "(default )" says nothing.
 func TestCommandHelp_ShowsDefaultsOnlyWhereThereIsOne(t *testing.T) {
+	t.Parallel()
 	_, _, stderr := run(t, "stop", "--help")
 
 	if !strings.Contains(stderr, "(default 1m0s)") {
@@ -293,6 +306,7 @@ func TestCommandHelp_ShowsDefaultsOnlyWhereThereIsOne(t *testing.T) {
 
 // The same respelling applies to the flag package's other complaints.
 func TestRun_FlagValueErrorsAreSpelledWithTwoDashes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -318,6 +332,7 @@ func TestRun_FlagValueErrorsAreSpelledWithTwoDashes(t *testing.T) {
 // A quoted value keeps whatever dashes it was given: only the flag's own name
 // is respelled.
 func TestRespellFlags_LeavesAValueAlone(t *testing.T) {
+	t.Parallel()
 	got := respellFlags(errors.New(`invalid value "-1s" for flag -timeout: parse error`))
 
 	if want := `invalid value "-1s" for flag --timeout: parse error`; got.Error() != want {
@@ -328,6 +343,7 @@ func TestRespellFlags_LeavesAValueAlone(t *testing.T) {
 // --help is an answer, not a failure: it prints the command's documented
 // invocation and its own flags, and exits 0.
 func TestRun_CommandHelpPrintsThatCommandsFlagsAndExitsZero(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "image", "build", "--help")
 
 	if code != ExitOK {
@@ -353,6 +369,7 @@ func TestRun_CommandHelpPrintsThatCommandsFlagsAndExitsZero(t *testing.T) {
 // Help works after the positional argument too, the way the flags themselves
 // do (parseNamed).
 func TestRun_CommandHelpWorksAfterTheName(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "create", "agent-01", "--help")
 
 	if code != ExitOK {
@@ -364,6 +381,7 @@ func TestRun_CommandHelpWorksAfterTheName(t *testing.T) {
 }
 
 func TestRun_GlobalHelpPrintsUsageAndExitsZero(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "--help")
 
 	if code != ExitOK {

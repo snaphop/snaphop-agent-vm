@@ -25,6 +25,7 @@ func write(t *testing.T, dir, name, body string) string {
 }
 
 func TestReadUFWState_ReadsTheRealFileFormat(t *testing.T) {
+	t.Parallel()
 	// The bodies here are the shape ufw actually ships: a commented header, a
 	// quoted policy, and no spaces around the assignment.
 	tests := []struct {
@@ -95,6 +96,7 @@ func TestReadUFWState_ReadsTheRealFileFormat(t *testing.T) {
 // regression this check exists for: a guest that boots, accepts SSH and
 // resolves DNS while every outbound connection hangs.
 func TestCheckForwarding_WarnsWhenTheHostFirewallDropsForwardedTraffic(t *testing.T) {
+	t.Parallel()
 	got := forwardingCheckFor(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
@@ -123,6 +125,7 @@ func TestCheckForwarding_WarnsWhenTheHostFirewallDropsForwardedTraffic(t *testin
 }
 
 func TestCheckForwarding_PassesWhenForwardingIsAllowed(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name     string
 		conf     string
@@ -148,6 +151,7 @@ func TestCheckForwarding_PassesWhenForwardingIsAllowed(t *testing.T) {
 // on: a bridged guest sits on the LAN and its traffic never reaches the host's
 // forward hook.
 func TestCheckForwarding_SkipsBridgedMode(t *testing.T) {
+	t.Parallel()
 	got := forwardingCheckFor(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
@@ -166,6 +170,7 @@ func TestCheckForwarding_SkipsBridgedMode(t *testing.T) {
 // traffic through the forward hook, so skipping it there hid the one failure
 // this check exists to catch.
 func TestCheckForwarding_ReportsNATEvenWithADefaultBridgeConfigured(t *testing.T) {
+	t.Parallel()
 	got := forwardingCheckFor(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
@@ -180,6 +185,7 @@ func TestCheckForwarding_ReportsNATEvenWithADefaultBridgeConfigured(t *testing.T
 // TestCheckForwarding_WarnsWhenThePolicyCannotBeRead keeps an unreadable file
 // from being mistaken for a permissive one.
 func TestCheckForwarding_WarnsWhenThePolicyCannotBeRead(t *testing.T) {
+	t.Parallel()
 	got := forwardingCheckFor(t, "ENABLED=yes\n", "", &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
@@ -208,6 +214,7 @@ const allRules = `### tuple ### allow udp 67 0.0.0.0/0 any 0.0.0.0/0 in_virbr1
 // applies after this check reports the problem: doctor must stop warning about
 // a host that now works.
 func TestCheckForwarding_PassesOnceAllRulesExist(t *testing.T) {
+	t.Parallel()
 	got := forwardingCheckWithRules(t, "ENABLED=yes\n", "DEFAULT_FORWARD_POLICY=\"DROP\"\n", allRules, &config.Config{
 		LibvirtURI: "qemu:///system",
 		NATNetwork: "agent-vm-nat",
@@ -224,6 +231,7 @@ func TestCheckForwarding_PassesOnceAllRulesExist(t *testing.T) {
 
 // A rule that accepts forwarding on every interface has no -i flag.
 func TestReadUFWRules_TreatsAnInterfacelessRuleAsAny(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := write(t, dir, "user.rules", "-A ufw-user-forward -j ACCEPT\n")
 
@@ -238,6 +246,7 @@ func TestReadUFWRules_TreatsAnInterfacelessRuleAsAny(t *testing.T) {
 
 // A DROP rule in the same chain must not be read as permission to forward.
 func TestReadUFWRules_IgnoresRulesThatDoNotAccept(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := write(t, dir, "user.rules", "-A ufw-user-forward -i virbr1 -j DROP\n")
 

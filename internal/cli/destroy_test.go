@@ -47,6 +47,7 @@ func vmDirExists(t *testing.T, stateDir, name string) bool {
 }
 
 func TestDestroy_PowersOffUndefinesAndRemovesTheState(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
 
@@ -73,6 +74,7 @@ func TestDestroy_PowersOffUndefinesAndRemovesTheState(t *testing.T) {
 }
 
 func TestDestroy_AsksTheGuestBeforeDeletingItsDisk(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(createHost(t), stateDir, "agent-01")
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name",
@@ -116,6 +118,7 @@ func TestDestroy_AsksTheGuestBeforeDeletingItsDisk(t *testing.T) {
 }
 
 func TestDestroy_ReportsAGuestThatIgnoredTheShutdown(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	// The guest keeps running however long it is given.
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
@@ -135,6 +138,7 @@ func TestDestroy_ReportsAGuestThatIgnoredTheShutdown(t *testing.T) {
 }
 
 func TestDestroy_RefusesADomainItDidNotCreate(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := runningHost(t, "agent-01")
 	// A domain with this name exists, but its disk is someone else's.
@@ -160,6 +164,7 @@ func TestDestroy_RefusesADomainItDidNotCreate(t *testing.T) {
 }
 
 func TestDestroy_RefusesAVMThatIsNotRecordedHere(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01", "someone-elses-vm"), stateDir, "agent-01")
 
@@ -177,6 +182,7 @@ func TestDestroy_RefusesAVMThatIsNotRecordedHere(t *testing.T) {
 }
 
 func TestDestroy_KeepDiskRemovesOnlyTheDomain(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
 
@@ -196,6 +202,7 @@ func TestDestroy_KeepDiskRemovesOnlyTheDomain(t *testing.T) {
 }
 
 func TestDestroy_RemovesTheLeftoverStateOfALostDomain(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := createHost(t)
 	// libvirt no longer knows the domain — it was undefined by hand, or a
@@ -218,6 +225,7 @@ func TestDestroy_RemovesTheLeftoverStateOfALostDomain(t *testing.T) {
 }
 
 func TestDestroy_WithoutATerminalRefusesInsteadOfAssumingConsent(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
 
@@ -235,6 +243,7 @@ func TestDestroy_WithoutATerminalRefusesInsteadOfAssumingConsent(t *testing.T) {
 }
 
 func TestDestroy_ANegativeAnswerChangesNothing(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
 
@@ -257,6 +266,7 @@ func TestDestroy_ANegativeAnswerChangesNothing(t *testing.T) {
 }
 
 func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
 
@@ -280,6 +290,7 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 }
 
 func TestDestroy_RejectsAMissingName(t *testing.T) {
+	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "destroy"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
 	}

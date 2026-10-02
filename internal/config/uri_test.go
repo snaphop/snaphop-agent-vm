@@ -3,6 +3,7 @@ package config
 import "testing"
 
 func TestParseConnection_Local(t *testing.T) {
+	t.Parallel()
 	for _, uri := range []string{"qemu:///system", "qemu:///session"} {
 		conn, err := ParseConnection(uri)
 		if err != nil {
@@ -18,6 +19,7 @@ func TestParseConnection_Local(t *testing.T) {
 }
 
 func TestParseConnection_SSHTransport(t *testing.T) {
+	t.Parallel()
 	conn, err := ParseConnection("qemu+ssh://kvm@hv.example.com/system")
 	if err != nil {
 		t.Fatalf("ParseConnection: %v", err)
@@ -39,6 +41,7 @@ func TestParseConnection_SSHTransport(t *testing.T) {
 }
 
 func TestParseConnection_SSHParameters(t *testing.T) {
+	t.Parallel()
 	conn, err := ParseConnection("qemu+ssh://hv:2222/system?keyfile=/home/me/.ssh/hv_ed25519&no_verify=1")
 	if err != nil {
 		t.Fatalf("ParseConnection: %v", err)
@@ -59,6 +62,7 @@ func TestParseConnection_SSHParameters(t *testing.T) {
 // there. Those are refused up front rather than failing halfway through a
 // create (ADR-0010).
 func TestParseConnection_RejectsTransportsWithoutAShell(t *testing.T) {
+	t.Parallel()
 	for _, uri := range []string{
 		"qemu+tls://hv/system",
 		"qemu+tcp://hv/system",
@@ -72,6 +76,7 @@ func TestParseConnection_RejectsTransportsWithoutAShell(t *testing.T) {
 }
 
 func TestParseConnection_RejectsSSHWithoutAHost(t *testing.T) {
+	t.Parallel()
 	if _, err := ParseConnection("qemu+ssh:///system"); err == nil {
 		t.Error("ParseConnection = nil error, want a refusal")
 	}
@@ -80,12 +85,14 @@ func TestParseConnection_RejectsSSHWithoutAHost(t *testing.T) {
 // A password in the URI cannot be handed to ssh, and ignoring it would leave
 // the operator wondering why they are prompted.
 func TestParseConnection_RejectsPassword(t *testing.T) {
+	t.Parallel()
 	if _, err := ParseConnection("qemu+ssh://me:secret@hv/system"); err == nil {
 		t.Error("ParseConnection = nil error, want a refusal")
 	}
 }
 
 func TestSessionMode(t *testing.T) {
+	t.Parallel()
 	for uri, want := range map[string]bool{
 		"qemu:///system":               false,
 		"qemu:///session":              true,
@@ -103,6 +110,7 @@ func TestSessionMode(t *testing.T) {
 // An unsupported transport must be rejected by configuration validation, which
 // is what makes it a usage error before anything on either host changes.
 func TestLoad_RejectsUnsupportedTransport(t *testing.T) {
+	t.Parallel()
 	env := func(string) string { return "" }
 	if _, err := Load(env, Overrides{StateDir: "/srv/agent-vm", LibvirtURI: "qemu+tls://hv/system"}); err == nil {
 		t.Fatal("Load = nil error, want a validation failure")
@@ -110,6 +118,7 @@ func TestLoad_RejectsUnsupportedTransport(t *testing.T) {
 }
 
 func TestLoad_RecordsWhetherTheStateDirectoryIsTheDefault(t *testing.T) {
+	t.Parallel()
 	env := func(key string) string {
 		if key == "HOME" {
 			return "/home/me"

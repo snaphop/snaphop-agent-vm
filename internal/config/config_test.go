@@ -30,6 +30,7 @@ func writeConfig(t *testing.T, contents string) string {
 }
 
 func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
+	t.Parallel()
 	// These are the defaults docs/cli.md and ADR-0007 promise. Changing one is
 	// a contract change, so this test is meant to fail loudly.
 	cfg, err := Load(noEnv, Overrides{ConfigFile: filepath.Join(t.TempDir(), "absent.toml")})
@@ -64,6 +65,7 @@ func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
 }
 
 func TestLoad_PrecedenceIsDefaultsThenFileThenEnvThenFlags(t *testing.T) {
+	t.Parallel()
 	path := writeConfig(t, `
 [defaults]
 distro = "fedora"
@@ -98,6 +100,7 @@ disk   = "100G"
 }
 
 func TestLoad_MissingConfigFileIsNotAnError(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(noEnv, Overrides{ConfigFile: filepath.Join(t.TempDir(), "nope.toml")})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -108,6 +111,7 @@ func TestLoad_MissingConfigFileIsNotAnError(t *testing.T) {
 }
 
 func TestLoad_MalformedConfigFileIsAValidationError(t *testing.T) {
+	t.Parallel()
 	// A malformed file must not be silently ignored: the operator believes
 	// their settings are in effect.
 	path := writeConfig(t, "this is not = = toml\n")
@@ -121,6 +125,7 @@ func TestLoad_MalformedConfigFileIsAValidationError(t *testing.T) {
 }
 
 func TestLoad_RejectsUnsupportedDistro(t *testing.T) {
+	t.Parallel()
 	_, err := Load(noEnv, Overrides{Distro: "alpine"})
 
 	var verr *ValidationError
@@ -133,6 +138,7 @@ func TestLoad_RejectsUnsupportedDistro(t *testing.T) {
 }
 
 func TestLoad_MaxMemoryIsUnsetByDefault(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(noEnv, Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -145,6 +151,7 @@ func TestLoad_MaxMemoryIsUnsetByDefault(t *testing.T) {
 }
 
 func TestLoad_AcceptsAMaxMemoryAboveTheBootMemory(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(noEnv, Overrides{Memory: "4G", MaxMemory: "16G"})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -155,6 +162,7 @@ func TestLoad_AcceptsAMaxMemoryAboveTheBootMemory(t *testing.T) {
 }
 
 func TestLoad_RejectsResourcesOutsideBounds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		flags Overrides
@@ -189,6 +197,7 @@ func TestLoad_RejectsResourcesOutsideBounds(t *testing.T) {
 }
 
 func TestLoad_BridgeModeRequiresABridge(t *testing.T) {
+	t.Parallel()
 	// Refusing is the point: falling back to NAT would silently change the
 	// guest's exposure, and inferring a bridge would do the opposite.
 	_, err := Load(noEnv, Overrides{Network: "bridge"})
@@ -203,6 +212,7 @@ func TestLoad_BridgeModeRequiresABridge(t *testing.T) {
 }
 
 func TestLoad_BridgeModeIsRefusedOnSessionURI(t *testing.T) {
+	t.Parallel()
 	_, err := Load(noEnv, Overrides{Network: "bridge", Bridge: "br0", LibvirtURI: SessionURI})
 
 	var verr *ValidationError
@@ -215,6 +225,7 @@ func TestLoad_BridgeModeIsRefusedOnSessionURI(t *testing.T) {
 }
 
 func TestLoad_BridgeModeIsNeverSelectedImplicitly(t *testing.T) {
+	t.Parallel()
 	// Configuring a bridge is not the same as asking for bridged networking.
 	path := writeConfig(t, "[network.bridge]\ninterface = \"br0\"\n")
 
@@ -228,6 +239,7 @@ func TestLoad_BridgeModeIsNeverSelectedImplicitly(t *testing.T) {
 }
 
 func TestLoad_RejectsUnknownNetworkMode(t *testing.T) {
+	t.Parallel()
 	_, err := Load(noEnv, Overrides{Network: "host"})
 
 	var verr *ValidationError
@@ -304,6 +316,7 @@ interface = "br-leaked"
 }
 
 func TestLoad_ExpandsTildeInPaths(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 
 	cfg, err := Load(envMap(map[string]string{"HOME": home}), Overrides{StateDir: "~/agent-vm-state"})
@@ -316,6 +329,7 @@ func TestLoad_ExpandsTildeInPaths(t *testing.T) {
 }
 
 func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(envMap(map[string]string{
 		"AGENT_VM_STATE_DIR":   "/srv/agent-vm",
 		"AGENT_VM_LIBVIRT_URI": SessionURI,
@@ -346,6 +360,7 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 // The appliance kernel is a host property rather than a per-VM one, so it has
 // no flag: the configuration file and the environment are the whole surface.
 func TestLoad_ApplianceKernelFromTheConfigFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(path, []byte(`appliance_kernel = "/opt/kernels/6.12.4-arch1-1"`+"\n"), 0o600); err != nil {
@@ -362,6 +377,7 @@ func TestLoad_ApplianceKernelFromTheConfigFile(t *testing.T) {
 }
 
 func TestLoad_ApplianceKernelFromTheEnvironmentExpandsHome(t *testing.T) {
+	t.Parallel()
 	env := func(name string) string {
 		switch name {
 		case "HOME":
@@ -385,6 +401,7 @@ func TestLoad_ApplianceKernelFromTheEnvironmentExpandsHome(t *testing.T) {
 // A host whose own kernel boots the appliance configures nothing, which is
 // every general-purpose distribution kernel.
 func TestLoad_ApplianceKernelIsUnsetByDefault(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(func(string) string { return "" }, Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)

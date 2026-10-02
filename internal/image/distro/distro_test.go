@@ -6,6 +6,7 @@ import (
 )
 
 func TestParseRef_AppliesTheFamilyDefaultTag(t *testing.T) {
+	t.Parallel()
 	// These pairings are ADR-0006's decision table; changing one changes what
 	// `agent-vm create --distro fedora` boots.
 	tests := []struct {
@@ -34,6 +35,7 @@ func TestParseRef_AppliesTheFamilyDefaultTag(t *testing.T) {
 }
 
 func TestParseRef_RejectsAnUnsupportedFamilyAndSaysWhatIsSupported(t *testing.T) {
+	t.Parallel()
 	_, err := ParseRef("alpine")
 	if err == nil {
 		t.Fatal("ParseRef accepted an unsupported distro")
@@ -46,6 +48,7 @@ func TestParseRef_RejectsAnUnsupportedFamilyAndSaysWhatIsSupported(t *testing.T)
 }
 
 func TestParseRef_RejectsTagsThatWouldEscapeTheStateDirectory(t *testing.T) {
+	t.Parallel()
 	// A tag becomes a path segment under images/<distro>/<tag>/.
 	for _, in := range []string{
 		"ubuntu:../../etc",
@@ -61,12 +64,14 @@ func TestParseRef_RejectsTagsThatWouldEscapeTheStateDirectory(t *testing.T) {
 }
 
 func TestDefault_IsUbuntu(t *testing.T) {
+	t.Parallel()
 	if Default.Name != "ubuntu" {
 		t.Errorf("Default = %s, want ubuntu (docs/cli.md and ADR-0006)", Default.Name)
 	}
 }
 
 func TestNames_ListsEverySupportedFamilyInAStableOrder(t *testing.T) {
+	t.Parallel()
 	got := strings.Join(Names(), ",")
 	if got != "arch,fedora,ubuntu" {
 		t.Errorf("Names() = %s, want arch,fedora,ubuntu", got)
@@ -74,6 +79,7 @@ func TestNames_ListsEverySupportedFamilyInAStableOrder(t *testing.T) {
 }
 
 func TestToolingUpdate_UpgradesBothAccountsMiseInstallations(t *testing.T) {
+	t.Parallel()
 	steps := ToolingUpdate("agent")
 
 	var perUser []UpdateStep
@@ -94,6 +100,7 @@ func TestToolingUpdate_UpgradesBothAccountsMiseInstallations(t *testing.T) {
 }
 
 func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
+	t.Parallel()
 	steps := ToolingUpdate("root")
 	upgrades := 0
 	for _, step := range steps {
@@ -110,6 +117,7 @@ func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
 }
 
 func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
+	t.Parallel()
 	for _, step := range ToolingUpdate("agent") {
 		if step.Requires == "" {
 			t.Errorf("%q would fail an update in a guest built from an image without it", step.Name)
@@ -124,6 +132,7 @@ func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
 // and the guest user's `mise upgrade` after them fails with "failed to acquire
 // project lock: Permission denied" before installing anything.
 func TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory(t *testing.T) {
+	t.Parallel()
 	sawMise := false
 	for _, step := range ToolingUpdate("agent") {
 		// The mkdir that creates the directory is a mise prerequisite, not a
@@ -150,6 +159,7 @@ func TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory(t *testing.T
 // $TMPDIR and does not create the directory, and a guest has no
 // /root/.cache/mise-tmp until an update makes one.
 func TestToolingUpdate_CreatesTheMiseTmpDirBeforeSelfUpdate(t *testing.T) {
+	t.Parallel()
 	steps := ToolingUpdate("agent")
 	mkdirAt, selfUpdateAt := -1, -1
 	for i, step := range steps {
@@ -188,6 +198,7 @@ func containsArg(argv []string, want string) bool {
 }
 
 func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
+	t.Parallel()
 	// A variant is the same family and the same source image, built from that
 	// family's variant recipe and cached under its own name.
 	tests := []struct {
@@ -232,6 +243,7 @@ func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
 }
 
 func TestParseRef_KeepsAFamilyAndItsVariantsApart(t *testing.T) {
+	t.Parallel()
 	// Every variant of a family shares the family but never a cache directory
 	// or a recipe: all three may be cached at once, and rebuilding one must not
 	// touch the others.
@@ -260,6 +272,7 @@ func TestParseRef_KeepsAFamilyAndItsVariantsApart(t *testing.T) {
 }
 
 func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
+	t.Parallel()
 	// vm.json and manifest.json record only the image name, and `agent-vm
 	// update` has to find the family from it again.
 	for _, tt := range []struct {
@@ -290,6 +303,7 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 }
 
 func TestImageNames_ListEveryBuildableImage(t *testing.T) {
+	t.Parallel()
 	got := strings.Join(ImageNames(), " ")
 	want := "arch arch-slim arch-nix fedora fedora-slim fedora-nix ubuntu ubuntu-slim ubuntu-nix"
 	if got != want {

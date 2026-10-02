@@ -9,6 +9,7 @@ import (
 )
 
 func TestBar_WritesOneLinePerStepWhenNotOnATerminal(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	bar := NewBar(&out, true)
 
@@ -25,6 +26,7 @@ func TestBar_WritesOneLinePerStepWhenNotOnATerminal(t *testing.T) {
 // A captured stream must never contain the control sequences that redraw a
 // line in place: piping progress into a log is exactly where they are unusable.
 func TestBar_WritesNoTerminalControlSequencesWhenNotOnATerminal(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	bar := NewBar(&out, true)
 
@@ -37,6 +39,7 @@ func TestBar_WritesNoTerminalControlSequencesWhenNotOnATerminal(t *testing.T) {
 }
 
 func TestBar_RendersTheFilledFractionOfTheCurrentStep(t *testing.T) {
+	t.Parallel()
 	bar := NewBar(&bytes.Buffer{}, true)
 	bar.started = time.Now().Add(-90 * time.Second)
 	bar.number, bar.total, bar.name = 5, 10, "creating the base disk"
@@ -54,12 +57,14 @@ func TestBar_RendersTheFilledFractionOfTheCurrentStep(t *testing.T) {
 }
 
 func TestBar_NilReportsNothing(t *testing.T) {
+	t.Parallel()
 	var bar *Bar
 	bar.Step(1, 2, "pulling the source image")
 	bar.Finish(nil)
 }
 
 func TestFormatDuration(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   time.Duration
 		want string

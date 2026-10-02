@@ -9,6 +9,7 @@ import (
 )
 
 func TestLicenses_PrintsTheLicenseAndThirdPartyNotices(t *testing.T) {
+	t.Parallel()
 	code, stdout, stderr := run(t, "licenses")
 
 	if code != ExitOK {
@@ -29,6 +30,7 @@ func TestLicenses_PrintsTheLicenseAndThirdPartyNotices(t *testing.T) {
 }
 
 func TestLicenses_JSONReportsTheLicenseAndNoticeSeparately(t *testing.T) {
+	t.Parallel()
 	code, stdout, stderr := run(t, "--output", "json", "licenses")
 
 	if code != ExitOK {
@@ -50,6 +52,7 @@ func TestLicenses_JSONReportsTheLicenseAndNoticeSeparately(t *testing.T) {
 }
 
 func TestLicenses_RejectsAnArgument(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "licenses", "extra")
 
 	if code != ExitUsage {
@@ -61,6 +64,7 @@ func TestLicenses_RejectsAnArgument(t *testing.T) {
 }
 
 func TestLicenses_IsListedInGlobalHelp(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := run(t, "--help")
 
 	if code != ExitOK {

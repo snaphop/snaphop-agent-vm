@@ -8,6 +8,7 @@ import (
 )
 
 func TestLockVM_SerializesOperationsOnTheSameVM(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	held, err := store.TryLockVM("agent-01", "create")
@@ -29,6 +30,7 @@ func TestLockVM_SerializesOperationsOnTheSameVM(t *testing.T) {
 }
 
 func TestLockVM_DifferentVMsDoNotBlockEachOther(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	first, err := store.TryLockVM("agent-01", "create")
@@ -45,6 +47,7 @@ func TestLockVM_DifferentVMsDoNotBlockEachOther(t *testing.T) {
 }
 
 func TestLockVM_ReleaseAllowsTheNextHolder(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	first, err := store.TryLockVM("agent-01", "create")
@@ -70,6 +73,7 @@ func TestLockVM_ReleaseAllowsTheNextHolder(t *testing.T) {
 }
 
 func TestLockVM_WaitsUntilTheContextExpires(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	held, err := store.TryLockVM("agent-01", "create")
@@ -92,6 +96,7 @@ func TestLockVM_WaitsUntilTheContextExpires(t *testing.T) {
 }
 
 func TestLockImage_SerializesBuildsOfTheSameImage(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	ctx := context.Background()
 

@@ -33,6 +33,7 @@ func sampleVM(store *Store, name string) *VM {
 }
 
 func TestSaveAndLoadVM_RoundTrips(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	want := sampleVM(store, "agent-01")
 
@@ -62,6 +63,7 @@ func TestSaveAndLoadVM_RoundTrips(t *testing.T) {
 }
 
 func TestSaveVM_WritesSizesInTheFormOperatorsRead(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 	if err := store.SaveVM(sampleVM(store, "agent-01")); err != nil {
 		t.Fatalf("SaveVM: %v", err)
@@ -86,6 +88,7 @@ func TestSaveVM_WritesSizesInTheFormOperatorsRead(t *testing.T) {
 }
 
 func TestSaveVM_RecordsNoPrivateKeyMaterial(t *testing.T) {
+	t.Parallel()
 	// vm.json records the path of an authorized public key, never key material.
 	store := newStore(t)
 	if err := store.SaveVM(sampleVM(store, "agent-01")); err != nil {
@@ -104,6 +107,7 @@ func TestSaveVM_RecordsNoPrivateKeyMaterial(t *testing.T) {
 }
 
 func TestLoadVM_UnknownNameIsNotFound(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	_, err := store.LoadVM("no-such-vm")
@@ -115,6 +119,7 @@ func TestLoadVM_UnknownNameIsNotFound(t *testing.T) {
 }
 
 func TestLoadVM_RejectsAnInvalidNameBeforeUsingItAsAPath(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	for _, name := range []string{"../etc", "Agent", "vm/../../escape"} {
@@ -125,6 +130,7 @@ func TestLoadVM_RejectsAnInvalidNameBeforeUsingItAsAPath(t *testing.T) {
 }
 
 func TestLoadVM_RefusesAnUnknownSchemaVersion(t *testing.T) {
+	t.Parallel()
 	// Guessing at a record written by another version is how state gets
 	// corrupted; refusing and saying what to do is the contract.
 	store := newStore(t)
@@ -148,6 +154,7 @@ func TestLoadVM_RefusesAnUnknownSchemaVersion(t *testing.T) {
 }
 
 func TestListVMs_IgnoresDirectoriesWithoutARecord(t *testing.T) {
+	t.Parallel()
 	// A directory with no vm.json is the debris of an interrupted create, not a VM.
 	store := newStore(t)
 	if err := store.SaveVM(sampleVM(store, "agent-01")); err != nil {
@@ -167,6 +174,7 @@ func TestListVMs_IgnoresDirectoriesWithoutARecord(t *testing.T) {
 }
 
 func TestListVMs_EmptyStateDirectoryIsNotAnError(t *testing.T) {
+	t.Parallel()
 	store := newStore(t)
 
 	vms, err := store.ListVMs()

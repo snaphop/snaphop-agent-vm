@@ -138,6 +138,7 @@ func ubuntuRef(t *testing.T) distro.Ref {
 }
 
 func TestBuild_RunsTheDocumentedToolPipeline(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, store := newBuilder(t, fake)
 
@@ -168,6 +169,7 @@ func redactWorkspace(argv string) string {
 }
 
 func TestBuild_PinsTheSourceImageByDigest(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, _ := newBuilder(t, fake)
 
@@ -198,6 +200,7 @@ func TestBuild_PinsTheSourceImageByDigest(t *testing.T) {
 }
 
 func TestBuild_RecordsProvenanceInTheManifest(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	fake.Respond("podman --version", hostexec.FakeResponse{Stdout: "podman version 4.9.3\n"})
 	for _, tool := range []string{"virt-make-fs", "virt-ls", "virt-copy-out", "virt-sysprep"} {
@@ -229,6 +232,7 @@ func TestBuild_RecordsProvenanceInTheManifest(t *testing.T) {
 }
 
 func TestBuild_ProducesAllThreeArtifactsAndAManifest(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, store := newBuilder(t, fake)
 
@@ -255,6 +259,7 @@ func TestBuild_ProducesAllThreeArtifactsAndAManifest(t *testing.T) {
 }
 
 func TestBuild_FailureLeavesNoBootableImageBehind(t *testing.T) {
+	t.Parallel()
 	// No VM may ever boot a partially built base image (SECURITY.md), so a
 	// failure part-way through must leave the cache untouched.
 	fake := ubuntuHost(t)
@@ -287,6 +292,7 @@ func TestBuild_FailureLeavesNoBootableImageBehind(t *testing.T) {
 }
 
 func TestBuild_UsesTheCacheUnlessForced(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, _ := newBuilder(t, fake)
 	ctx := context.Background()
@@ -312,6 +318,7 @@ func TestBuild_UsesTheCacheUnlessForced(t *testing.T) {
 }
 
 func TestBuild_RefusesAnUnpinnableDigest(t *testing.T) {
+	t.Parallel()
 	// Falling back to an unpinned reference is forbidden outright: it would
 	// make the manifest's provenance a lie.
 	for _, response := range []string{
@@ -335,6 +342,7 @@ func TestBuild_RefusesAnUnpinnableDigest(t *testing.T) {
 }
 
 func TestBuild_ReportsAMissingKernelAgainstTheBuildRecipe(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
 		if c.Name == "virt-ls" && c.Args[len(c.Args)-1] == distro.ModulesDir {
@@ -354,6 +362,7 @@ func TestBuild_ReportsAMissingKernelAgainstTheBuildRecipe(t *testing.T) {
 }
 
 func TestBuild_HonoursTheFromOverride(t *testing.T) {
+	t.Parallel()
 	// --from is the supported escape hatch for a custom image within a
 	// supported family (ADR-0006).
 	fake := ubuntuHost(t)
@@ -377,6 +386,7 @@ func TestBuild_HonoursTheFromOverride(t *testing.T) {
 }
 
 func TestRepoOf_SeparatesATagFromARegistryPort(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ in, want string }{
 		{"docker.io/library/ubuntu:24.04", "docker.io/library/ubuntu"},
 		{"docker.io/library/ubuntu", "docker.io/library/ubuntu"},
@@ -392,6 +402,7 @@ func TestRepoOf_SeparatesATagFromARegistryPort(t *testing.T) {
 }
 
 func TestMatchOne_RefusesBootEntriesThatAreNotPlainFileNames(t *testing.T) {
+	t.Parallel()
 	// /boot listings come out of an image we did not write, and the chosen
 	// name goes straight into another tool's argument vector.
 	entries := []string{"../../etc/shadow", "-rf", "sub/vmlinuz-6.8.0", ".hidden"}
@@ -401,6 +412,7 @@ func TestMatchOne_RefusesBootEntriesThatAreNotPlainFileNames(t *testing.T) {
 }
 
 func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, store := newBuilder(t, fake)
 	ref := ubuntuRef(t)
@@ -437,6 +449,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 }
 
 func TestRemove_UnknownImageIsNotFound(t *testing.T) {
+	t.Parallel()
 	builder, _ := newBuilder(t, ubuntuHost(t))
 
 	err := builder.Remove(context.Background(), ubuntuRef(t), false)
@@ -457,6 +470,7 @@ func slimRef(t *testing.T) distro.Ref {
 }
 
 func TestBuild_SlimImageIsCachedUnderItsOwnNameAndBuiltFromTheSlimRecipe(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, store := newBuilder(t, fake)
 
@@ -514,6 +528,7 @@ func TestBuild_SlimImageIsCachedUnderItsOwnNameAndBuiltFromTheSlimRecipe(t *test
 }
 
 func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
+	t.Parallel()
 	fake := ubuntuHost(t)
 	builder, store := newBuilder(t, fake)
 

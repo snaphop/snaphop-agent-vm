@@ -17,6 +17,7 @@ const (
 // for a filesystem called cidata and finds nothing without it, which is the
 // same silent "no datasource" failure a late-appearing seed produced.
 func TestCreateSeed_BuildsALabelledFilesystemFromTheSeedDirectory(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	if err := manager(fake).CreateSeed(context.Background(), seedDir, seedFile); err != nil {
@@ -32,6 +33,7 @@ func TestCreateSeed_BuildsALabelledFilesystemFromTheSeedDirectory(t *testing.T) 
 // A relative path would be resolved against whatever directory the tool
 // happened to run in — and with a remote hypervisor, on the wrong machine.
 func TestCreateSeed_RejectsRelativePaths(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, dir, image string }{
 		{"relative seed directory", "seed", seedFile},
 		{"relative seed image", seedDir, "seed.img"},

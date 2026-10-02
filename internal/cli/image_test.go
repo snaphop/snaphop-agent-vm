@@ -42,6 +42,7 @@ func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) 
 }
 
 func TestImage_RequiresASubcommand(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := cliRun(t, imageHost(), t.TempDir(), "image")
 
 	if code != ExitUsage {
@@ -53,6 +54,7 @@ func TestImage_RequiresASubcommand(t *testing.T) {
 }
 
 func TestImage_RejectsAnUnknownSubcommand(t *testing.T) {
+	t.Parallel()
 	code, _, _ := cliRun(t, imageHost(), t.TempDir(), "image", "publish")
 
 	if code != ExitUsage {
@@ -61,6 +63,7 @@ func TestImage_RejectsAnUnknownSubcommand(t *testing.T) {
 }
 
 func TestImageBuild_RejectsAnUnsupportedDistro(t *testing.T) {
+	t.Parallel()
 	code, _, stderr := cliRun(t, imageHost(), t.TempDir(), "image", "build", "alpine")
 
 	if code != ExitUsage {
@@ -72,6 +75,7 @@ func TestImageBuild_RejectsAnUnsupportedDistro(t *testing.T) {
 }
 
 func TestImageList_EmptyCacheIsNotAnError(t *testing.T) {
+	t.Parallel()
 	code, stdout, _ := cliRun(t, imageHost(), t.TempDir(), "image", "list")
 
 	if code != ExitOK {
@@ -83,6 +87,7 @@ func TestImageList_EmptyCacheIsNotAnError(t *testing.T) {
 }
 
 func TestImageList_EmptyCacheEmitsAnEmptyJSONArray(t *testing.T) {
+	t.Parallel()
 	// A supervisor parsing this must get [] rather than null.
 	code, stdout, _ := cliRun(t, imageHost(), t.TempDir(), "--output", "json", "image", "list")
 
@@ -132,6 +137,7 @@ func cachedImage(t *testing.T, dir string) *state.Store {
 }
 
 func TestImageList_ShowsACachedImage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cachedImage(t, dir)
 
@@ -148,6 +154,7 @@ func TestImageList_ShowsACachedImage(t *testing.T) {
 }
 
 func TestImageInspect_ShowsProvenanceAndTheKernelCommandLine(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cachedImage(t, dir)
 
@@ -172,6 +179,7 @@ func TestImageInspect_ShowsProvenanceAndTheKernelCommandLine(t *testing.T) {
 }
 
 func TestImageInspect_UnknownImageIsNotFound(t *testing.T) {
+	t.Parallel()
 	code, _, _ := cliRun(t, imageHost(), t.TempDir(), "image", "inspect", "fedora")
 
 	if code != ExitNotFound {
@@ -180,6 +188,7 @@ func TestImageInspect_UnknownImageIsNotFound(t *testing.T) {
 }
 
 func TestImageRm_RefusesWithoutConfirmationWhenThereIsNoTerminal(t *testing.T) {
+	t.Parallel()
 	// Assuming consent for a destructive operation in a non-interactive run is
 	// exactly the mistake that loses someone's cached image.
 	dir := t.TempDir()
@@ -204,6 +213,7 @@ func TestImageRm_RefusesWithoutConfirmationWhenThereIsNoTerminal(t *testing.T) {
 }
 
 func TestImageRm_RemovesWithYes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := cachedImage(t, dir)
 
@@ -218,6 +228,7 @@ func TestImageRm_RemovesWithYes(t *testing.T) {
 }
 
 func TestImageRm_DeclinedAtThePromptRemovesNothing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := cachedImage(t, dir)
 
@@ -242,6 +253,7 @@ func TestImageRm_DeclinedAtThePromptRemovesNothing(t *testing.T) {
 }
 
 func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := cachedImage(t, dir)
 
@@ -265,6 +277,7 @@ func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
 }
 
 func TestImageBuild_DryRunPrintsThePlanAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	// --dry-run must exit 0 having changed nothing at all — not even the state
 	// directory it would otherwise create.
 	dir := filepath.Join(t.TempDir(), "state")
@@ -285,6 +298,7 @@ func TestImageBuild_DryRunPrintsThePlanAndCreatesNothing(t *testing.T) {
 }
 
 func TestImageRm_DryRunRemovesNothing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	store := cachedImage(t, dir)
 
@@ -304,6 +318,7 @@ func TestImageRm_DryRunRemovesNothing(t *testing.T) {
 // Build progress is progress output, so --quiet silences it and it never
 // appears on stdout, where `--output json` results are parsed (docs/cli.md).
 func TestBuildProgress_WritesStepsToStderr(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	app := &App{Stdout: &stdout, Stderr: &stderr}
 
@@ -318,6 +333,7 @@ func TestBuildProgress_WritesStepsToStderr(t *testing.T) {
 }
 
 func TestBuildProgress_IsSuppressedWhenThereIsNothingToReport(t *testing.T) {
+	t.Parallel()
 	cases := map[string]*App{
 		"--quiet":   {Stderr: &bytes.Buffer{}, quiet: true},
 		"--dry-run": {Stderr: &bytes.Buffer{}, dryRun: true},
@@ -338,6 +354,7 @@ func TestBuildProgress_IsSuppressedWhenThereIsNothingToReport(t *testing.T) {
 // stops parsing at. Both orderings have to work, or the command in the docs
 // exits 2 with "flag provided but not defined".
 func TestImageBuild_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -359,6 +376,7 @@ func TestImageBuild_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
 }
 
 func TestImageRm_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -384,6 +402,7 @@ func TestImageRm_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
 // A second positional is still a usage error: accepting flags after the name
 // must not turn a typo into a silently ignored argument.
 func TestImage_RejectsASecondDistroArgument(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{
 		{"image", "build", "fedora", "ubuntu"},
 		{"--yes", "image", "rm", "fedora", "ubuntu"},

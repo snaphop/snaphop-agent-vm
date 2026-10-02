@@ -81,6 +81,7 @@ func loadVM(t *testing.T, stateDir, name string) *state.VM {
 }
 
 func TestCreate_RunsTheDocumentedPipeline(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -106,6 +107,7 @@ func TestCreate_RunsTheDocumentedPipeline(t *testing.T) {
 }
 
 func TestCreate_WritesTheVMRecordWithItsProvenance(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 
 	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
@@ -144,6 +146,7 @@ func TestCreate_WritesTheVMRecordWithItsProvenance(t *testing.T) {
 // disk image would normally get. It is created before virt-make-fs fills it in
 // so there is never a moment when it exists and is world-readable.
 func TestCreate_KeepsTheSeedDiskAsPrivateAsTheUserData(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 
 	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
@@ -164,6 +167,7 @@ func TestCreate_KeepsTheSeedDiskAsPrivateAsTheUserData(t *testing.T) {
 }
 
 func TestCreate_AuthorizesTheKeyAndNeverWritesPrivateMaterial(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 
 	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
@@ -305,6 +309,7 @@ func TestCreate_ReportsWhenTheHostHasNoAuthorizedKeys(t *testing.T) {
 }
 
 func TestCreate_RejectsAnInvalidVMName(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -318,6 +323,7 @@ func TestCreate_RejectsAnInvalidVMName(t *testing.T) {
 }
 
 func TestCreate_RefusesNoStartAndSaysWhy(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -335,6 +341,7 @@ func TestCreate_RefusesNoStartAndSaysWhy(t *testing.T) {
 }
 
 func TestCreate_RefusesAVMThatAlreadyExists(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 
 	if code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...); code != ExitOK {
@@ -347,6 +354,7 @@ func TestCreate_RefusesAVMThatAlreadyExists(t *testing.T) {
 }
 
 func TestCreate_RefusesALibvirtDomainItDoesNotOwn(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	// Someone else's domain happens to have the name we were asked for.
@@ -368,6 +376,7 @@ func TestCreate_RefusesALibvirtDomainItDoesNotOwn(t *testing.T) {
 }
 
 func TestCreate_RollsBackEverythingAfterAFailure(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	// The domain is defined and started, and then a later step fails.
@@ -399,6 +408,7 @@ func TestCreate_RollsBackEverythingAfterAFailure(t *testing.T) {
 }
 
 func TestCreate_RollsBackWithoutUndefiningADomainItNeverDefined(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	fake.RespondPrefix("virt-install", hostexec.FakeResponse{
@@ -421,6 +431,7 @@ func TestCreate_RollsBackWithoutUndefiningADomainItNeverDefined(t *testing.T) {
 }
 
 func TestCreate_ReportsHostStateItCouldNotCleanUp(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	fake.RespondPrefix("virsh --connect qemu:///system dumpxml", hostexec.FakeResponse{
@@ -440,6 +451,7 @@ func TestCreate_ReportsHostStateItCouldNotCleanUp(t *testing.T) {
 }
 
 func TestCreate_ABootTimeoutLeavesTheVMInPlace(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	// The guest never gets an address: it is booting slowly, or not at all.
@@ -466,6 +478,7 @@ func TestCreate_ABootTimeoutLeavesTheVMInPlace(t *testing.T) {
 }
 
 func TestCreate_WaitingCanBeDisabled(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -489,6 +502,7 @@ func TestCreate_WaitingCanBeDisabled(t *testing.T) {
 // The VM is still created — the bridge works — but create says why the wait is
 // long, because otherwise it reads as a slow image or a broken guest.
 func TestCreate_WarnsAboutASpanningTreeForwardDelayAndStillCreatesTheVM(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
@@ -526,6 +540,7 @@ func TestCreate_WarnsAboutASpanningTreeForwardDelayAndStillCreatesTheVM(t *testi
 }
 
 func TestCreate_BridgeModeValidatesTheBridgeAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
@@ -591,6 +606,7 @@ func TestCreate_NATModeRecordsTheNetworkAndNoBridge(t *testing.T) {
 }
 
 func TestCreate_RefusesBridgeModeWithNoBridge(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -604,6 +620,7 @@ func TestCreate_RefusesBridgeModeWithNoBridge(t *testing.T) {
 }
 
 func TestCreate_RejectsAPrivateKeyBeforeChangingAnything(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createEnv(t)
 	fake := createHost(t)
 	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
@@ -624,6 +641,7 @@ func TestCreate_RejectsAPrivateKeyBeforeChangingAnything(t *testing.T) {
 }
 
 func TestCreate_RejectsCloudInitDataCloudInitWouldIgnore(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	extra := filepath.Join(t.TempDir(), "extra.yaml")
 	if err := os.WriteFile(extra, []byte("packages:\n  - ripgrep\n"), 0o600); err != nil {
@@ -640,6 +658,7 @@ func TestCreate_RejectsCloudInitDataCloudInitWouldIgnore(t *testing.T) {
 }
 
 func TestCreate_MergesOperatorCloudInitData(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	extra := filepath.Join(t.TempDir(), "extra.yaml")
 	if err := os.WriteFile(extra, []byte("#cloud-config\npackages:\n  - ripgrep\n"), 0o600); err != nil {
@@ -665,6 +684,7 @@ func TestCreate_MergesOperatorCloudInitData(t *testing.T) {
 }
 
 func TestCreate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	configPath := filepath.Join(t.TempDir(), "opencode.json")
 	contents := `{"$schema":"https://opencode.ai/config.json","permission":{"bash":"ask"}}`
@@ -692,6 +712,7 @@ func TestCreate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
 }
 
 func TestCreate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	configPath := filepath.Join(t.TempDir(), "opencode.json")
 	if err := os.WriteFile(configPath, []byte("permission:\n  bash: allow\n"), 0o600); err != nil {
@@ -710,6 +731,7 @@ func TestCreate_RejectsAnOpencodeConfigThatIsNotJSON(t *testing.T) {
 }
 
 func TestCreate_RejectsAMissingOpencodeConfig(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	missing := filepath.Join(t.TempDir(), "opencode.json")
 
@@ -728,6 +750,7 @@ func TestCreate_RejectsAMissingOpencodeConfig(t *testing.T) {
 }
 
 func TestCreate_PassesVirtInstallArgumentsThrough(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -742,6 +765,7 @@ func TestCreate_PassesVirtInstallArgumentsThrough(t *testing.T) {
 }
 
 func TestCreate_MaxMemoryReachesVirtInstallAndTheVMRecord(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -770,6 +794,7 @@ func TestCreate_MaxMemoryReachesVirtInstallAndTheVMRecord(t *testing.T) {
 }
 
 func TestCreate_RejectsAMaxMemoryBelowTheBootMemory(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -786,6 +811,7 @@ func TestCreate_RejectsAMaxMemoryBelowTheBootMemory(t *testing.T) {
 }
 
 func TestCreate_WithoutMaxMemoryRecordsNoCeiling(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -802,6 +828,7 @@ func TestCreate_WithoutMaxMemoryRecordsNoCeiling(t *testing.T) {
 }
 
 func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := createHost(t)
 
@@ -825,6 +852,7 @@ func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 }
 
 func TestCreate_JSONOutputIsTheVMRecord(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 
 	var stdout, stderr bytes.Buffer

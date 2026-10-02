@@ -25,6 +25,7 @@ const (
 )
 
 func TestEnsureNAT_DefinesStartsAndAutostartsAMissingNetwork(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\n"}).
 		Respond(listActive, hostexec.FakeResponse{Stdout: "default\n"})
@@ -47,6 +48,7 @@ func TestEnsureNAT_DefinesStartsAndAutostartsAMissingNetwork(t *testing.T) {
 }
 
 func TestEnsureNAT_DoesNotRedefineANetworkThatIsAlreadyRunning(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"}).
 		Respond(listActive, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"})
@@ -63,6 +65,7 @@ func TestEnsureNAT_DoesNotRedefineANetworkThatIsAlreadyRunning(t *testing.T) {
 }
 
 func TestEnsureNAT_StartsANetworkThatIsDefinedButInactive(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
 		Respond(listActive, hostexec.FakeResponse{Stdout: "\n"})
@@ -82,6 +85,7 @@ func TestEnsureNAT_StartsANetworkThatIsDefinedButInactive(t *testing.T) {
 }
 
 func TestEnsureNAT_TouchesOnlyTheNetworkItManages(t *testing.T) {
+	t.Parallel()
 	// The tool must never modify or delete a network it did not create.
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\nlibvirt-routed\n"}).
@@ -104,6 +108,7 @@ func TestEnsureNAT_TouchesOnlyTheNetworkItManages(t *testing.T) {
 }
 
 func TestEnsureNAT_RejectsAnInvalidNetworkName(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake()
 
 	err := EnsureNAT(context.Background(), fake, "qemu:///system", "../../etc/passwd", xmlDir{t.TempDir()})
@@ -116,6 +121,7 @@ func TestEnsureNAT_RejectsAnInvalidNetworkName(t *testing.T) {
 }
 
 func TestRenderNAT_ProducesLibvirtStandardNATOnly(t *testing.T) {
+	t.Parallel()
 	xml, err := RenderNAT("agent-vm-nat")
 	if err != nil {
 		t.Fatalf("RenderNAT: %v", err)
@@ -142,6 +148,7 @@ func TestRenderNAT_ProducesLibvirtStandardNATOnly(t *testing.T) {
 }
 
 func TestRenderNAT_RejectsANameThatWouldNeedEscaping(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{`net"><forward mode="bridge`, "net with spaces", "../escape", ""} {
 		if _, err := RenderNAT(name); err == nil {
 			t.Errorf("RenderNAT(%q) = nil, want an error", name)
@@ -153,6 +160,7 @@ func TestRenderNAT_RejectsANameThatWouldNeedEscaping(t *testing.T) {
 // firewall checks depend on: the device is virbr1 here, not virbr0, which is
 // exactly why it is asked for rather than assumed.
 func TestNATBridge_ReadsTheDeviceLibvirtAllocated(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"}).
 		Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat",
@@ -170,6 +178,7 @@ func TestNATBridge_ReadsTheDeviceLibvirtAllocated(t *testing.T) {
 // A network that has never been created has no bridge, and that is the normal
 // state of a fresh host rather than an error.
 func TestNATBridge_ReportsNoBridgeForAnUndefinedNetwork(t *testing.T) {
+	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\n"})
 

@@ -34,6 +34,7 @@ func withGitHub(fake *hostexec.Fake, keyID string) *hostexec.Fake {
 }
 
 func TestCreate_AddsTheGuestGeneratedKeyToGitHub(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := withGitHub(createHost(t), "119548016")
 
@@ -74,6 +75,7 @@ func TestCreate_AddsTheGuestGeneratedKeyToGitHub(t *testing.T) {
 // is normally still missing when SSH first answers. create has to wait for it
 // rather than fail on the first read.
 func TestCreate_WaitsForTheGuestToGenerateItsKey(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := withGitHub(createHost(t), "119548016")
 
@@ -106,6 +108,7 @@ func TestCreate_WaitsForTheGuestToGenerateItsKey(t *testing.T) {
 }
 
 func TestCreate_WithoutTheFlagTouchesGitHubAtAll(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := withGitHub(createHost(t), "119548016")
 
@@ -125,6 +128,7 @@ func TestCreate_WithoutTheFlagTouchesGitHubAtAll(t *testing.T) {
 // The key only exists inside the guest, so a create that never waits for the
 // guest cannot read it. That is a usage error, not a silent no-op.
 func TestCreate_RejectsGitHubSSHKeyWithoutWaitingForSSH(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := withGitHub(createHost(t), "119548016")
 
@@ -140,6 +144,7 @@ func TestCreate_RejectsGitHubSSHKeyWithoutWaitingForSSH(t *testing.T) {
 // gh failing is not the VM failing: the VM is usable and stays, and the error
 // says what did not happen.
 func TestCreate_AGitHubFailureLeavesTheVMInPlace(t *testing.T) {
+	t.Parallel()
 	stateDir, keyPath := createEnv(t)
 	fake := withGitHub(createHost(t), "119548016")
 	fake.RespondPrefix("gh api --method POST user/keys", hostexec.FakeResponse{
@@ -174,6 +179,7 @@ func createdVMWithGitHubKey(t *testing.T, name string) string {
 }
 
 func TestDestroy_RemovesTheGitHubKeyItAdded(t *testing.T) {
+	t.Parallel()
 	stateDir := createdVMWithGitHubKey(t, "agent-01")
 	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
 
@@ -192,6 +198,7 @@ func TestDestroy_RemovesTheGitHubKeyItAdded(t *testing.T) {
 // Removing the key is opt-in, so a destroy without the flag has to say that the
 // key is still on the account rather than leave it there silently.
 func TestDestroy_WithoutTheFlagSaysTheKeyRemains(t *testing.T) {
+	t.Parallel()
 	stateDir := createdVMWithGitHubKey(t, "agent-01")
 	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
 
@@ -210,6 +217,7 @@ func TestDestroy_WithoutTheFlagSaysTheKeyRemains(t *testing.T) {
 }
 
 func TestDestroy_AKeyAlreadyRemovedOnGitHubIsNotAFailure(t *testing.T) {
+	t.Parallel()
 	stateDir := createdVMWithGitHubKey(t, "agent-01")
 	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
 	fake.RespondPrefix("gh api --method DELETE", hostexec.FakeResponse{
@@ -229,6 +237,7 @@ func TestDestroy_AKeyAlreadyRemovedOnGitHubIsNotAFailure(t *testing.T) {
 // A gh failure has to stop the destroy while the record that names the key is
 // still there, or the key would be orphaned on the account.
 func TestDestroy_AGitHubFailureLeavesTheVMAlone(t *testing.T) {
+	t.Parallel()
 	stateDir := createdVMWithGitHubKey(t, "agent-01")
 	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
 	fake.RespondPrefix("gh api --method DELETE", hostexec.FakeResponse{
@@ -249,6 +258,7 @@ func TestDestroy_AGitHubFailureLeavesTheVMAlone(t *testing.T) {
 }
 
 func TestDestroy_GitHubSSHKeyOnAVMThatHasNoneIsNotFound(t *testing.T) {
+	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
 
