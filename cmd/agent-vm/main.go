@@ -1,4 +1,4 @@
-// Command agent-vm creates and manages short-lived QEMU/KVM virtual machines
+// Command agent-vm is SnapHop Agent VM: short-lived QEMU/KVM virtual machines
 // for AI coding agents.
 //
 // This file is deliberately thin: it wires up signal handling and turns the

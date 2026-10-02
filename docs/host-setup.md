@@ -1,6 +1,6 @@
 # Host Setup
 
-How to prepare a Linux host to run agent VMs, and how to diagnose one that
+How to prepare a Linux host to run SnapHop Agent VM, and how to diagnose one that
 cannot. Install packages and configure host permissions, bridges, and firewall
 rules yourself. `agent-vm` manages its own storage, domains, and libvirt NAT
 network; it does not reconfigure your existing host bridges or firewall rules.

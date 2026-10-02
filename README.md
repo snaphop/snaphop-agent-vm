@@ -1,9 +1,10 @@
-# snaphop-agent-vm
+# SnapHop Agent VM
 
 [![Check](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml/badge.svg)](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml)
 
-Disposable QEMU/KVM virtual machines for AI coding agents, built from OCI
-container images and managed through libvirt.
+SnapHop Agent VM creates disposable QEMU/KVM virtual machines for AI coding
+agents, built from OCI container images and managed through libvirt. The
+command is `agent-vm`.
 
 An agent that can run arbitrary commands should not run them on your laptop. The
 `agent-vm` command gives each agent task its own VM: full root access, a real

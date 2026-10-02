@@ -9,7 +9,8 @@
 
 ## 1. Project Overview
 
-- **Name:** `snaphop-agent-vm`
+- **Name:** SnapHop Agent VM. The command is `agent-vm`. The repository and Go
+  module stay `github.com/snaphop/snaphop-agent-vm`.
 - **What it does:** Creates and manages short-lived QEMU/KVM virtual machines on
   a Linux host — via libvirt — so AI coding agents get a disposable
   machine with root access and NAT networking by default instead of

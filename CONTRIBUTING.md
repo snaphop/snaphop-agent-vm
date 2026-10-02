@@ -1,6 +1,6 @@
 # Contributing
 
-This project is designed for collaboration between humans and AI coding agents.
+SnapHop Agent VM is designed for collaboration between humans and AI coding agents.
 Both follow the same repository rules and quality bar.
 
 ## Prerequisites

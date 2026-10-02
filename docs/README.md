@@ -1,5 +1,7 @@
 # Documentation
 
+Documentation for SnapHop Agent VM.
+
 - [`cli.md`](./cli.md) — the canonical `agent-vm` command-line contract:
   subcommands, flags, defaults, configuration, exit codes, and state layout.
 - [`architecture.md`](./architecture.md) — system overview, components, data

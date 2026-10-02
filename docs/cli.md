@@ -1,9 +1,9 @@
 # CLI Contract
 
-> This is the canonical reference for the `agent-vm` command line. It is a
-> public contract: subcommands, flags, defaults, JSON output fields, and exit
-> codes are consumed by humans, scripts, and agent supervisors. Changing any of
-> them is a contract change under `AGENTS.md` §8.
+> This is the canonical reference for SnapHop Agent VM, the `agent-vm`
+> command line. It is a public contract: subcommands, flags, defaults, JSON
+> output fields, and exit codes are consumed by humans, scripts, and agent
+> supervisors. Changing any of them is a contract change under `AGENTS.md` §8.
 >
 > The implementation must match this document. If they disagree, one of the two
 > is a bug — fix them together in the same change.

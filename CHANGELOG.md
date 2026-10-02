@@ -38,6 +38,8 @@ existing overlays.
 
 ### Changed
 
+- The official name is SnapHop Agent VM. The command is still `agent-vm`, and
+  the repository is still <https://github.com/snaphop/snaphop-agent-vm>.
 - The source repository is <https://github.com/snaphop/snaphop-agent-vm>,
   released under the MIT License (copyright 2026 SnapHop). The Go module path
   is `github.com/snaphop/snaphop-agent-vm`. A checkout that still imports

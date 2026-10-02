@@ -6,8 +6,8 @@
 
 ## Context
 
-This project (`snaphop-agent-vm`, shipping the `agent-vm` command) solves one
-problem: an AI coding agent needs a machine it can break. Running an agent
+SnapHop Agent VM (the `agent-vm` command) solves one problem: an AI coding
+agent needs a machine it can break. Running an agent
 directly on a developer's host means every command it
 runs — installs, `sudo`, network calls, file deletion — happens on a machine with
 real credentials and real data on it. Containers reduce the risk but share the

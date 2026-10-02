@@ -369,7 +369,9 @@ func TestRun_GlobalHelpPrintsUsageAndExitsZero(t *testing.T) {
 	if code != ExitOK {
 		t.Errorf("exit code = %d, want %d:\n%s", code, ExitOK, stderr)
 	}
-	if !strings.Contains(stderr, "Commands:") || !strings.Contains(stderr, "--dry-run") {
-		t.Errorf("stderr is not the usage message:\n%s", stderr)
+	for _, want := range []string{"SnapHop Agent VM", "Commands:", "--dry-run", "agent-vm [global flags]"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not carry %q:\n%s", want, stderr)
+		}
 	}
 }

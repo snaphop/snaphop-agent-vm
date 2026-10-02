@@ -679,7 +679,7 @@ func (a *App) printVersions(ctx context.Context) error {
 }
 
 func (a *App) printUsage() {
-	_, _ = fmt.Fprintf(a.Stderr, `agent-vm — disposable QEMU/KVM virtual machines for AI coding agents
+	_, _ = fmt.Fprintf(a.Stderr, `SnapHop Agent VM — disposable QEMU/KVM virtual machines for AI coding agents
 
 Usage:
   agent-vm [global flags] <command> [arguments] [flags]
