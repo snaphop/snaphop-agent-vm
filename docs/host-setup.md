@@ -71,7 +71,8 @@ Optional, and only for `--github-ssh-key` on `create` and `destroy`: the GitHub
 CLI, `gh` (`apt install gh`, `dnf install gh`, `pacman -S github-cli`), logged in
 with `gh auth login`. Every other command works without it.
 
-Minimum versions, all checked by `agent-vm doctor`:
+Required minimum versions (`doctor` probes `virsh` and `qemu-img`; it does
+not separately enforce the connected libvirt daemon or QEMU emulator version):
 
 | Tool | Minimum | Provides |
 |---|---|---|
@@ -129,6 +130,13 @@ toolchains, browsers, and agent tooling and need substantially more space than
 a minimal distro image. Allow additional space for build intermediates and
 whatever guests write; measure cached artifacts with `agent-vm image list` and
 `du -sh ~/.local/share/agent-vm/images`. Slim images omit the agent tooling.
+
+Guest package updates do not change the kernel used for direct boot: that
+kernel and initramfs live beside the cached base disk on the host. Before
+rebuilding a base with `agent-vm image build <distro> --force`, destroy VMs
+that depend on it, then create replacement VMs from the rebuilt image. The
+rebuild replaces artifacts at the same paths and does not refuse an in-use
+base; existing overlays cannot safely keep using it.
 
 Building a base image also leaves images in **podman's** storage, which is
 separate from the state directory and is not counted by anything `agent-vm`
@@ -308,16 +316,18 @@ every outbound connection.
 
 Two things about the route rule are worth knowing before you rely on it.
 
-**The bridge name is allocated, not configured.** The network definition
-deliberately leaves the bridge device unnamed so that libvirt picks one and two
-networks cannot collide on it. Which `virbrN` you get depends on what else
-exists on the host when the network is first started, so it is not stable
-across hosts, and **it can change on the same host** if the network is
-undefined and redefined, or if another `virbr` interface appears first. All six
+**The bridge name is allocated and stored in the network definition.** The
+network definition deliberately leaves the bridge device unnamed so that
+libvirt picks one and two networks cannot collide on it. Which `virbrN` you
+get depends on what else exists when the network is defined, so it differs
+across hosts. Libvirt preserves it across starts of that definition. **It can
+change on the same host** if the network is undefined and redefined and its
+old name is no longer available. See [libvirt's bridge
+definition](https://libvirt.org/formatnetwork.html#connectivity). All six
 rules above are pinned to the name, so they stop matching together — and the
-guest regresses all the way back to having no address, not just to the hang. If
-anything about a VM's networking breaks after the NAT network was recreated,
-re-check the bridge name before anything else:
+guest regresses all the way back to having no address, not just to the hang.
+If anything about a VM's networking breaks after the NAT network was
+recreated, re-check the bridge name before anything else:
 
 ```bash
 virsh -c qemu:///system net-info agent-vm-nat | grep Bridge
@@ -622,11 +632,12 @@ A non-standard port goes in the URI too:
 
 ### What `doctor` cannot tell you from here
 
-The hypervisor's firewall (§5) and whether its QEMU account can reach its state
-directory (§4) both need that machine's configuration files and passwd database.
-Those two checks report `skip` from the client. If guests boot but their outbound
-connections hang, or a `create` fails with a permission error on the overlay, run
-`agent-vm doctor` on the hypervisor itself.
+The hypervisor's firewall (§5) and whether its QEMU account can reach its
+state directory (§4) both need that machine's configuration files and passwd
+database. The two firewall checks and the state directory access check report
+`skip` from the client. If guests boot but their outbound connections hang, or
+a `create` fails with a permission error on the overlay, run `agent-vm doctor`
+on the hypervisor itself.
 
 ### Verifying
 

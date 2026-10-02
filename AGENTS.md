@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > **Canonical instruction file for AI coding agents working in this repository.**
-> Tool-specific files (`CLAUDE.md`, `GEMINI.md`, `.cursor/rules/`,
+> When present, tool-specific files (`CLAUDE.md`, `GEMINI.md`, `.cursor/rules/`,
 > `.windsurf/rules/`, `.github/copilot-instructions.md`) defer here. If
 > anything conflicts, this file wins.
 
@@ -73,10 +73,11 @@ saying why the tool could not be used).
 
 Compatibility constraints agents could otherwise discover only by breaking
 them: the CLI surface, the on-disk state layout under the state directory, the
-`vm.json`/`manifest.json` files, and the generated libvirt domain XML are public
-contracts (see §8). Base images built by an older version must remain bootable
-by a newer one, or the manifest schema version must be raised and a rebuild
-path documented.
+`vm.json`/`manifest.json` files, and the generated `virt-install` argument
+vector and cloud-init user-data are public contracts (see §8). The resulting
+domain XML is captured as a record, not maintained as an exact XML contract.
+Base images built by an older version must remain bootable by a newer one, or
+the manifest schema version must be raised and a rebuild path documented.
 
 For work covering a complete issue queue or the complete documentation set,
 use the repository-local workflow under `.agents/skills/` for bugs,

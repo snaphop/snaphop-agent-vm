@@ -14,7 +14,7 @@ thrown away when the task is done.
 > **Status: implementation in progress.** Every command in the documented
 > contract is implemented — `doctor`, `image build`/`list`/`inspect`/`rm`,
 > `create`, `list`, `info`, `start`, `stop`, `restart`, `ssh`, `update`,
-> `console`, `destroy`, and `completion` — and the integration suite has built and booted
+> `console`, `destroy`, `licenses`, and `completion` — and the integration suite has built and booted
 > all three supported distros on a real KVM host, in **both** network modes:
 > the full lifecycle has been run for each distro under NAT and against a real
 > host bridge. What remains is hardening rather than missing commands.
@@ -124,6 +124,13 @@ A slim image is a separate base image with its own cache directory, manifest,
 and name, so `ubuntu` and `ubuntu-slim` can be cached side by side and are
 built and removed independently.
 
+Each family also has a **Nix** variant (`ubuntu-nix`, `fedora-nix`,
+`arch-nix`). It keeps the distro boot layer and takes most guest tooling from
+one shared Nix expression. Codex and a small set of mise-managed tools remain
+outside that expression. The nixpkgs revision follows a moving branch until
+explicitly pinned; see [Nix images](./docs/cli.md#nix-images) for the tool
+differences and update procedure.
+
 ## What A VM Comes With
 
 A base image is not a bare distro: it carries the tools an agent expects to
@@ -177,6 +184,10 @@ agent-vm create ◄────────────────────�
 running VM ──► NAT network or host bridge      (virsh from here on)
 ```
 
+Guest package updates do not replace the host-side kernel used at boot. To
+use a newer kernel, destroy VMs that depend on the base image, rebuild that
+image, and create replacement VMs.
+
 Full detail, including failure behavior and trust boundaries, is in
 [`docs/architecture.md`](./docs/architecture.md).
 
@@ -201,7 +212,7 @@ make per-task VMs practical
 Two consequences worth knowing:
 
 ```bash
-# See exactly what would run, without running it
+# Print planned mutations; read-only checks may still run
 agent-vm create agent-05 --dry-run
 
 # Everything is an ordinary libvirt domain, so normal tooling works

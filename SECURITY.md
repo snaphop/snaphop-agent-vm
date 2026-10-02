@@ -380,8 +380,12 @@ section named here.
 - Scan or otherwise decide the trust of anything the guest will run. This tool
   isolates the guest from the host. It does not decide that a file inside the
   guest is safe.
-- Use bridged networking only when the guest is meant to be on that LAN. NAT is
-  the mode that keeps the guest off the LAN.
+- Use bridged networking only when the guest is meant to be directly reachable
+  on that LAN. NAT blocks unsolicited LAN connections to the guest, but permits
+  guest-initiated access to the host, LAN, and other guests. Apply the
+  [host firewall policy](./docs/host-setup.md#host-firewalls-and-the-virbrn-bridge)
+  your workloads require before running untrusted guests; NAT alone does not
+  satisfy host-service or LAN isolation requirements.
 - A `qemu+ssh://` URI grants command execution as that account on that host.
   Use it only against a hypervisor the operator is willing to administer.
 - Destroy the VM when the task is done. The overlay, the seed, and

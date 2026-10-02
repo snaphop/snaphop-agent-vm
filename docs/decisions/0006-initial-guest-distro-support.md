@@ -4,7 +4,9 @@ Date: 2026-08-17
 
 ## Status
 
-Accepted
+Accepted. Extended by
+[ADR-0012](./0012-nix-provided-guest-tooling.md), which adds a Nix tooling
+variant alongside each family's full and slim images.
 
 ## Context
 

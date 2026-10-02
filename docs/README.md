@@ -25,6 +25,7 @@ Documentation for SnapHop Agent VM.
 | [0009](./decisions/0009-orchestrate-existing-host-cli-tools.md) | Orchestrate existing host CLI tools instead of reimplementing them (amends 0002, 0008) |
 | [0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md) | Drive a remote hypervisor by running host tools over ssh |
 | [0011](./decisions/0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md) | Build the cloud-init seed and attach it as a virtio disk (narrows 0009) |
+| [0012](./decisions/0012-nix-provided-guest-tooling.md) | Provide guest tooling through Nix as a third image variant |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.
