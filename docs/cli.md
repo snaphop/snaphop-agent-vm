@@ -138,6 +138,11 @@ user     = "agent"
 ssh_keys = ["~/.ssh/id_ed25519.pub"]
 ```
 
+Local default paths honor `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when set.
+For a remote hypervisor, an unset state directory uses that account's
+`~/.local/share/agent-vm`. Explicit paths beginning with `~` expand against
+the **client** home directory, so use absolute remote paths.
+
 ### Environment Variables
 
 | Variable | Equivalent to |
@@ -159,8 +164,9 @@ ssh_keys = ["~/.ssh/id_ed25519.pub"]
 
 ### `agent-vm doctor`
 
-Checks that the host can run VMs and reports each check as pass/fail with a
-remedy. Exits `0` only if every required check passes.
+Checks host readiness and reports each check as `pass`, `warn`, `fail`, or
+`skip`, with a remedy where needed. Exits `0` when no check reports `fail`;
+warnings and skipped checks do not establish that every prerequisite is met.
 
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is not a `/session` one;
@@ -285,8 +291,11 @@ skipped for a [remote hypervisor](#remote-hypervisors), whose accounts and
 directory permissions cannot be judged from here. Because it only
 inspects the filesystem it still runs under `--dry-run`.
 
-It also verifies every tool this project delegates to, against its minimum
-version:
+It checks helper versions against the floors below. `virsh --version` and
+`qemu-img --version` are the version probes for libvirt and QEMU; the
+connection check runs `virsh version` but does not separately enforce the
+connected daemon or emulator version. Keep those components above the stated
+floors too. An unreadable helper version is reported as a warning.
 
 | Tool | Minimum |
 |---|---|
@@ -305,8 +314,8 @@ agent-vm doctor --output json
 ### `agent-vm image build <distro>[-slim|-nix][:<tag>]`
 
 Builds (or rebuilds) the cached base image for a distro. `<distro>` is a
-supported family — `ubuntu`, `fedora`, or `arch` — or that family's slim
-variant, named `<family>-slim` (see “Slim images” below). Each step is an existing
+supported family — `ubuntu`, `fedora`, or `arch` — or that family's
+`<family>-slim` or `<family>-nix` variant (see below). Each step is an existing
 tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
 (kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`,
@@ -340,7 +349,7 @@ built. `create` builds a missing image the same way and reports it the same way.
 |---|---|---|
 | `--from <ref>` | distro's default source tag | Override the source OCI reference. |
 | `--force` | off | Rebuild even if this image name and tag are already cached. Without it, the cache is returned without checking the source again. |
-| `--platform <os/arch>` | host platform | Image platform to pull. |
+| `--platform <os/arch>` | platform of the machine running `agent-vm` | Image platform to pull. Set explicitly when driving a hypervisor with a different architecture; prebuild the image before `create`, which has no platform flag. |
 
 Building is the only operation that requires network access to a registry. It is
 safe to run concurrently for different distros, and a second build of the same
@@ -385,9 +394,9 @@ mise (ADR-0012).
 
 The point is that the expression is written once and means the same thing on
 all three families, where the full recipes state the same tool set in `apt`,
-`dnf` and `pacman` separately. Pick a nix image when you want the tooling
-pinned and identical across distros, or when you want to change the tool set by
-editing one file.
+`dnf` and `pacman` separately. Pick a nix image when you want to manage the
+tool set in one file and optionally pin its nixpkgs-provided versions across
+distros.
 
 A nix guest carries the common Linux tooling, the language toolchains (Go,
 Rust, Node.js, Python, the JDK and Maven, `golangci-lint`), `gh`, `tea`,
@@ -408,22 +417,33 @@ because nixpkgs packages none of them. `agy` is mise's registry name for the
 Antigravity CLI; `grok` is `npm:@xai-official/grok` on the Node runtime the
 nix profile already provides. mise installs no toolchain and no runtime, so
 there is never a question of which copy of Go or Node a guest is running.
-Their versions are the one part of a nix image the nixpkgs pin does not cover.
+The nixpkgs pin does not cover these tools, Codex, the Nix installer, or
+the packages installed by the distro package manager.
+
+The shared Nix expression does not provide the `cf` or `playwright` CLI,
+or Python `pip`. They include the Playwright browser artifacts in a read-only
+Nix store, exposed through `/opt/ms-playwright`, and the `chromium` wrapper.
+The full-image instructions for updating browsers in that directory do not
+apply to this variant.
 
 Nix is installed multi-user, so any account in the guest can `nix profile
 install` for itself. What the image shipped lives in one profile every account
 shares, `/nix/var/nix/profiles/default`, which is on the default `PATH`.
 
-`agent-vm update` updates a nix guest's distro packages as it does any other,
-and skips the mise, codex and rustup steps that have nothing to act on. The
-tooling the nix profile holds is fixed by the expression the image was built
-from — to change it, edit `agent-tools.nix` and run `agent-vm image build
-<distro>-nix --force`.
+`agent-vm update` updates a nix guest's distro packages, mise itself, its
+mise-managed tools (`pi`, `herdr`, `agy`, and `grok`), and Codex. It skips
+rustup because the image does not install it. The tooling the nix profile
+holds is fixed by the expression the image was built from — to change it, edit
+`agent-tools.nix`, rebuild and install the `agent-vm` binary (the expression
+is embedded), then rebuild the base image with `agent-vm image build
+<distro>-nix --force`. Destroy dependent VMs before rebuilding the base, and
+create replacements afterwards.
 
-The nixpkgs the expression fetches is what decides which versions a guest gets.
-It ships following a release branch, which moves; `scripts/pin-nixpkgs.sh`
-resolves it to an exact revision and hash, after which two builds of the same
-image and tag install the same versions.
+The nixpkgs the expression fetches is what decides which versions a guest
+gets. It ships following a release branch, which moves;
+`scripts/pin-nixpkgs.sh` resolves it to an exact revision and hash, after
+which the nixpkgs-provided packages use the same versions for the same
+architecture. This does not pin the other installers or distro packages.
 
 A nix image is a separate base image, like a slim one: its own cache directory
 (`images/ubuntu-nix/24.04/`), its own manifest, and its own name in `image
@@ -456,7 +476,13 @@ changes what every script that SSHes into these VMs can assume.
 
 #### Guest tooling
 
-Beyond the packages that make a container image boot as a VM, every base image
+The table and installation details below describe **full images**. Slim
+images keep the common Linux packages but omit the agent and service tooling;
+Nix images use the different sources and interfaces described above. Slim
+images include `tmux` but do not install the custom session menu, tmux
+configuration, or per-account setup service.
+
+Beyond the packages that make a container image boot as a VM, a full image
 carries the tools an agent working inside the guest expects to find already
 installed. They live in the base image rather than in per-VM cloud-init
 packages so `create` stays fast: the download is paid once per cached image
@@ -669,7 +695,7 @@ non-interactive `ssh <vm> mvn -version`. Use `ssh <vm> bash -lc 'mvn -version'`,
 or put that directory on the path in the script itself — the shims are ordinary
 executables, so unlike a shell function there is nothing to source.
 
-The three mise-installed agents are not reached that way: each has a symlink in
+The mise-installed agents are not reached that way: each has a symlink in
 `/usr/local/bin` pointing at the `mise` binary, which is itself a shim — it
 dispatches on the name it was called by and reads the calling account's own
 configuration — so `ssh <vm> claude -p '…'` works without a login shell.
@@ -812,7 +838,8 @@ feature and `/dev/kvm` works inside it; the base image sets `nested=1` for both
 KVM modules so a VM inside that VM can nest once more. This needs nested
 virtualization enabled on the **host** — see
 [host-setup.md](./host-setup.md) — and it is off on some hosts, in which case
-the nested VMs fall back to emulation and are slow rather than broken.
+nested `agent-vm` operations cannot use KVM and fail. Other VM tools may
+support software emulation, but `agent-vm` requests KVM explicitly.
 
 libvirt is enabled in the guest, so a nested `agent-vm create` finds a running
 daemon. The `dnsmasq` in the image is the binary libvirt starts per network; no
@@ -822,13 +849,14 @@ system-wide resolver is enabled, which would contend with those instances.
 
 The one-shot unit above also generates an `ed25519` key pair at
 `~/.ssh/id_ed25519` for every interactive account, on first boot, if that path
-does not already exist. It is generated inside the guest and never leaves it: no
-private key is ever placed in a base image or a cloud-init seed (see
-[SECURITY.md](../SECURITY.md)). An operator who supplies their own key through
-`--cloud-init` keeps it — an existing key is left alone. The public half is not
-added to `authorized_keys`; logging in still requires a key passed to
-`create`. `agent-vm create --github-ssh-key` adds the public half to your GitHub
-account, and `agent-vm destroy --github-ssh-key` removes it again.
+does not already exist. It is generated inside the guest and never leaves it:
+no private key is ever placed in a base image or a cloud-init seed (see
+[SECURITY.md](../SECURITY.md)). An existing key generated inside the guest is
+left alone. Host private keys must not be supplied through `--cloud-init` (see
+`SECURITY.md`). The public half is not added to `authorized_keys`; logging in
+still requires a key passed to `create`. `agent-vm create --github-ssh-key`
+adds the public half to your GitHub account, and `agent-vm destroy
+--github-ssh-key` removes it again.
 
 #### The tmux session menu
 
@@ -863,14 +891,15 @@ agent driving the VM uses. Set `AGENT_VM_NO_MENU=1` in the environment, or
 remove `/etc/profile.d/zz-agent-vm-tmux-menu.sh` through `--cloud-init`, to get
 a plain shell at every login.
 
-Every base image also ships a tmux configuration at `~/.tmux.conf` for root and
-for the login user cloud-init creates: mouse mode and a large scrollback, vi
-copy-mode keys, `|` and `-` for splits, new windows and panes opening in the
-current pane's directory, and no status bar. It is installed into `/etc/skel`
-and `/root`, so an operator can replace it per VM with their own `--cloud-init`
-file without rebuilding the image. The clipboard bindings pipe to `xclip` or
-`pbcopy`, neither of which is present in a headless guest; the selection still
-reaches tmux's own paste buffer, so copy and paste work inside tmux.
+Full and Nix base images also ship a tmux configuration at `~/.tmux.conf` for
+root and for the login user cloud-init creates: mouse mode and a large
+scrollback, vi copy-mode keys, `|` and `-` for splits, new windows and panes
+opening in the current pane's directory, and no status bar. It is installed
+into `/etc/skel` and `/root`, so an operator can replace it per VM with their
+own `--cloud-init` file without rebuilding the image. The clipboard bindings
+pipe to `xclip` or `pbcopy`, neither of which is present in a headless guest;
+the selection still reaches tmux's own paste buffer, so copy and paste work
+inside tmux.
 
 Base images built before this tooling was added remain valid and bootable; they
 simply lack these packages. Run `agent-vm image build <distro> --force` to
@@ -908,10 +937,10 @@ and must not already exist.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`) or `-nix` (`ubuntu-nix`) to the family for that variant. |
-| `--vcpus <n>` | `2` | Virtual CPUs. |
-| `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`). |
+| `--vcpus <n>` | `2` | Virtual CPUs, from 1 to 255. |
+| `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
-| `--disk <size>` | `50G` | Virtual root disk size (thin overlay). |
+| `--disk <size>` | `50G` | Virtual root disk size (thin overlay), from `1G` to `8T`. |
 | `--network <nat\|bridge>` | `nat` | Network mode. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
 | `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
@@ -926,7 +955,7 @@ and must not already exist.
 On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
 
-`create` is transactional. If a step through "define and start" fails, the tool
+`create` is transactional. If a step through recording `vm.json` fails, the tool
 removes the domain, the overlay, the generated seed, and the state directory
 it created, and reports both the original failure and any cleanup problem.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
@@ -971,7 +1000,8 @@ Constraints, all of which are checked before anything on the host changes:
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.
 
-The one deliberate exception is the guest-boot wait: a `--wait-for-ssh` timeout
+After the VM is recorded, boot-wait and GitHub registration failures retain
+it for inspection. A `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
 `agent-vm destroy <name>` once you have looked.
@@ -1043,11 +1073,14 @@ $ agent-vm create build-01 && agent-vm stop build-01
 
 #### `--github-ssh-key`
 
-Every VM generates its own `ed25519` key pair on first boot (see [Per-account
-SSH keys](#per-account-ssh-keys)). With `--github-ssh-key`, `create` reads the
-**public** half back over SSH once the guest is reachable and adds it to your
-GitHub account as an authentication key titled `agent-vm <name> on <host>`, so
-an agent in the VM can push without a key being pasted in by hand.
+Full and Nix images generate an `ed25519` key pair on first boot (see
+[Per-account SSH keys](#per-account-ssh-keys)). Slim images omit that setup
+service; using this flag with a slim image requires arranging key generation
+inside the guest yourself before the read times out. With `--github-ssh-key`,
+`create` reads the **public** half back over SSH once the guest is reachable
+and adds it to your GitHub account as an authentication key titled `agent-vm
+<name> on <host>`, so an agent in the VM can push without a key being pasted
+in by hand.
 
 `gh` runs on the host, with your existing login; no GitHub credential ever
 enters the guest, and the private key never leaves it. `gh auth status` is
@@ -1280,24 +1313,26 @@ unsupported shell, or no shell at all, exits `2`.
 
 ```bash
 # bash, for one user
+mkdir -p ~/.local/share/bash-completion/completions
 agent-vm completion bash > ~/.local/share/bash-completion/completions/agent-vm
 
 # zsh, into the first directory on $fpath (compinit must run in ~/.zshrc)
 agent-vm completion zsh > "${fpath[1]}/_agent-vm"
 
 # fish
+mkdir -p ~/.config/fish/completions
 agent-vm completion fish > ~/.config/fish/completions/agent-vm.fish
 ```
 
 Completion covers command and subcommand names, each command's own flags, the
 global flags, the values of flags whose set of values is closed (`--output`,
-`--network`, `--platform`), the supported distro families for `image build`,
-and — read from the state directory — the recorded VM names for `info`, `start`,
-`stop`, `restart`, `ssh`, `update`, `console`, and `destroy`, and the cached images for
-`image inspect`, `image rm`, and `--distro`. Where `agent-vm` offers nothing,
-the shell falls back to filenames, which is what `--config`, `--ssh-key`, and
-`--cloud-init` want. Nothing is offered after `--` in `agent-vm ssh <name> --`,
-because what follows runs in the guest.
+`--network`, `--platform`), the supported distro families and variants for
+`image build`, and — read from the state directory — the recorded VM names for
+`info`, `start`, `stop`, `restart`, `ssh`, `update`, `console`, and `destroy`,
+and the cached images for `image inspect`, `image rm`, and `--distro`. Where
+`agent-vm` offers nothing, the shell falls back to filenames, which is what
+`--config`, `--ssh-key`, and `--cloud-init` want. Nothing is offered after
+`--` in `agent-vm ssh <name> --`, because what follows runs in the guest.
 
 The scripts call `agent-vm __complete <word>...`, a hidden command that takes
 the words typed so far — the last being the word under the cursor — and prints
@@ -1350,7 +1385,7 @@ staying stable.
 | `2` | Usage error: unknown flag, bad argument, invalid name or size. |
 | `3` | Host not ready: no KVM, no libvirt connection, missing helper binary. |
 | `4` | Not found: unknown VM or base image. |
-| `5` | Conflict: VM already exists, image build already in progress, wrong state for the operation. |
+| `5` | Conflict: VM already exists or is locked, wrong state for the operation. Image builds wait for their image lock. |
 | `6` | Timeout: guest did not boot, become reachable, or shut down in time. |
 | `7` | Cleanup incomplete: an operation or its rollback left host state behind that needs attention. |
 

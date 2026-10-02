@@ -46,32 +46,6 @@ existing overlays.
   Merging still publishes nothing. Dependabot opens a weekly pull request for
   Go module updates and another for GitHub Actions updates.
 
-### Changed
-
-- **The GitHub Actions workflow for pull requests and pushes to `master` is
-  named Verify** (`.github/workflows/verify.yml`). It still runs
-  `scripts/check.sh`.
-
-- The official name is SnapHop Agent VM. The command is still `agent-vm`, and
-  the repository is still <https://github.com/snaphop/snaphop-agent-vm>.
-- The source repository is <https://github.com/snaphop/snaphop-agent-vm>,
-  released under the MIT License (copyright 2026 SnapHop). The Go module path
-  is `github.com/snaphop/snaphop-agent-vm`. A checkout that still imports
-  `git.snaphop.xyz/snaphop/snaphop-agent-vm` needs that import path updated
-  before it will build.
-
-### Security
-
-- **Vulnerability reports stay off the public tracker.** This repository is
-  public, so a suspected vulnerability is reported by email to
-  security@snaphop.com (wen@wensington.com also reaches the maintainers), not
-  by a GitHub issue, pull request, or discussion. `SECURITY.md` now states the
-  same fail-closed, credential, logging, and release boundaries in the form
-  used by the other SnapHop security policies, without changing the guest
-  isolation rules.
-
-### Added
-
 - **Grok CLI, and `agy` installed with mise.** Full and nix base images install
   `agy` with mise (`mise use -g agy`, mise's registry name for the Antigravity
   CLI) instead of Antigravity's installer script, and install xAI's CLI as
@@ -122,7 +96,10 @@ existing overlays.
   Which versions a nix guest gets is decided by the nixpkgs the file fetches.
   It ships following a release branch, which moves over time; run
   `scripts/pin-nixpkgs.sh` to lock it to an exact revision, after which two
-  builds of the same image install the same versions.
+  builds for the same architecture use the same nixpkgs-provided versions.
+  Distro packages, Codex, mise-managed tools, and the Nix installer remain
+  outside that pin. Rebuild the `agent-vm` binary after editing its embedded
+  expression, before rebuilding the images.
 
 - **Slim base images.** Every supported family now has a slim variant, named by
   appending `-slim` to the family: `agent-vm image build ubuntu-slim`,
@@ -194,7 +171,8 @@ existing overlays.
   names a path *on the hypervisor*; left unset it defaults to
   `~/.local/share/agent-vm` in the home directory of the account the URI names.
   `--dry-run` prints the `ssh` invocations it would run, transport and all.
-  See "Remote Hypervisors" in `docs/cli.md` and §9 of `docs/host-setup.md`.
+  See "Remote Hypervisors" in `docs/cli.md` and
+  [Driving This Host From Another Machine](./docs/host-setup.md#10-driving-this-host-from-another-machine).
 
 - `doctor` reports a remote hypervisor rather than the machine you ran it on:
   `/dev/kvm` and group membership are checked over the transport, and a new
@@ -775,6 +753,18 @@ existing overlays.
 
 ### Changed
 
+- **The GitHub Actions workflow for pull requests and pushes to `master` is
+  named Verify** (`.github/workflows/verify.yml`). It still runs
+  `scripts/check.sh`.
+
+- The official name is SnapHop Agent VM. The command is still `agent-vm`, and
+  the repository is still <https://github.com/snaphop/snaphop-agent-vm>.
+- The source repository is <https://github.com/snaphop/snaphop-agent-vm>,
+  released under the MIT License (copyright 2026 SnapHop). The Go module path
+  is `github.com/snaphop/snaphop-agent-vm`. A checkout that still imports
+  `git.snaphop.xyz/snaphop/snaphop-agent-vm` needs that import path updated
+  before it will build.
+
 - **A VM's first boot is about nine seconds shorter, and writes 1.7 GiB less to
   its disk.** The base images kept the whole `mise`-managed toolchain — the JDK,
   Maven, Node, Go, and the coding agents — in `/etc/skel`, so `useradd` copied
@@ -948,12 +938,33 @@ existing overlays.
   change keeps the old one — **run `agent-vm image build <distro> --force` to
   rebuild an image you want to grow VMs from.**
 
+### Security
+
+- **Vulnerability reports stay off the public tracker.** This repository is
+  public, so a suspected vulnerability is reported by email to
+  security@snaphop.com (wen@wensington.com also reaches the maintainers), not
+  by a GitHub issue, pull request, or discussion. `SECURITY.md` now states the
+  same fail-closed, credential, logging, and release boundaries in the form
+  used by the other SnapHop security policies, without changing the guest
+  isolation rules.
+
+- Documented the project's hard security boundaries in `SECURITY.md`: the guest
+  is untrusted, no host filesystem or credential reaches a VM by default, only
+  SSH public keys are injected, bridged networking (which removes the NAT
+  boundary) is always opt-in, and destructive operations are confined to state
+  this tool created.
+
 ### Removed
 
 - The template setup checklist (`docs/project-setup.md`), which no longer applies
   now that the repository is a real project; it became `docs/host-setup.md`.
 
 ### Fixed
+
+- Corrected the documentation for image variants and updates, Nix pinning,
+  remote image platforms, doctor checks, NAT isolation limits, and safe base
+  image rebuilds. Added the missing Nix ADR index entry and consolidated
+  duplicate changelog categories. Runtime behavior is unchanged.
 
 - `agent-vm update` can update `mise` again. Root's `mise self-update` was
   given `TMPDIR=/root/.cache/mise-tmp`, a directory no guest has, and `mise`
@@ -1275,14 +1286,6 @@ existing overlays.
   disappeared from both the text and JSON output for every VM that was actually
   in use. The tool now passes `-U`, which overrides the lock check while still
   opening the image read-only.
-
-### Security
-
-- Documented the project's hard security boundaries in `SECURITY.md`: the guest
-  is untrusted, no host filesystem or credential reaches a VM by default, only
-  SSH public keys are injected, bridged networking (which removes the NAT
-  boundary) is always opt-in, and destructive operations are confined to state
-  this tool created.
 
 ## [0.1.0] - 2026-08-17
 

@@ -89,6 +89,17 @@ Never run it against a libvirt host with VMs someone cares about, and never
 against a production host without explicit approval. It is not required for merge,
 which is exactly why unit and golden-file coverage matter.
 
+The default run builds the three full images (`-distros=ubuntu,fedora,arch`)
+and boots Ubuntu in NAT mode (`-lifecycle-distro=ubuntu`,
+`-lifecycle-network=nat`). It does not cover every variant or network mode.
+Select slim or Nix images explicitly with `-distros` for image checks and
+`-lifecycle-distro` for boot checks; repeat lifecycle tests for each image
+and use `-lifecycle-network=bridge -lifecycle-bridge=<existing-bridge>` to
+exercise bridged mode. Use `-lifecycle-state-dir` only for dedicated test
+state. The separate transport tests use `-remote-ssh` (default `localhost`);
+they skip when noninteractive SSH is unavailable. Report skipped tests as
+verification gaps.
+
 ## Pull Request Checklist
 
 - [ ] `gofmt -l .` is empty; `go vet ./...`, `golangci-lint run`, and

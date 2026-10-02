@@ -68,7 +68,7 @@ Add a **nix variant** of every supported family: `ubuntu-nix`, `fedora-nix`,
   enabled offline, so an unprivileged account in the guest can install packages
   without paying for it at first boot.
 
-Two deliberate exceptions, both documented in the recipes:
+Three deliberate exceptions, documented in the recipes:
 
 - **Docker and the nested virtualization stack stay on the distro's package
   manager.** Both are system daemons with kernel-side state and distro-owned
@@ -93,32 +93,35 @@ Two deliberate exceptions, both documented in the recipes:
 
 ## Consequences
 
-**The guest contract is unchanged.** A nix guest has the same coding agents as
+**The boot contract is unchanged.** A nix guest has the same coding agents as
 a full guest — `claude`, `codex`, `opencode`, `pi`, `agy`, and `grok` — and
-the per-account herdr servers, so nothing a script or supervisor can observe
-differs from a full guest. That is what the narrow mise exception buys, and it
-is why the exception exists: the alternative was an image whose boot always
-carried a failed unit.
+the per-account herdr servers, while tooling sources and interfaces differ as
+described below. That is what the narrow mise exception buys, and it is why
+the exception exists: the alternative was an image whose boot always carried a
+failed unit.
 
 **Reproducibility is better here than anywhere else in the project, but not
 yet complete.** `agent-tools.nix` ships following a nixpkgs release branch,
 which moves. `scripts/pin-nixpkgs.sh` resolves it to a commit revision and its
-`sha256`; once run, two builds of the same image name and tag install the same
-versions, which is a stronger guarantee than the full recipes can make — there
-the source digest is pinned but every package and tool version floats
-(ADR-0006). Until it is run, a nix rebuild is no more reproducible than any
-other.
+`sha256`; once run, the nixpkgs-provided packages use the same versions for a
+given architecture, which is a stronger guarantee than the full recipes can
+make — there the source digest is pinned but every package and tool version
+floats (ADR-0006). The pin does not cover distro packages, the Nix installer,
+Codex, or mise-managed tools. Until it is run, the nixpkgs package versions
+also float.
 
-**Updating a nix guest means rebuilding its image.** `agent-vm update` refreshes
-the distro packages as it does for any guest, and upgrades pi and herdr through
-mise, which is present. Its codex step runs, because codex is installed the same
-way here. Its rustup step is skipped, because a nix image ships `rustc` and
-`cargo` from nixpkgs and no `rustup` for the `Requires` probe to find — which is
-deliberate: that step is hard-coded to the shared `/usr/local/rustup` the full
-recipe creates, and a rustup in a nix guest would point it at a directory that
-does not exist.
-What the nix profile holds is fixed by the expression the image was built from,
-so changing it is an `image build --force`, not an in-guest update.
+**Updating a nix guest means rebuilding its image.** `agent-vm update`
+refreshes the distro packages as it does for any guest, and upgrades pi,
+herdr, agy, and grok through mise, which is present. Its codex step runs,
+because codex is installed the same way here. Its rustup step is skipped,
+because a nix image ships `rustc` and `cargo` from nixpkgs and no `rustup` for
+the `Requires` probe to find — which is deliberate: that step is hard-coded to
+the shared `/usr/local/rustup` the full recipe creates, and a rustup in a nix
+guest would point it at a directory that does not exist. What the nix profile
+holds is fixed by the expression the image was built from, so changing it
+requires rebuilding the `agent-vm` binary with the edited expression, then
+rebuilding the base image with `image build --force` after destroying
+dependent VMs. Create replacement VMs from that image.
 
 **Rust has no `rustup` in a nix guest.** `rustc`, `cargo`, `rustfmt` and
 `clippy` come from the pinned tree like every other toolchain, so `cargo build`
@@ -128,16 +131,18 @@ interface differs from the full image, and it is stated in `docs/cli.md`.
 
 **Image size.** A nix store carrying four toolchains and a browser is larger
 than the equivalent distro packages, because closures are complete and shared
-system libraries are not. The recipes run `nix-collect-garbage` and `nix-store
---optimise` to claw back what they can; the nix images are still the largest of
-the three variants.
+system libraries are not. The recipes run `nix-collect-garbage` to reclaim
+unused paths. `nix-store --optimise` was removed after it failed on container
+overlay filesystems (see the Nix build fix in [the
+changelog](../../CHANGELOG.md)); the nix images are still the largest of the
+three variants.
 
-**Three recipes became four per family.** The duplication this decision reduces
+**Two recipes became three per family.** The duplication this decision reduces
 is in the tooling layer; the boot layer is now stated three times instead of
 twice. That is the tradeoff the contract tests exist to make safe, and it is
 cheaper than the alternative: the boot blocks change rarely, and the tooling
 layer changes constantly.
 
-**A new host-side dependency, in the guest only.** Nothing new is required on
+**A guest dependency only.** Nothing new is required on
 the host: nix is downloaded and installed inside the container build, like mise
 and the vendor installers already are. `doctor` is unchanged.

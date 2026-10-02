@@ -25,8 +25,9 @@ Requirements that shape the design:
   makes image caching central.
 - **Disposability**: destroying a VM must reclaim everything it used, and
   creating one must never mutate a shared base image.
-- **Isolation by default**: no host filesystem, no host credentials, and no LAN
-  exposure unless explicitly asked for.
+- **Isolation by default**: no host filesystem or credentials are shared. NAT
+  blocks unsolicited LAN connections to guests; isolating host services and
+  outbound LAN access remains an operator firewall requirement.
 - **Operator legibility**: everything is standard libvirt/QEMU. An operator can
   `virsh list`, `virsh dumpxml`, and `virsh console` without this tool.
 
@@ -111,8 +112,10 @@ Trust boundaries, from most to least trusted:
 
 ### Task-To-Tool Map
 
-Every row is a thing we deliberately do **not** implement ourselves. Minimum
-versions are enforced by `agent-vm doctor`.
+Every row is a thing we deliberately do **not** implement ourselves. Helper
+version floors are checked by `agent-vm doctor`; the connected libvirt daemon
+and QEMU emulator are not version-enforced separately from `virsh` and
+`qemu-img`.
 
 | Task | Tool invoked |
 |---|---|
@@ -238,9 +241,11 @@ background worker. Long waits include image builds, the guest boot wait during `
   ([`cli.md`](./cli.md)).
 - **Public interface:** the guest contract — user name, `sudo` rights, and which
   services are expected up after first boot.
-- **Failure behavior:** a malformed user-data file is rejected before the VM is
-  defined. User-data contents are never logged, because operator-supplied data
-  may contain configuration the operator considers sensitive.
+- **Failure behavior:** unsupported user-data headers and invalid opencode
+  JSON are rejected before the VM is defined. Extra cloud-config YAML is not
+  fully parsed on the host; cloud-init reports YAML or module errors inside
+  the guest. User-data contents are never logged, because operator-supplied
+  data may contain configuration the operator considers sensitive.
 - **Compatibility constraints:** changing the guest user or its privileges breaks
   every script that SSHes into these VMs; treat it as a contract change.
 
@@ -486,7 +491,7 @@ One profile, parameterized:
 | libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session URIs are accepted only with NAT mode, but the host must support the managed libvirt NAT network; this is not a user-mode networking fallback. Bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
 | Network mode | `nat` (default), `bridge` | Bridge requires a pre-existing host bridge. |
 | State directory | user-local default, or a shared path | Operators using the same hypervisor account share locks and images. Cross-user access needs additional permissions; defaults are not group-writable. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
-| Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim` and `-nix` variants of each | Pinned by digest per base image. Each variant is a separate base image, cached and rebuilt independently of the others. A nix image additionally pins its tooling to one nixpkgs revision. |
+| Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim` and `-nix` variants of each | Pinned by digest per base image. Each variant is a separate base image, cached and rebuilt independently of the others. Nix tooling follows a moving nixpkgs branch until explicitly pinned with `scripts/pin-nixpkgs.sh`. |
 
 There are no feature flags, no build-time profiles, and no staging/production
 distinction — the tool runs on whatever host invokes it. Secrets are not part of
@@ -537,8 +542,9 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
 
 ## Observability
 
-- Structured logs (`log/slog`) to stderr; `--verbose` for debug level. Every tool
-  invocation is logged with its argument vector, duration, and exit status — the
+- Structured logs (`log/slog`) to stderr; `--verbose` for debug level. Tool
+  invocations are logged at debug level with their argument vector, duration,
+  and exit status — the
   single most useful signal in the system, because nearly every failure is really a
   failure of `virt-install`, `podman`, `qemu-img`, or libguestfs, and the logged
   argv is a command the operator can rerun by hand.
@@ -561,8 +567,12 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
 
 The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
 
-- The **guest is untrusted**. By default it gets no host filesystem, no host
-  credentials, no host-only service access, and no LAN exposure. Bridged
+- The **guest is untrusted**. No host filesystem or credentials are shared by
+  default. The generated network uses standard libvirt NAT, which permits
+  guest-initiated connections to the host, LAN, and other guests; it does not
+  enforce isolation of those destinations. Operators must supply the host
+  firewall policy required by their workloads before running untrusted guests
+  ([host setup](./host-setup.md#host-firewalls-and-the-virbrn-bridge)). Bridged
   networking is opt-in per VM and documented as a trust-boundary change. Host
   path sharing is not implemented; adding it would require an ADR and the
   per-VM, explicit, default-read-only handling `SECURITY.md` mandates.
