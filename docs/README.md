@@ -30,3 +30,10 @@ Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.
 When an ADR is superseded, keep the file, set its status, and add the successor to
 the table above.
+
+Contributor policy lives in [`AGENTS.md`](../AGENTS.md),
+[`CONTRIBUTING.md`](../CONTRIBUTING.md), [`CODE_REVIEW.md`](../CODE_REVIEW.md),
+and [`SECURITY.md`](../SECURITY.md). Repository-wide bug, documentation,
+enhancement, and pull-request review workflows live under
+[`.agents/skills/`](../.agents/skills/) and are exposed to Claude through
+[`.claude/skills/`](../.claude/skills/) symlinks.

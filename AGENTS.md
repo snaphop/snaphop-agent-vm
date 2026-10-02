@@ -78,6 +78,12 @@ contracts (see §8). Base images built by an older version must remain bootable
 by a newer one, or the manifest schema version must be raised and a rebuild
 path documented.
 
+For work covering a complete issue queue or the complete documentation set,
+use the repository-local workflow under `.agents/skills/` for bugs,
+documentation, enhancements, or pull requests. `.claude/skills/` exposes the
+same canonical workflows through relative symlinks; do not maintain copies.
+Ordinary focused work continues to follow this file directly.
+
 ## 2. Repository Layout
 
 ```text
@@ -105,7 +111,11 @@ path documented.
 ├── scripts/                # repeatable development and operational helpers
 ├── docs/                   # architecture, CLI contract, runbooks, ADRs
 ├── Makefile                # thin wrapper around scripts/, plus `make install`
-├── .github/                # pull request template, Actions (check, release),
+├── .agents/skills/         # canonical review workflows: bugs, documentation,
+│                           # enhancements, and pull requests
+├── .claude/skills/         # relative symlinks to .agents/skills; edit the
+│                           # canonical files only
+├── .github/                # pull request template, Actions (verify, release),
 │                           # and Dependabot
 ├── AGENTS.md               # canonical agent instructions
 ├── CODE_REVIEW.md          # code-review process
@@ -340,7 +350,7 @@ images built by an earlier release must stay bootable, and a breaking manifest
 change requires a `schemaVersion` bump plus a documented rebuild path.
 
 CI and release behavior. Pull requests and pushes to `master` run
-`scripts/check.sh` (`.github/workflows/check.yml`): format, vet, lint, and
+`scripts/check.sh` (`.github/workflows/verify.yml`): format, vet, lint, and
 unit tests. Integration tests need a KVM host, are not part of that
 workflow, and are not required for merge. **Merging does not deploy or
 publish anything.** Pushing a `vX.Y.Z` tag runs

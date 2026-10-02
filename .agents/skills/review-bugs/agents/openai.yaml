@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Bugs"
+  short_description: "Validate and resolve repository bug reports"
+  default_prompt: "Use $review-bugs to review every open bug, fix valid reports, and explain and close invalid reports."

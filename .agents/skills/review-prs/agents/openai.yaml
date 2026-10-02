@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Pull Requests"
+  short_description: "Review, test, merge, and clean up outstanding GitHub PRs"
+  default_prompt: "Use $review-prs to review all outstanding pull requests, resolve authorized conflicts, run make check and any required extra verification, and merge or clean up only when authorized."

@@ -29,6 +29,10 @@ existing overlays.
 
 ### Added
 
+- **Repository review workflows.** A review of the complete bug, documentation,
+  enhancement, or pull-request queue follows the workflows in `.agents/skills/`.
+  Claude Code reaches the same files through symlinks in `.claude/skills/`.
+
 - **License notices travel with the program.** `agent-vm licenses` prints the
   MIT license and the notices for the other software included in the binary
   (the TOML library and the Go runtime). A release includes `LICENSE` and

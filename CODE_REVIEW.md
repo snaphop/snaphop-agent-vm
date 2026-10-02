@@ -1,7 +1,9 @@
 # Code Review
 
 > Review instructions for humans and AI coding agents. Follow this process when
-> reviewing a commit, branch, pull request, or working-tree diff.
+> reviewing a commit, branch, pull request, or working-tree diff. A request
+> covering the complete bug, documentation, enhancement, or pull-request queue
+> uses the workflow under [`.agents/skills/`](./.agents/skills/) instead.
 
 ## Process
 

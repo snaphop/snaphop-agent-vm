@@ -3,6 +3,11 @@
 SnapHop Agent VM is designed for collaboration between humans and AI coding agents.
 Both follow the same repository rules and quality bar.
 
+Use the repository-local workflow in `.agents/skills/` when reviewing the
+complete bug, documentation, enhancement, or pull-request queue. Ordinary
+focused work continues to follow `AGENTS.md` directly. `.claude/skills/`
+symlinks these workflows; edit only the canonical files under `.agents/skills/`.
+
 ## Prerequisites
 
 - Go 1.22 or newer (pure Go build — no cgo, no libvirt headers)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Enhancements"
+  short_description: "Validate and classify repository enhancement requests"
+  default_prompt: "Use $review-enhancements to review every open enhancement request, classify each as valid, invalid, or needing information, and state the specific information required without implementing the requests."
