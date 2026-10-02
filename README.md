@@ -1,6 +1,6 @@
 # SnapHop Agent VM
 
-[![Check](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml/badge.svg)](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/check.yml)
+[![Verify](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/verify.yml/badge.svg)](https://github.com/snaphop/snaphop-agent-vm/actions/workflows/verify.yml)
 
 SnapHop Agent VM creates disposable QEMU/KVM virtual machines for AI coding
 agents, built from OCI container images and managed through libvirt. The

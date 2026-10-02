@@ -4,7 +4,7 @@
 #
 # A tag push does not run this file. The release workflow runs the same script
 # before it publishes, and merging publishes nothing.
-name: Check
+name: Verify
 
 on:
   push:
@@ -15,11 +15,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: check-${{ github.workflow }}-${{ github.ref }}
+  group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  verify:
     name: scripts/check.sh
     runs-on: ubuntu-latest
     steps:
@@ -27,8 +27,8 @@ jobs:
         uses: actions/checkout@v7
 
       # golangci-lint v2.14 requires Go 1.26 or newer to run. The module's
-      # language version stays 1.22 in go.mod; this is only the toolchain the
-      # check runs on, and that toolchain still applies the go.mod version.
+      # language version stays 1.22 in go.mod; this is only the toolchain this
+      # workflow runs on, and that toolchain still applies the go.mod version.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

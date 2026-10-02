@@ -521,7 +521,7 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
 `scripts/build-release.sh` also copies those files into `dist/` beside it.
 
 - Pull requests and pushes to `master` run `scripts/check.sh` on GitHub
-  Actions (`.github/workflows/check.yml`) — format, vet, lint, and unit tests.
+  Actions (`.github/workflows/verify.yml`) — format, vet, lint, and unit tests.
   Integration tests need a KVM host, are not part of that workflow, and are
   not required for merge.
 - **Merging does not publish or deploy anything.** Pushing a `vX.Y.Z` tag

@@ -48,6 +48,10 @@ existing overlays.
 
 ### Changed
 
+- **The GitHub Actions workflow for pull requests and pushes to `master` is
+  named Verify** (`.github/workflows/verify.yml`). It still runs
+  `scripts/check.sh`.
+
 - The official name is SnapHop Agent VM. The command is still `agent-vm`, and
   the repository is still <https://github.com/snaphop/snaphop-agent-vm>.
 - The source repository is <https://github.com/snaphop/snaphop-agent-vm>,

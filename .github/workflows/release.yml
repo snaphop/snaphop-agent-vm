@@ -21,7 +21,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
-      # Same toolchain as the check workflow. golangci-lint v2.14 needs Go
+      # Same toolchain as the verify workflow. golangci-lint v2.14 needs Go
       # 1.26 or newer; go.mod still declares the 1.22 language version.
       - name: Set up Go
         uses: actions/setup-go@v7
