@@ -60,6 +60,16 @@ existing overlays.
   `git.snaphop.xyz/snaphop/snaphop-agent-vm` needs that import path updated
   before it will build.
 
+### Security
+
+- **Vulnerability reports stay off the public tracker.** This repository is
+  public, so a suspected vulnerability is reported by email to
+  security@snaphop.com (wen@wensington.com also reaches the maintainers), not
+  by a GitHub issue, pull request, or discussion. `SECURITY.md` now states the
+  same fail-closed, credential, logging, and release boundaries in the form
+  used by the other SnapHop security policies, without changing the guest
+  isolation rules.
+
 ### Added
 
 - **Grok CLI, and `agy` installed with mise.** Full and nix base images install
