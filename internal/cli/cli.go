@@ -43,6 +43,10 @@ type App struct {
 	// libvirt runs QEMU as. It is the seam tests use in place of the host's
 	// passwd database; in a real run it is nil and the host is consulted.
 	HypervisorIdentity func() (*hypervisorIdentity, error)
+	// KVMAccess substitutes the local /dev/kvm permission check. Unit tests
+	// set it so doctor does not depend on the machine they run on having
+	// hardware virtualization. Nil uses syscall.Access.
+	KVMAccess func(path string) error
 	// StateFS substitutes the filesystem the state directory lives on. It is
 	// the seam that lets a test exercise a remote-hypervisor run against a
 	// real directory on this disk; in a real run it is nil and the machine the

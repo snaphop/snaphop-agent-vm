@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
@@ -36,6 +38,11 @@ func healthyHost() *hostexec.Fake {
 // identified, which makes the traversal check skip.
 func undeterminableHypervisor() (*hypervisorIdentity, error) { return nil, nil }
 
+// allowKVM is the answer a host with usable hardware virtualization gives.
+// Doctor's local check otherwise calls syscall.Access on the real /dev/kvm,
+// which would make these tests fail on a machine that has none.
+func allowKVM(string) error { return nil }
+
 // runDoctorWith runs doctor against a fake host and returns its JSON report.
 func runDoctorWith(t *testing.T, fake *hostexec.Fake, extraArgs ...string) (doctorReport, int) {
 	t.Helper()
@@ -56,6 +63,7 @@ func runDoctorWithEnv(t *testing.T, fake *hostexec.Fake, env map[string]string, 
 		Stdout: &stdout, Stderr: &stderr,
 		Env: func(name string) string { return env[name] }, Runner: fake,
 		HypervisorIdentity: undeterminableHypervisor,
+		KVMAccess:          allowKVM,
 		// The state directory stays on this disk even when the test points at
 		// a hypervisor on another machine, so these tests exercise the remote
 		// branches without needing a fake to stand in for a filesystem too.
@@ -221,6 +229,7 @@ func TestDoctor_TextOutputExplainsFailuresAndRemedies(t *testing.T) {
 		Stdout: &stdout, Stderr: &stderr,
 		Env: func(string) string { return "" }, Runner: fake,
 		HypervisorIdentity: undeterminableHypervisor,
+		KVMAccess:          allowKVM,
 		// The state directory stays on this disk even when the test points at
 		// a hypervisor on another machine, so these tests exercise the remote
 		// branches without needing a fake to stand in for a filesystem too.
@@ -253,6 +262,98 @@ func TestDoctor_RejectsArguments(t *testing.T) {
 
 	if got := exitCodeFor(err); got != ExitUsage {
 		t.Errorf("exit code = %d, want %d", got, ExitUsage)
+	}
+}
+
+func TestCheckKVM_ReportsTheSubstitutedAccessResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status checkStatus
+		detail string
+		remedy string
+	}{
+		{
+			name:   "available",
+			status: statusPass,
+			detail: "/dev/kvm is available",
+		},
+		{
+			name:   "missing",
+			err:    syscall.ENOENT,
+			status: statusFail,
+			detail: "/dev/kvm does not exist",
+			remedy: "kvm_intel",
+		},
+		{
+			name:   "not usable by this user",
+			err:    syscall.EACCES,
+			status: statusFail,
+			detail: "/dev/kvm is not readable and writable by this user",
+			remedy: "usermod -aG kvm",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var path string
+			app := &App{KVMAccess: func(got string) error {
+				path = got
+				return test.err
+			}}
+
+			got := checkKVM(context.Background(), app, &config.Connection{})
+
+			if path != "/dev/kvm" {
+				t.Errorf("checked %q, want /dev/kvm", path)
+			}
+			if got.Status != test.status {
+				t.Errorf("status = %s, want %s (%s)", got.Status, test.status, got.Detail)
+			}
+			if got.Detail != test.detail {
+				t.Errorf("detail = %q, want %q", got.Detail, test.detail)
+			}
+			if test.remedy != "" && !strings.Contains(got.Remedy, test.remedy) {
+				t.Errorf("remedy %q does not mention %q", got.Remedy, test.remedy)
+			}
+		})
+	}
+}
+
+// A missing device has to fail the whole report. The other doctor tests
+// substitute a passing check, so this is the one that keeps the failure wired
+// through to the exit code.
+func TestDoctor_MissingKVMFailsTheHost(t *testing.T) {
+	fake := healthyHost()
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env:                func(string) string { return "" },
+		Runner:             fake,
+		HypervisorIdentity: undeterminableHypervisor,
+		KVMAccess:          func(string) error { return syscall.ENOENT },
+		StateFS:            state.Local(),
+	}
+
+	err := app.run(context.Background(), []string{
+		"--state-dir", t.TempDir(),
+		"--config", t.TempDir() + "/absent.toml",
+		"--output", "json",
+		"doctor",
+	})
+
+	if got := exitCodeFor(err); got != ExitHostNotReady {
+		t.Fatalf("exit code = %d, want %d\n%s", got, ExitHostNotReady, stdout.String())
+	}
+	var report doctorReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor --output json produced unparseable output: %v\n%s", err, stdout.String())
+	}
+	if got := find(t, report, "kvm"); got.Status != statusFail {
+		t.Errorf("kvm = %s (%s), want fail", got.Status, got.Detail)
+	}
+	if report.OK {
+		t.Error("report.OK = true, want false")
 	}
 }
 

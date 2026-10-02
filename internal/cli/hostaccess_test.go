@@ -282,6 +282,7 @@ func runDoctorAs(t *testing.T, stateDir string, identity func() (*hypervisorIden
 		Stdout: &stdout, Stderr: &stderr,
 		Env: func(string) string { return "" }, Runner: healthyHost(),
 		HypervisorIdentity: identity,
+		KVMAccess:          allowKVM,
 	}
 	args := append([]string{
 		"--state-dir", stateDir,
@@ -348,6 +349,7 @@ func TestDoctor_StateDirectoryAccessIsSkippedOnTheSessionURI(t *testing.T) {
 			t.Error("doctor consulted the hypervisor identity on the session URI, where QEMU runs as the invoking user")
 			return nil, nil
 		},
+		KVMAccess: allowKVM,
 	}
 	_ = app.run(context.Background(), []string{
 		"--state-dir", leaf,

@@ -201,7 +201,11 @@ func checkKVM(ctx context.Context, app *App, conn *config.Connection) check {
 	if conn.Remote {
 		return checkRemoteKVM(ctx, app, path)
 	}
-	if err := syscall.Access(path, unixReadWrite); err != nil {
+	access := app.KVMAccess
+	if access == nil {
+		access = func(path string) error { return syscall.Access(path, unixReadWrite) }
+	}
+	if err := access(path); err != nil {
 		if errors.Is(err, syscall.ENOENT) {
 			return check{
 				Name: "kvm", Status: statusFail,
