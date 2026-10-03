@@ -550,6 +550,14 @@ func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
 	for _, name := range buildContextFiles {
 		contents := strings.ToLower(readTemplate(t, "distro/"+name))
 		for _, needle := range secretish {
+			// github-runner-configure.sh is the operator's registration
+			// command, so its flag is the word "token". It still has to pass
+			// every other needle here, and
+			// TestGitHubRunnerConfigure_CarriesNoCredentialMaterial rejects
+			// token-shaped values in that file.
+			if name == "github-runner-configure.sh" && needle == "token" {
+				continue
+			}
 			if strings.Contains(contents, needle) {
 				t.Errorf("build context file %q contains %q; a base image is shared by every VM built on it and must carry no credentials (SECURITY.md)", name, needle)
 			}
@@ -1852,6 +1860,115 @@ func TestAgentToolsNix_CarriesNoCredentials(t *testing.T) {
 	for _, secret := range []string{"api_key", "apikey", "token", "password", "secret", "begin openssh private key", "begin rsa private key"} {
 		if strings.Contains(lowered, secret) {
 			t.Errorf("agent-tools.nix mentions %q; a base image is shared by every VM built on it", secret)
+		}
+	}
+}
+
+// TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner is the whole variant:
+// the bootable guest is the slim recipe, byte for byte, and the runner section
+// appended to it is one section shared by every family.
+func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
+	t.Parallel()
+	// The instruction line, not a comment that happens to name it. The runner
+	// header explains the copy and must not shift where the comparison starts.
+	const marker = "\nARG BASE_IMAGE\n"
+	var trailer string
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		slim := readTemplate(t, "distro/"+d.SlimContainerfile)
+		runner := readTemplate(t, "distro/"+d.RunnerContainerfile)
+		slimAt := strings.Index(slim, marker)
+		runnerAt := strings.Index(runner, marker)
+		if slimAt < 0 || runnerAt < 0 {
+			t.Fatalf("%s or %s has no ARG BASE_IMAGE instruction", d.SlimContainerfile, d.RunnerContainerfile)
+		}
+		body := slim[slimAt+1:]
+		fromBody := runner[runnerAt+1:]
+		if !strings.HasPrefix(fromBody, body) {
+			t.Errorf("%s diverges from %s at ARG BASE_IMAGE; the runner recipe is the slim recipe plus one section", d.RunnerContainerfile, d.SlimContainerfile)
+			continue
+		}
+		rest := fromBody[len(body):]
+		if !strings.HasPrefix(rest, "\n# agent-vm-runner-section\n") {
+			t.Errorf("%s runner section = %q, want it to start with the agent-vm-runner-section marker", d.RunnerContainerfile, rest[:min(80, len(rest))])
+		}
+		if trailer == "" {
+			trailer = rest
+		} else if rest != trailer {
+			t.Errorf("%s runner section differs from the other families; the section is shared", d.RunnerContainerfile)
+		}
+		for _, want := range []string{
+			"COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh",
+			"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner",
+			"/usr/sbin/agent-vm-github-runner",
+			"/tmp/agent-vm-github-runner-install.sh",
+		} {
+			if !strings.Contains(rest, want) {
+				t.Errorf("%s runner section does not contain %q", d.RunnerContainerfile, want)
+			}
+		}
+	}
+	if trailer == "" {
+		t.Fatal("no runner recipe was read")
+	}
+}
+
+// TestRunnerContainerfiles_KeepTheBootAndCloudInitContract is what makes a
+// runner image a base image: the slim body it copies still carries every block
+// the guest contract depends on.
+func TestRunnerContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
+	t.Parallel()
+	for runnerName, pair := range variantRecipes(t, distro.Runner) {
+		full, runner := pair[0], pair[1]
+		for _, want := range bootAndCloudInitContract {
+			if !strings.Contains(full, want.needle) {
+				t.Errorf("the full recipe no longer contains %q; this list describes what a runner image must keep, so update both", want.needle)
+			}
+			if !strings.Contains(runner, want.needle) {
+				t.Errorf("%s does not contain %q: %s", runnerName, want.needle, want.why)
+			}
+		}
+		for _, unit := range []string{"cloud-init", "openssh", "sudo", "chrony"} {
+			if !strings.Contains(runner, unit) {
+				t.Errorf("%s does not install %s; a guest built from it could not be reached or configured", runnerName, unit)
+			}
+		}
+	}
+}
+
+// TestRunnerContainerfiles_LeaveOutTheAgentTooling keeps the variant on the
+// slim promise. The two runner scripts are the only files it copies in.
+func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
+	t.Parallel()
+	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "docker", "libvirt", "codex", "herdr", "npm"}
+	allowedCopy := map[string]bool{
+		"COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh":           true,
+		"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner": true,
+	}
+
+	for runnerName, pair := range variantRecipes(t, distro.Runner) {
+		full, runner := pair[0], pair[1]
+		for _, tool := range excluded {
+			if !strings.Contains(strings.ToLower(full), tool) {
+				t.Errorf("the full recipe no longer mentions %q; this list describes what a runner image leaves out, so update both", tool)
+			}
+		}
+		for _, line := range strings.Split(runner, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			for _, tool := range excluded {
+				if strings.Contains(strings.ToLower(trimmed), tool) {
+					t.Errorf("%s carries agent tooling (%s): %s", runnerName, tool, trimmed)
+				}
+			}
+			if strings.HasPrefix(trimmed, "COPY ") && !allowedCopy[trimmed] {
+				t.Errorf("%s COPYs %q; a runner image copies only the runner scripts", runnerName, trimmed)
+			}
 		}
 	}
 }

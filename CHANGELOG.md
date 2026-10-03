@@ -16,8 +16,26 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Added
+
+- A base image can be a self-hosted GitHub Actions runner. Append `-runner` to
+  a family: `agent-vm image build ubuntu-runner`, then `agent-vm create ci
+  --distro ubuntu-runner`. The image is that family's slim image plus the
+  runner, installed under `/opt/actions-runner` and not registered. After the
+  VM boots, register it from inside the guest with `sudo
+  agent-vm-github-runner configure --url <https-url> --token
+  <registration-token>`. `--replace` clears a local configuration with no
+  token and then registers again, so a runner of the same name still present
+  at GitHub is replaced. Jobs run as the `runner` account, which has no sudo.
+  Destroying the VM leaves the runner registered at GitHub. Unregister with
+  `sudo agent-vm-github-runner remove --token <removal-token>` — a removal
+  token — or in the GitHub UI. On Arch the image installs only the native
+  libraries the runner needs and does not upgrade the rest of the system.
+  The runner release pinned in the image is 2.337.0.
+
 ### Security
 
+- Vulnerability reports are accepted only at <security@snaphop.com>.
 - `agent-vm ssh`, `create`'s boot wait, `list`, and `info` no longer let a guest
   choose the address they connect to. The address used to come from the QEMU
   guest agent, which runs as root inside the untrusted guest, and anything it
@@ -1080,8 +1098,8 @@ existing overlays.
 
 - **Vulnerability reports stay off the public tracker.** This repository is
   public, so a suspected vulnerability is reported by email to
-  security@snaphop.com (wen@wensington.com also reaches the maintainers), not
-  by a GitHub issue, pull request, or discussion. `SECURITY.md` now states the
+  security@snaphop.com, not by a GitHub issue, pull request, or discussion.
+  `SECURITY.md` now states the
   same fail-closed, credential, logging, and release boundaries in the form
   used by the other SnapHop security policies, without changing the guest
   isolation rules.

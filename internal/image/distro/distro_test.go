@@ -215,6 +215,9 @@ func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
 		{"ubuntu-nix", Nix, "ubuntu-nix:24.04", "ubuntu-nix", "ubuntu-nix.Containerfile", "docker.io/library/ubuntu:24.04"},
 		{"fedora-nix:41", Nix, "fedora-nix:41", "fedora-nix", "fedora-nix.Containerfile", "registry.fedoraproject.org/fedora:41"},
 		{"arch-nix", Nix, "arch-nix:base", "arch-nix", "arch-nix.Containerfile", "docker.io/library/archlinux:base"},
+		{"ubuntu-runner", Runner, "ubuntu-runner:24.04", "ubuntu-runner", "ubuntu-runner.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"fedora-runner:41", Runner, "fedora-runner:41", "fedora-runner", "fedora-runner.Containerfile", "registry.fedoraproject.org/fedora:41"},
+		{"arch-runner", Runner, "arch-runner:base", "arch-runner", "arch-runner.Containerfile", "docker.io/library/archlinux:base"},
 	}
 	for _, tt := range tests {
 		ref, err := ParseRef(tt.in)
@@ -245,10 +248,10 @@ func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
 func TestParseRef_KeepsAFamilyAndItsVariantsApart(t *testing.T) {
 	t.Parallel()
 	// Every variant of a family shares the family but never a cache directory
-	// or a recipe: all three may be cached at once, and rebuilding one must not
+	// or a recipe: all four may be cached at once, and rebuilding one must not
 	// touch the others.
 	names, recipes := map[string]string{}, map[string]string{}
-	for _, name := range []string{"ubuntu", "ubuntu-slim", "ubuntu-nix"} {
+	for _, name := range []string{"ubuntu", "ubuntu-slim", "ubuntu-nix", "ubuntu-runner"} {
 		ref, err := ParseRef(name)
 		if err != nil {
 			t.Fatalf("ParseRef(%s): %v", name, err)
@@ -285,6 +288,9 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 		{"fedora-slim", "fedora", Slim},
 		{"ubuntu-nix", "ubuntu", Nix},
 		{"arch-nix", "arch", Nix},
+		{"ubuntu-runner", "ubuntu", Runner},
+		{"fedora-runner", "fedora", Runner},
+		{"arch-runner", "arch", Runner},
 	} {
 		d, variant, ok := LookupImage(tt.name)
 		if !ok {
@@ -295,7 +301,7 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 			t.Errorf("LookupImage(%q) = %s variant=%q, want %s variant=%q", tt.name, d.Name, variant, tt.family, tt.variant)
 		}
 	}
-	for _, name := range []string{"alpine-slim", "slim", "-slim", "ubuntu-slim-slim", "nix", "-nix", "alpine-nix", "ubuntu-nix-nix"} {
+	for _, name := range []string{"alpine-slim", "slim", "-slim", "ubuntu-slim-slim", "nix", "-nix", "alpine-nix", "ubuntu-nix-nix", "-runner", "runner", "ubuntu-runner-runner"} {
 		if d, _, ok := LookupImage(name); ok {
 			t.Errorf("LookupImage(%q) = %s, want no match", name, d.Name)
 		}
@@ -305,7 +311,7 @@ func TestLookupImage_ReadsBackTheNameARecordCarries(t *testing.T) {
 func TestImageNames_ListEveryBuildableImage(t *testing.T) {
 	t.Parallel()
 	got := strings.Join(ImageNames(), " ")
-	want := "arch arch-slim arch-nix fedora fedora-slim fedora-nix ubuntu ubuntu-slim ubuntu-nix"
+	want := "arch arch-slim arch-nix arch-runner fedora fedora-slim fedora-nix fedora-runner ubuntu ubuntu-slim ubuntu-nix ubuntu-runner"
 	if got != want {
 		t.Errorf("ImageNames() = %q, want %q", got, want)
 	}

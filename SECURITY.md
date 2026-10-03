@@ -19,8 +19,7 @@ vulnerability.** This rule is about visibility and applies wherever the report
 would be readable by people who do not already have access to the code.
 
 This repository is public. A GitHub issue, pull request, or discussion is not a
-private channel. Report only by email to <security@snaphop.com>. Mail to
-<wen@wensington.com> reaches the same maintainers.
+private channel. Report only by email to <security@snaphop.com>.
 
 Include:
 
@@ -182,8 +181,17 @@ section named here.
 - Forge and cloud credentials MUST stay on the host. `--github-ssh-key` runs
   `gh` on the client with the operator's existing login and sends only the
   **public** half of a key the guest generated for itself. `gh` MUST NOT be
-  authenticated inside a guest by this tool, and a GitHub token MUST NEVER be
-  written into an image, a seed, or a guest's filesystem.
+  authenticated inside a guest by this tool, and this tool MUST NEVER write a
+  GitHub token into an image, a seed, or a guest's filesystem.
+- A `-runner` base image carries the GitHub Actions self-hosted runner and the
+  command that registers it. The image, the cloud-init seed, and generated
+  user-data contain no registration token, and `create` has no flag that
+  supplies one. The operator registers a guest by running
+  `agent-vm-github-runner configure` inside it. That command passes the token
+  to GitHub's `config.sh`, which stores the runner credential on the guest.
+  The `runner` account has no sudo. Destroying the VM leaves the registration
+  at GitHub in place; unregister with `agent-vm-github-runner remove` or in
+  the GitHub UI.
 - Registry credentials, when needed, MUST come from the host's existing
   container auth mechanism and MUST NOT be copied into the state directory or
   logged.

@@ -92,8 +92,9 @@ which is exactly why unit and golden-file coverage matter.
 The default run builds the three full images (`-distros=ubuntu,fedora,arch`)
 and boots Ubuntu in NAT mode (`-lifecycle-distro=ubuntu`,
 `-lifecycle-network=nat`). It does not cover every variant or network mode.
-Select slim or Nix images explicitly with `-distros` for image checks and
-`-lifecycle-distro` for boot checks; repeat lifecycle tests for each image
+Select slim, Nix, or runner images explicitly with `-distros` for image
+checks and `-lifecycle-distro` for boot checks, for example
+`-distros=ubuntu-runner`. Repeat lifecycle tests for each image
 and use `-lifecycle-network=bridge -lifecycle-bridge=<existing-bridge>` to
 exercise bridged mode. Use `-lifecycle-state-dir` only for dedicated test
 state. The separate transport tests use `-remote-ssh` (default `localhost`);

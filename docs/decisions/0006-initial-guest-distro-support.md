@@ -6,7 +6,9 @@ Date: 2026-08-17
 
 Accepted. Extended by
 [ADR-0012](./0012-nix-provided-guest-tooling.md), which adds a Nix tooling
-variant alongside each family's full and slim images.
+variant alongside each family's full and slim images, and by
+[ADR-0013](./0013-self-hosted-github-actions-runner-variant.md), which adds a
+self-hosted GitHub Actions runner variant of each family's slim image.
 
 ## Context
 

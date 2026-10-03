@@ -809,6 +809,72 @@ func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
 	}
 }
 
+func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *testing.T) {
+	t.Parallel()
+	fake := ubuntuHost(t)
+	var recipe, install, configure []byte
+	fake.RespondPrefix("podman build", hostexec.FakeResponse{
+		Do: func(c hostexec.Command) error {
+			// The workspace is removed once the build commits, so the recipe
+			// and the scripts beside it have to be read while podman is
+			// invoked.
+			file := argAfter(c.Args, "--file")
+			dir := filepath.Dir(file)
+			var err error
+			if recipe, err = os.ReadFile(file); err != nil {
+				return err
+			}
+			if install, err = os.ReadFile(filepath.Join(dir, "github-runner.sh")); err != nil {
+				return err
+			}
+			configure, err = os.ReadFile(filepath.Join(dir, "github-runner-configure.sh"))
+			return err
+		},
+	})
+	builder, store := newBuilder(t, fake)
+	ref, err := distro.ParseRef("ubuntu-runner")
+	if err != nil {
+		t.Fatalf("ParseRef: %v", err)
+	}
+
+	manifest, err := builder.Build(context.Background(), BuildOptions{Ref: ref})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if manifest.Distro != "ubuntu-runner" || manifest.Ref() != "ubuntu-runner:24.04" {
+		t.Errorf("manifest names the image %s, want ubuntu-runner:24.04", manifest.Ref())
+	}
+	if !hasImage(t, store, "ubuntu-runner", "24.04") {
+		t.Error("the built runner image is not reported as cached")
+	}
+	if hasImage(t, store, "ubuntu", "24.04") || hasImage(t, store, "ubuntu-slim", "24.04") {
+		t.Error("building ubuntu-runner also cached ubuntu or ubuntu-slim")
+	}
+
+	wanted, err := templates.FS.ReadFile("distro/ubuntu-runner.Containerfile")
+	if err != nil {
+		t.Fatalf("reading the runner recipe: %v", err)
+	}
+	if string(recipe) != string(wanted) {
+		t.Errorf("podman was given a recipe of %d bytes, want the embedded ubuntu-runner.Containerfile (%d bytes)", len(recipe), len(wanted))
+	}
+	for _, got := range []struct {
+		name string
+		got  []byte
+	}{
+		{"github-runner.sh", install},
+		{"github-runner-configure.sh", configure},
+	} {
+		want, err := templates.FS.ReadFile("distro/" + got.name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", got.name, err)
+		}
+		if string(got.got) != string(want) {
+			t.Errorf("build context %s is %d bytes, want the embedded file (%d bytes)", got.name, len(got.got), len(want))
+		}
+	}
+}
+
 func TestNewestByVersion_ComparesVersionNumbersNotStrings(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {

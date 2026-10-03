@@ -329,11 +329,11 @@ agent-vm doctor
 agent-vm doctor --output json
 ```
 
-### `agent-vm image build <distro>[-slim|-nix][:<tag>]`
+### `agent-vm image build <distro>[-slim|-nix|-runner][:<tag>]`
 
 Builds (or rebuilds) the cached base image for a distro. `<distro>` is a
 supported family — `ubuntu`, `fedora`, or `arch` — or that family's
-`<family>-slim` or `<family>-nix` variant (see below). Each step is an existing
+`<family>-slim`, `<family>-nix`, or `<family>-runner` variant (see below). Each step is an existing
 tool: `podman pull` the source image, `podman build` the embedded per-distro
 `Containerfile` to add the guest packages a VM needs but a container does not
 (kernel, `systemd`, `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`,
@@ -402,6 +402,79 @@ independently, and neither one's rebuild disturbs VMs backed by the other.
 packages are updated, and the steps for tooling a slim guest does not carry are
 skipped.
 
+#### Runner images
+
+Every family also has a runner variant, named by appending `-runner`:
+`agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
+ubuntu-runner`. It is that family's slim image plus the GitHub Actions
+self-hosted runner (ADR-0013). It boots the same way — same kernel command
+line, same cloud-init contract, same SSH and clock guarantees — and carries
+the same common Linux tooling, and none of the agent tooling a full image
+adds.
+
+The runner is installed under `/opt/actions-runner`, owned by a system
+account named `runner`. That account has no sudo and its shell is `nologin`.
+Workflow jobs run as `runner`. The `agent` account is unchanged and still has
+passwordless sudo, which is how the operator registers the guest and manages
+the service.
+
+A base image is shared by every VM built on it, so the image is not
+registered with GitHub. It contains no repository URL and no registration
+token, and `create` has no flag that would put one in cloud-init. After the
+VM accepts SSH, register it from inside the guest:
+
+```bash
+sudo agent-vm-github-runner configure --url https://github.com/org/repo --token <registration-token>
+```
+
+`--token-file <path>` reads the value from a file of mode `0600` or `0400`.
+`--token-file -` reads it from stdin. A trailing newline, as from `echo`, is
+ignored. The command also accepts `--name` (the default is the guest's
+hostname), `--labels`, `--group`, `--work` (a relative directory inside the
+runner folder), `--ephemeral` (accept one job, then exit and unregister), and
+`--replace`. `--replace` replaces a runner of the same name that is still
+registered at GitHub. When this guest already has a local configuration, the
+command uninstalls the service and clears that configuration with
+`config.sh remove --local`, which takes no token and leaves the GitHub
+runner in place, and then registers again with the registration token.
+
+```bash
+sudo agent-vm-github-runner remove --token <removal-token>
+```
+
+unregisters the guest at GitHub. The value is a removal token. `configure`
+uses a registration token, and that value is rejected by `remove`. Destroying
+the VM leaves the registration in place at GitHub. Remove it with that
+command first, or delete it in the GitHub UI.
+
+The command is `/usr/local/sbin/agent-vm-github-runner`, linked from
+`/usr/sbin` so `sudo` finds it on every family. It runs GitHub's `config.sh`
+as the `runner` user — `config.sh` refuses to run as root — and then GitHub's
+`svc.sh install runner` and `svc.sh start` as root, from the runner directory.
+`config.sh` writes `svc.sh` when a guest is registered. The image does not
+contain `svc.sh` before that.
+
+The runner release is pinned in the image recipe and recorded at
+`/opt/actions-runner/.agent-vm-runner-version`. Rebuilding the base image is
+how that pin changes. A running runner may update its own copy in the VM's
+overlay; that copy stays in the overlay and does not change the base image.
+
+`agent-vm update` on a runner guest updates the distro packages and skips
+tooling the image does not carry. It does not replace the runner in the base
+image.
+
+A runner image is its own base image: its own cache directory
+(`images/ubuntu-runner/24.04/`), its own manifest, and its own name in
+`image list`, `image inspect`, `image rm`, and `vm.json`, so it can be cached
+beside `ubuntu` and `ubuntu-slim` and is built and removed on its own. It is
+larger than the slim image it starts from, because the Actions runner ships
+its own Node.js and .NET runtime. On Arch the image build installs `icu`,
+`openssl`, `krb5`, `zlib`, and `lttng-ust` with `pacman -S --needed`, and only
+those packages. The slim recipe has already built the initramfs this image
+direct-boots, and upgrading the rest of the system in this step could replace
+the kernel without rebuilding it. A missing package database fails the build.
+GitHub's dependency script has no Arch path.
+
 #### Nix images
 
 Every family also has a nix variant, named by appending `-nix`: `agent-vm image
@@ -468,9 +541,9 @@ architecture. This does not pin the other installers or distro packages.
 
 A nix image is a separate base image, like a slim one: its own cache directory
 (`images/ubuntu-nix/24.04/`), its own manifest, and its own name in `image
-list`, `image inspect`, `image rm`, and `vm.json`. All three variants of a
-family can be cached at once and are built and removed independently. It is the
-largest of the three — a nix store carrying four toolchains and a browser is
+list`, `image inspect`, `image rm`, and `vm.json`. Every variant of a
+family can be cached at once and is built and removed independently. A nix
+image is the largest: a nix store carrying four toolchains and a browser is
 bigger than the equivalent distro packages, because closures are complete.
 
 The build prepares artifacts in a temporary directory beside the image
@@ -503,10 +576,11 @@ changes what every script that SSHes into these VMs can assume.
 #### Guest tooling
 
 The table and installation details below describe **full images**. Slim
-images keep the common Linux packages but omit the agent and service tooling;
-Nix images use the different sources and interfaces described above. Slim
-images include `tmux` but do not install the custom session menu, tmux
-configuration, or per-account setup service.
+images keep the common Linux packages but omit the agent and service tooling.
+Runner images are that slim set plus the GitHub Actions self-hosted runner
+described above. Nix images use the different sources and interfaces described
+above. Slim and runner images include `tmux` but do not install the custom
+session menu, tmux configuration, or per-account setup service.
 
 Beyond the packages that make a container image boot as a VM, a full image
 carries the tools an agent working inside the guest expects to find already
@@ -966,7 +1040,7 @@ and must not already exist.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`) or `-nix` (`ubuntu-nix`) to the family for that variant. |
+| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`), `-nix` (`ubuntu-nix`), or `-runner` (`ubuntu-runner`) to the family for that variant. |
 | `--vcpus <n>` | `2` | Virtual CPUs, from 1 to 255. |
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
@@ -1116,9 +1190,9 @@ $ agent-vm create build-01 && agent-vm stop build-01
 #### `--github-ssh-key`
 
 Full and Nix images generate an `ed25519` key pair on first boot (see
-[Per-account SSH keys](#per-account-ssh-keys)). Slim images omit that setup
-service; using this flag with a slim image requires arranging key generation
-inside the guest yourself before the read times out. With `--github-ssh-key`,
+[Per-account SSH keys](#per-account-ssh-keys)). Slim and runner images omit
+that setup service; using this flag with either requires arranging key
+generation inside the guest yourself before the read times out. With `--github-ssh-key`,
 `create` reads the **public** half back over SSH once the guest is reachable
 and adds it to your GitHub account as an authentication key titled `agent-vm
 <name> on <host>`, so an agent in the VM can push without a key being pasted

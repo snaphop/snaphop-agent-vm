@@ -100,7 +100,7 @@ func TestComplete_OffersTheValuesOfAClosedFlag(t *testing.T) {
 	}{
 		{[]string{"create", "web", "--network", ""}, []string{"bridge", "nat"}},
 		{[]string{"--output", ""}, []string{"json", "text"}},
-		{[]string{"image", "build", ""}, []string{"arch", "arch-nix", "arch-slim", "fedora", "fedora-nix", "fedora-slim", "ubuntu", "ubuntu-nix", "ubuntu-slim"}},
+		{[]string{"image", "build", ""}, []string{"arch", "arch-nix", "arch-runner", "arch-slim", "fedora", "fedora-nix", "fedora-runner", "fedora-slim", "ubuntu", "ubuntu-nix", "ubuntu-runner", "ubuntu-slim"}},
 		{[]string{"completion", ""}, []string{"bash", "fish", "zsh"}},
 	}
 	for _, testCase := range cases {

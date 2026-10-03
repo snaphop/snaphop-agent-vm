@@ -12,6 +12,9 @@ support) with a variant rather than a family, and is bounded by
 images as VM root disks), which is what fixes the boot layer this decision
 leaves alone.
 
+See also [ADR-0013](./0013-self-hosted-github-actions-runner-variant.md), which
+adds a self-hosted GitHub Actions runner variant of each family's slim image.
+
 ## Context
 
 A base image is two layers with nothing in common but a filesystem.

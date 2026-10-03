@@ -124,6 +124,16 @@ A slim image is a separate base image with its own cache directory, manifest,
 and name, so `ubuntu` and `ubuntu-slim` can be cached side by side and are
 built and removed independently.
 
+Each family also has a **runner** variant (`ubuntu-runner`, `fedora-runner`,
+`arch-runner`): the slim image plus the GitHub Actions self-hosted runner.
+The runner is installed and not registered. After the VM boots, register it
+from inside the guest. Jobs run as the `runner` account, which has no sudo.
+See [Runner images](./docs/cli.md#runner-images).
+
+```bash
+agent-vm create ci-01 --distro ubuntu-runner
+```
+
 Each family also has a **Nix** variant (`ubuntu-nix`, `fedora-nix`,
 `arch-nix`). It keeps the distro boot layer and takes most guest tooling from
 one shared Nix expression. Codex and a small set of mise-managed tools remain

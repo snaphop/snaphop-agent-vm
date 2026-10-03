@@ -51,7 +51,7 @@ func (r *repeatedFlag) Set(value string) error {
 
 func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	flags := newFlagSet("create", "agent-vm create <name> [flags]", app.Stderr)
-	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; append -slim or -nix for that variant; built automatically if not cached")
+	distroRef := flags.String("distro", "", "base image to use, <distro>[:<tag>]; append -slim, -nix, or -runner for that variant; built automatically if not cached")
 	vcpus := flags.String("vcpus", "", "virtual CPUs")
 	memory := flags.String("memory", "", "guest RAM, for example 512M or 4G")
 	maxMemory := flags.String("max-memory", "", "ceiling the guest's RAM can be grown to at runtime, via virtio-mem; unset means a fixed-size guest")

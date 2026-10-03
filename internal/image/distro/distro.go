@@ -42,9 +42,14 @@ type Distro struct {
 	// bootable base, from the same distro packages, but with the guest tooling
 	// installed from the shared templates/distro/agent-tools.nix expression
 	// rather than restated in this family's package manager (ADR-0012). It is
-	// a third recipe for the same reason slim is a second one — the blocks
-	// differ, and podman has no way to skip a block.
+	// a separate recipe for the same reason slim is — the blocks differ, and
+	// podman has no way to skip a block.
 	NixContainerfile string
+	// RunnerContainerfile is the slim recipe plus the GitHub Actions
+	// self-hosted runner (ADR-0013). The runner section is the same on every
+	// family; the copy of the slim recipe is not, so each family has its own
+	// file.
+	RunnerContainerfile string
 
 	// PackageUpdate is what `agent-vm update` runs inside a guest of this
 	// family to bring its distro packages up to date, in order. It is followed
@@ -120,14 +125,15 @@ func (d Distro) SourceRef(tag string) string {
 // docs/architecture.md's runtime profile table.
 var (
 	Ubuntu = Distro{
-		Name:              "ubuntu",
-		Repo:              "docker.io/library/ubuntu",
-		DefaultTag:        "24.04",
-		KernelPackage:     "linux-image-virtual",
-		Initramfs:         "initramfs-tools",
-		Containerfile:     "ubuntu.Containerfile",
-		SlimContainerfile: "ubuntu-slim.Containerfile",
-		NixContainerfile:  "ubuntu-nix.Containerfile",
+		Name:                "ubuntu",
+		Repo:                "docker.io/library/ubuntu",
+		DefaultTag:          "24.04",
+		KernelPackage:       "linux-image-virtual",
+		Initramfs:           "initramfs-tools",
+		Containerfile:       "ubuntu.Containerfile",
+		SlimContainerfile:   "ubuntu-slim.Containerfile",
+		NixContainerfile:    "ubuntu-nix.Containerfile",
+		RunnerContainerfile: "ubuntu-runner.Containerfile",
 		PackageUpdate: []UpdateStep{
 			{Name: "refreshing package lists", Root: true, Argv: []string{"apt-get", "update"}},
 			// A guest is unattended, so apt may never stop at a prompt: the
@@ -147,14 +153,15 @@ var (
 		InitrdPattern: "initrd.img-*",
 	}
 	Fedora = Distro{
-		Name:              "fedora",
-		Repo:              "registry.fedoraproject.org/fedora",
-		DefaultTag:        "42",
-		KernelPackage:     "kernel-core",
-		Initramfs:         "dracut",
-		Containerfile:     "fedora.Containerfile",
-		SlimContainerfile: "fedora-slim.Containerfile",
-		NixContainerfile:  "fedora-nix.Containerfile",
+		Name:                "fedora",
+		Repo:                "registry.fedoraproject.org/fedora",
+		DefaultTag:          "42",
+		KernelPackage:       "kernel-core",
+		Initramfs:           "dracut",
+		Containerfile:       "fedora.Containerfile",
+		SlimContainerfile:   "fedora-slim.Containerfile",
+		NixContainerfile:    "fedora-nix.Containerfile",
+		RunnerContainerfile: "fedora-runner.Containerfile",
 		PackageUpdate: []UpdateStep{
 			{Name: "upgrading packages", Root: true, Argv: []string{"dnf", "-y", "--refresh", "upgrade"}},
 			{Name: "removing packages nothing needs any more", Root: true, Argv: []string{"dnf", "-y", "autoremove"}},
@@ -163,14 +170,15 @@ var (
 		InitrdPattern: "initramfs-*.img",
 	}
 	Arch = Distro{
-		Name:              "arch",
-		Repo:              "docker.io/library/archlinux",
-		DefaultTag:        "base",
-		KernelPackage:     "linux",
-		Initramfs:         "mkinitcpio",
-		Containerfile:     "arch.Containerfile",
-		SlimContainerfile: "arch-slim.Containerfile",
-		NixContainerfile:  "arch-nix.Containerfile",
+		Name:                "arch",
+		Repo:                "docker.io/library/archlinux",
+		DefaultTag:          "base",
+		KernelPackage:       "linux",
+		Initramfs:           "mkinitcpio",
+		Containerfile:       "arch.Containerfile",
+		SlimContainerfile:   "arch-slim.Containerfile",
+		NixContainerfile:    "arch-nix.Containerfile",
+		RunnerContainerfile: "arch-runner.Containerfile",
 		// pacman has no separate refresh step and no autoremove: -Syu does the
 		// whole upgrade, and removing orphans needs a pipeline we cannot run
 		// without a shell.
@@ -325,8 +333,8 @@ func Lookup(name string) (Distro, bool) {
 // value is the suffix that variant adds to the family name, because that
 // suffix is how a variant is named everywhere a base image is named: on the
 // command line, in the image cache directory, and in the manifest and vm.json
-// records that carry the name back (AGENTS.md §8). "ubuntu", "ubuntu-slim" and
-// "ubuntu-nix" are three base images, not three views of one.
+// records that carry the name back (AGENTS.md §8). "ubuntu", "ubuntu-slim",
+// "ubuntu-nix" and "ubuntu-runner" are four base images, not four views of one.
 type Variant string
 
 const (
@@ -340,14 +348,17 @@ const (
 	// but installs the guest tooling from the shared agent-tools.nix
 	// expression instead of from the family's package manager (ADR-0012).
 	Nix Variant = "-nix"
+	// Runner is the slim image plus the GitHub Actions self-hosted runner,
+	// installed unconfigured (ADR-0013).
+	Runner Variant = "-runner"
 )
 
 // variants is every recipe a family has, in the order image names are listed.
 // Full is first because a bare family name means it.
-var variants = []Variant{Full, Slim, Nix}
+var variants = []Variant{Full, Slim, Nix, Runner}
 
 // LookupImage returns the family and variant a base image name refers to,
-// accepting "ubuntu", "ubuntu-slim" and "ubuntu-nix" alike. It is what reads a
+// accepting "ubuntu", "ubuntu-slim", "ubuntu-nix" and "ubuntu-runner" alike. It is what reads a
 // name back after the fact — a recorded manifest or vm.json — where only the
 // image name survives.
 func LookupImage(name string) (d Distro, v Variant, ok bool) {
@@ -389,7 +400,7 @@ type Ref struct {
 }
 
 // ImageName is the name this base image is known by wherever one is named:
-// "ubuntu", "ubuntu-slim", or "ubuntu-nix".
+// "ubuntu", "ubuntu-slim", "ubuntu-nix", or "ubuntu-runner".
 func (r Ref) ImageName() string { return r.Distro.Name + string(r.Variant) }
 
 // Containerfile is the embedded build recipe this base image is built from.
@@ -399,6 +410,8 @@ func (r Ref) Containerfile() string {
 		return r.Distro.SlimContainerfile
 	case Nix:
 		return r.Distro.NixContainerfile
+	case Runner:
+		return r.Distro.RunnerContainerfile
 	default:
 		return r.Distro.Containerfile
 	}
@@ -416,9 +429,9 @@ func (r Ref) SourceRef() string { return r.Distro.SourceRef(r.Tag) }
 var tagPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // ParseRef reads "<distro>" or "<distro>:<tag>", applying the family's default
-// tag when none is given. A "-slim" or "-nix" suffix on the distro selects
-// that variant of the family, so "ubuntu-nix:24.04" is the nix build of the
-// same tag.
+// tag when none is given. A "-slim", "-nix", or "-runner" suffix on the
+// distro selects that variant of the family, so "ubuntu-runner:24.04" is the
+// runner build of the same tag.
 func ParseRef(s string) (Ref, error) {
 	name, tag, hasTag := strings.Cut(s, ":")
 

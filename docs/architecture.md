@@ -200,16 +200,18 @@ background worker. Long waits include image builds, the guest boot wait during `
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and
   builder tool versions.
-  Each family also has two variant recipes, each built and cached as a base
+  Each family also has three variant recipes, each built and cached as a base
   image of its own under `images/<family>-<variant>/<tag>/`, sharing the boot,
   cloud-init, clock, and SSH blocks with the full recipe word for word.
   `<family>-slim.Containerfile` keeps the common Linux tooling and drops the
   language toolchains, coding agents, browser, Docker, and nested
-  virtualization stack. `<family>-nix.Containerfile` keeps all of it but takes
-  the tooling from the shared `templates/distro/agent-tools.nix` instead of the
-  family's package manager and mise; Docker and the virtualization stack still
-  come from the distro, because a nix profile cannot supply a running system
-  daemon (ADR-0012).
+  virtualization stack. `<family>-runner.Containerfile` is that slim recipe
+  plus the GitHub Actions self-hosted runner, installed unconfigured under
+  `/opt/actions-runner` (ADR-0013). `<family>-nix.Containerfile` keeps all of
+  it but takes the tooling from the shared `templates/distro/agent-tools.nix`
+  instead of the family's package manager and mise; Docker and the
+  virtualization stack still come from the distro, because a nix profile
+  cannot supply a running system daemon (ADR-0012).
 - **Public interface:** the on-disk image layout, the `manifest.json` schema, and
   the per-distro `Containerfile`s — which are the readable, reviewable form of all
   distro-specific knowledge in the project.
@@ -460,7 +462,7 @@ documented migration path, and an entry in `CHANGELOG.md`.
 Entities:
 
 - **Base image** — identity is `(image name, tag)`, where the image name is a
-  family (`ubuntu`) or one of its variants (`ubuntu-slim`, `ubuntu-nix`);
+  family (`ubuntu`) or one of its variants (`ubuntu-slim`, `ubuntu-nix`, `ubuntu-runner`);
   provenance is the source OCI digest. Read-only during VM use; an explicit rebuild replaces the
   cached artifacts.
   The cache is keyed by name and tag, not by content digest. System of record:
@@ -495,7 +497,7 @@ One profile, parameterized:
 | libvirt URI | `qemu:///system` (default), `qemu:///session`, `qemu+ssh://[user@]host[:port]/{system,session}` | Session URIs are accepted only with NAT mode, but the host must support the managed libvirt NAT network; this is not a user-mode networking fallback. Bridged mode needs system mode. An `ssh` URI puts the tools, the state directory, and the guests on that host (ADR-0010); other remote transports are refused because they give no shell there. |
 | Network mode | `nat` (default), `bridge` | Bridge requires a pre-existing host bridge. |
 | State directory | user-local default, or a shared path | Operators using the same hypervisor account share locks and images. Cross-user access needs additional permissions; defaults are not group-writable. With a remote URI it is a path on the hypervisor, defaulting to that account's home. |
-| Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim` and `-nix` variants of each | Pinned by digest per base image. Each variant is a separate base image, cached and rebuilt independently of the others. Nix tooling follows a moving nixpkgs branch until explicitly pinned with `scripts/pin-nixpkgs.sh`. |
+| Guest distro | `ubuntu`, `fedora`, `arch`, and the `-slim`, `-nix`, and `-runner` variants of each | Pinned by digest per base image. Each variant is a separate base image, cached and rebuilt independently of the others. Nix tooling follows a moving nixpkgs branch until explicitly pinned with `scripts/pin-nixpkgs.sh`. A runner image downloads a pinned GitHub Actions runner release while it builds. |
 
 There are no feature flags, no build-time profiles, and no staging/production
 distinction — the tool runs on whatever host invokes it. Secrets are not part of
