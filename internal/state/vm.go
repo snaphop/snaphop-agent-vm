@@ -222,6 +222,19 @@ func (s *Store) LoadVM(name string) (*VM, error) {
 	return &vm, nil
 }
 
+// sameRoot reports whether root resolves to this store's state directory.
+func (s *Store) sameRoot(root string) bool {
+	if root == s.root {
+		return true
+	}
+	want, err := s.fsys.Canonicalize(s.root)
+	if err != nil {
+		return false
+	}
+	got, err := s.fsys.Canonicalize(root)
+	return err == nil && got == want
+}
+
 // checkRecord confirms a record describes the directory it was read from. The
 // paths in it are what destroy deletes and what qemu-img and virt-install are
 // pointed at, so a record naming the state directory itself, another VM's
@@ -234,7 +247,16 @@ func (s *Store) checkRecord(file, name string, vm *VM) error {
 	}
 	dir := s.VMDir(name)
 	if vm.Paths.Dir != dir {
-		return &RecordError{File: file, Field: "paths.dir", Found: vm.Paths.Dir, Wanted: "the directory " + dir}
+		// The same state directory can be reached by more than one spelling —
+		// a symlinked home, /home against /var/home — and a record keeps the
+		// one it was created under. It is the same directory if it is
+		// vms/<name> under a root that resolves to this store's root.
+		recordedDir := filepath.Clean(vm.Paths.Dir)
+		if !filepath.IsAbs(recordedDir) || filepath.Base(recordedDir) != name || filepath.Base(filepath.Dir(recordedDir)) != "vms" ||
+			!s.sameRoot(filepath.Dir(filepath.Dir(recordedDir))) {
+			return &RecordError{File: file, Field: "paths.dir", Found: vm.Paths.Dir, Wanted: "the directory " + dir}
+		}
+		dir = recordedDir
 	}
 	for _, recorded := range []struct{ field, path string }{
 		{"paths.overlay", vm.Paths.Overlay},

@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -293,6 +294,43 @@ func TestLoadVM_AcceptsARecordWithoutPathsItNeverHad(t *testing.T) {
 
 	if _, err := store.LoadVM("agent-01"); err != nil {
 		t.Fatalf("LoadVM = %v, want nil", err)
+	}
+}
+
+func TestLoadVM_AcceptsARecordMadeUnderAnotherSpellingOfTheSameStateDirectory(t *testing.T) {
+	t.Parallel()
+	// The operator's home is reached through a symlink: the VM was created
+	// through one path and is loaded through the other.
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	created, err := Open(link)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := created.SaveVM(sampleVM(created, "agent-01")); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+
+	loaded, err := Open(real)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := loaded.LoadVM("agent-01"); err != nil {
+		t.Fatalf("LoadVM = %v, want the record accepted: it is the same directory", err)
+	}
+
+	// A record naming a different state directory is still refused.
+	other, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	tamperVM(t, other, "agent-01", func(vm *VM) { vm.Paths = sampleVM(created, "agent-01").Paths })
+	var record *RecordError
+	if _, err := other.LoadVM("agent-01"); !errors.As(err, &record) {
+		t.Fatalf("LoadVM = %v, want a RecordError for another state directory's paths", err)
 	}
 }
 
