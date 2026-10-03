@@ -28,6 +28,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/templates"
@@ -132,6 +133,24 @@ func GenerateMetaData(opts Options) ([]byte, error) {
 		return nil, fmt.Errorf("rendering cloud-init meta-data: %w", err)
 	}
 	return out.Bytes(), nil
+}
+
+// Validate checks everything Generate would refuse — the hostname, the login
+// user, the authorized keys, the operator's user-data header, and the
+// opencode.json — without rendering anything. It exists so a caller can reject
+// bad input before it changes anything on the host: Generate runs late in
+// `create`, after the VM is locked and its base image is ensured, and a file
+// that was never going to be accepted should not cost a base image build.
+func (o Options) Validate() error {
+	if err := o.validate(); err != nil {
+		return err
+	}
+	if len(o.ExtraUserData) > 0 {
+		if _, err := partContentType(o.ExtraUserData, o.ExtraSource); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (o Options) validate() error {
@@ -390,7 +409,17 @@ func parseKeyLines(path string, contents []byte, seen map[string]bool) (keys []s
 // keyLinePattern is what an OpenSSH public key line looks like: a type, a
 // base64 blob, and an optional comment. Validating the shape here means the
 // value can be emitted into YAML as a quoted scalar with confidence.
-var keyLinePattern = regexp.MustCompile(`^[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}( [^\x00-\x1f]*)?$`)
+//
+// The comment is limited to characters cloud-init's YAML parser (PyYAML)
+// accepts in a stream and that yamlString can pass through unescaped: its
+// printable set, less tab and the characters YAML 1.1 treats as line breaks
+// (U+0085, U+2028, U+2029), which a double-quoted scalar would fold into a
+// space. Anything else — a C0 control, DEL, a C1 control, U+FFFE, U+FFFF —
+// makes PyYAML reject the whole document, and the guest boots with no user and
+// no key. U+FFFD is in the class because PyYAML accepts it, so invalid UTF-8,
+// which Go's regexp reads as U+FFFD, is refused separately.
+var keyLinePattern = regexp.MustCompile(`^[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}` +
+	`( [\x20-\x7e\x{a0}-\x{2027}\x{202a}-\x{d7ff}\x{e000}-\x{fffd}\x{10000}-\x{10ffff}]*)?$`)
 
 // ValidatePublicKeyLine reports whether line is a single OpenSSH public key.
 // It is exported because keys also arrive from outside this package — the one
@@ -404,7 +433,7 @@ func ValidatePublicKeyLine(line string) error {
 			Remedy: "Authorize the matching public key instead. Private keys never enter a VM.",
 		}
 	}
-	if !keyLinePattern.MatchString(line) {
+	if !utf8.ValidString(line) || !keyLinePattern.MatchString(line) {
 		return &config.ValidationError{
 			Field: "ssh key", Value: firstField(line),
 			Err:    fmt.Errorf("does not look like an OpenSSH public key line"),

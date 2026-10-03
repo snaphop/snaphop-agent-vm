@@ -310,6 +310,42 @@ func TestVirtInstallArgs_RejectsAPathVirtInstallWouldMisread(t *testing.T) {
 	}
 }
 
+// virtinst splits suboptions with POSIX shlex, so a quote or a backslash in a
+// path is quoting to it: an unpaired one fails, a paired one is stripped.
+func TestVirtInstallArgs_RejectsAPathWithQuotingVirtInstallWouldMisread(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{
+		"/home/o'brien/.local/share/agent-vm/vms/agent-01/root.qcow2",
+		`/home/operator/"agent vms"/vms/agent-01/root.qcow2`,
+		`/home/operator/agent\vms/vms/agent-01/root.qcow2`,
+	} {
+		for _, field := range []struct {
+			name string
+			set  func(*CreateOptions)
+		}{
+			{"root disk", func(o *CreateOptions) { o.OverlayPath = path }},
+			{"kernel", func(o *CreateOptions) { o.KernelPath = path }},
+			{"initrd", func(o *CreateOptions) { o.InitrdPath = path }},
+			{"seed disk", func(o *CreateOptions) { o.SeedImagePath = path }},
+			{"console log", func(o *CreateOptions) { o.ConsoleLogPath = path }},
+		} {
+			opts := natOptions()
+			field.set(&opts)
+
+			_, err := VirtInstallArgs(opts)
+			if err == nil {
+				t.Errorf("%s %q: want a refusal: virt-install's suboption parser reads it as quoting", field.name, path)
+				continue
+			}
+			for _, want := range []string{field.name, "quote or a backslash", "state directory"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s %q: the error should mention %q: %v", field.name, path, want, err)
+				}
+			}
+		}
+	}
+}
+
 func TestVirtInstallArgs_RejectsARelativePath(t *testing.T) {
 	t.Parallel()
 	opts := natOptions()

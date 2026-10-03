@@ -962,6 +962,14 @@ and must not already exist.
 On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
 
+Inputs are checked before anything on the host is touched. The SSH keys, the
+`--cloud-init` file (it must begin with a header cloud-init recognizes), and the
+`--opencode-config` file (it must be valid JSON) are read and validated first,
+and a bad one exits `2` — under `--dry-run` too. Next, the minimum versions of
+`virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` with
+`--github-ssh-key`) are checked, and a missing or too-old tool exits `3`. Only
+then is the VM locked and its base image looked up or built.
+
 `create` is transactional. If a step through recording `vm.json` fails, the tool
 removes the domain, the overlay, the generated seed, and the state directory
 it created, and reports both the original failure and any cleanup problem.

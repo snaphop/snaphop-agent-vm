@@ -405,3 +405,51 @@ func TestHostArch_FailsWhenCapabilitiesNamesNoArchitecture(t *testing.T) {
 		t.Fatal("HostArch = nil error, want a failure: the XML names no architecture")
 	}
 }
+
+func TestDiskPaths_ReadsARealVirshTable(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domblklist.txt"),
+	})
+
+	got, err := manager(fake).DiskPaths(context.Background(), "agent-01")
+	if err != nil {
+		t.Fatalf("DiskPaths: %v", err)
+	}
+	if len(got) != 1 || got[0] != "/guest/diskimage1" {
+		t.Errorf("DiskPaths = %q, want [/guest/diskimage1]", got)
+	}
+}
+
+// A state directory may sit under a path with spaces in it. Source is the last
+// column, so it is read whole: cut at the first space, the overlay path would
+// match nothing destroy recorded and it would refuse the tool's own VM.
+func TestDiskPaths_KeepsSpacesInASourcePath(t *testing.T) {
+	t.Parallel()
+	overlay := "/home/a b/.local/state/agent-vm/vms/agent-01/overlay.qcow2"
+	seed := "/home/a b/.local/state/agent-vm/vms/agent-01/seed  image.img"
+	table := strings.Replace(toolout(t, "virsh-domblklist.txt"), "/guest/diskimage1", overlay, 1)
+	table = strings.TrimRight(table, "\n") + "\n vdb      " + seed + "   \n sda      -\n\n"
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{Stdout: table})
+
+	got, err := manager(fake).DiskPaths(context.Background(), "agent-01")
+	if err != nil {
+		t.Fatalf("DiskPaths: %v", err)
+	}
+	if want := []string{overlay, seed}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("DiskPaths = %q, want %q", got, want)
+	}
+}
+
+func TestDiskPaths_RefusesARowWithNoSource(t *testing.T) {
+	t.Parallel()
+	table := strings.Replace(toolout(t, "virsh-domblklist.txt"), "/guest/diskimage1", "", 1)
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{Stdout: table})
+
+	if _, err := manager(fake).DiskPaths(context.Background(), "agent-01"); err == nil {
+		t.Fatal("DiskPaths = nil error, want a failure: a row has no Source column")
+	}
+}

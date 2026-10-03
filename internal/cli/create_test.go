@@ -919,6 +919,112 @@ func TestCreate_RejectsAMissingOpencodeConfig(t *testing.T) {
 	}
 }
 
+// badInputFiles are operator-supplied files the guest would refuse: user-data
+// cloud-init would ignore for lack of a header, and an opencode.json that is
+// not JSON.
+var badInputFiles = []struct {
+	name, flag, contents string
+}{
+	{"cloud-init without a header", "--cloud-init", "packages:\n  - ripgrep\n"},
+	{"opencode config that is not JSON", "--opencode-config", "permission:\n  bash: allow\n"},
+}
+
+// assertNothingRan checks that a create was refused before it touched the
+// host: no tool ran — not a version check, not a base image build, not a virsh
+// query — no lock was taken, and no VM directory was made.
+func assertNothingRan(t *testing.T, fake *hostexec.Fake, stateDir string) {
+	t.Helper()
+	if len(fake.Calls()) != 0 {
+		t.Errorf("nothing may run before the input files are accepted:\n%s", fake)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "locks", "vm-agent-01.lock")); !os.IsNotExist(err) {
+		t.Errorf("the VM was locked before its input files were accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the VM directory was made before its input files were accepted: %v", err)
+	}
+}
+
+func TestCreate_RejectsBadInputFilesBeforeTouchingTheHost(t *testing.T) {
+	t.Parallel()
+	for _, tc := range badInputFiles {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// No cached base image: a create that got as far as ensuring it
+			// would start a build.
+			stateDir := t.TempDir()
+			keyPath := filepath.Join(t.TempDir(), "id_ed25519.pub")
+			if err := os.WriteFile(keyPath, []byte(publicKey), 0o600); err != nil {
+				t.Fatalf("writing the key file: %v", err)
+			}
+			input := filepath.Join(t.TempDir(), "input")
+			if err := os.WriteFile(input, []byte(tc.contents), 0o600); err != nil {
+				t.Fatalf("writing the input file: %v", err)
+			}
+
+			fake := createHost(t)
+			code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, tc.flag, input)...)
+			if code != ExitUsage {
+				t.Errorf("exit code = %d, want %d\n%s", code, ExitUsage, stderr)
+			}
+			if !strings.Contains(stderr, input) {
+				t.Errorf("the refusal does not name the file:\n%s", stderr)
+			}
+			assertNothingRan(t, fake, stateDir)
+		})
+	}
+}
+
+func TestCreate_DryRunRejectsBadInputFiles(t *testing.T) {
+	t.Parallel()
+	for _, tc := range badInputFiles {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stateDir, keyPath := createEnv(t)
+			input := filepath.Join(t.TempDir(), "input")
+			if err := os.WriteFile(input, []byte(tc.contents), 0o600); err != nil {
+				t.Fatalf("writing the input file: %v", err)
+			}
+
+			fake := createHost(t)
+			args := append([]string{"--dry-run"}, createArgs(keyPath, tc.flag, input)...)
+			code, stdout, stderr := cliRun(t, fake, stateDir, args...)
+			if code != ExitUsage {
+				t.Errorf("a dry run must refuse what the real run would: exit code = %d, want %d\nstdout:\n%s\nstderr:\n%s",
+					code, ExitUsage, stdout, stderr)
+			}
+			if strings.Contains(stdout, "virt-install") {
+				t.Errorf("a refused dry run must not print a plan:\n%s", stdout)
+			}
+			assertNothingRan(t, fake, stateDir)
+		})
+	}
+}
+
+func TestCreate_ChecksVirtMakeFSBeforeLocking(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	// libguestfs 1.48 is below the 1.50 floor virt-make-fs is held to.
+	fake.Respond("virt-make-fs --version", hostexec.FakeResponse{Stdout: "virt-make-fs 1.48.6\n"})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitHostNotReady, stderr)
+	}
+	if !strings.Contains(stderr, "virt-make-fs") {
+		t.Errorf("the refusal does not name the tool:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "locks", "vm-agent-01.lock")); !os.IsNotExist(err) {
+		t.Errorf("the VM was locked before its tools were checked: %v", err)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virsh --connect") || strings.HasPrefix(argv, "virt-make-fs --type") {
+			t.Errorf("create ran %q before refusing an unusable virt-make-fs", argv)
+		}
+	}
+}
+
 func TestCreate_PassesVirtInstallArgumentsThrough(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)

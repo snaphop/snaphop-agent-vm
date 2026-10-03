@@ -102,9 +102,10 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return err
 	}
 
-	// Key material and operator-supplied user-data are read before anything on
-	// the host changes, so a typo in a path is a usage error rather than a
-	// half-created VM.
+	// Key material and operator-supplied files are read and validated before
+	// anything on the host changes, so a typo in a path or a file cloud-init or
+	// opencode would refuse is a usage error rather than a half-created VM or a
+	// base image built for nothing.
 	keyPaths := cfg.SSHKeys
 	keys, err := guestinit.LoadPublicKeys(keyPaths)
 	if err != nil {
@@ -141,12 +142,30 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	userData := guestinit.Options{
+		Hostname:          name,
+		User:              cfg.GuestUser,
+		SSHAuthorizedKeys: keys,
+		ExtraUserData:     extraUserData,
+		ExtraSource:       *cloudInit,
+		OpencodeConfig:    opencodeJSON,
+		OpencodeSource:    *opencodeConfig,
+		AgentVMVersion:    Version,
+	}
+	// The same checks Generate makes later, run here so they precede the
+	// tool checks, the lock, and any base image build — and so a dry run
+	// reports a file the real run would refuse.
+	if err := userData.Validate(); err != nil {
+		return err
+	}
 
 	if app.dryRun {
 		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey)
 	}
 
-	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg}
+	// virt-make-fs writes the cloud-init seed, so its floor is checked here with
+	// the others rather than discovered once the VM directory exists.
+	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg, hostexec.VirtMakeFS}
 	if *githubSSHKey {
 		tools = append(tools, hostexec.GH)
 	}
@@ -230,12 +249,8 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		store:           store,
 		manager:         manager,
 		manifest:        manifest,
-		keys:            keys,
+		userData:        userData,
 		keyPaths:        keyPaths,
-		extraUserData:   extraUserData,
-		extraSource:     *cloudInit,
-		opencodeConfig:  opencodeJSON,
-		opencodeSource:  *opencodeConfig,
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
@@ -419,14 +434,12 @@ type createRequest struct {
 	store    *state.Store
 	manager  *domain.Manager
 	manifest *state.Manifest
-	keys     []string
-	// keyPaths are the files keys came from, recorded in vm.json so a VM's
-	// authorized keys can be traced back to their source.
+	// userData is what the guest's cloud-init user-data is generated from,
+	// already validated.
+	userData guestinit.Options
+	// keyPaths are the files the authorized keys came from, recorded in
+	// vm.json so a VM's authorized keys can be traced back to their source.
 	keyPaths        []string
-	extraUserData   []byte
-	extraSource     string
-	opencodeConfig  []byte
-	opencodeSource  string
 	virtInstallArgs []string
 	waitForSSH      time.Duration
 	githubSSHKey    bool
@@ -497,16 +510,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	}
 	rollback.directory = vm.Paths.Dir
 
-	userData, err := guestinit.Generate(guestinit.Options{
-		Hostname:          name,
-		User:              cfg.GuestUser,
-		SSHAuthorizedKeys: req.keys,
-		ExtraUserData:     req.extraUserData,
-		ExtraSource:       req.extraSource,
-		OpencodeConfig:    req.opencodeConfig,
-		OpencodeSource:    req.opencodeSource,
-		AgentVMVersion:    Version,
-	})
+	userData, err := guestinit.Generate(req.userData)
 	if err != nil {
 		return nil, err
 	}
