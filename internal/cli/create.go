@@ -198,7 +198,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		}
 	}()
 
-	if store.HasVM(name) {
+	exists, err := store.HasVM(name)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return &state.ExistsError{Kind: "VM", Name: name}
 	}
 

@@ -280,9 +280,15 @@ func (s *Store) checkRecord(file, name string, vm *VM) error {
 }
 
 // HasVM reports whether a VM record exists, without reading it.
-func (s *Store) HasVM(name string) bool {
+//
+// A check that fails is an error, not "absent": create would otherwise go on to
+// write over the files of a VM it could not see.
+func (s *Store) HasVM(name string) (bool, error) {
 	found, err := s.fsys.Exists(filepath.Join(s.VMDir(name), VMRecordFile))
-	return err == nil && found
+	if err != nil {
+		return false, fmt.Errorf("checking for VM %s: %w", name, err)
+	}
+	return found, nil
 }
 
 // ListVMs returns every VM this state directory has a record of, by name.
@@ -362,7 +368,14 @@ func (s *Store) CreatesInProgress() ([]string, error) {
 	}
 	var creating []string
 	for _, entry := range entries {
-		if config.ValidateVMName(entry) != nil || s.HasVM(entry) {
+		if config.ValidateVMName(entry) != nil {
+			continue
+		}
+		recorded, err := s.HasVM(entry)
+		if err != nil {
+			return nil, err
+		}
+		if recorded {
 			continue
 		}
 		lock, err := s.TryLockVM(entry, "checking for a create in progress")

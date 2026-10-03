@@ -108,19 +108,25 @@ func (s *Store) LoadManifest(distro, tag string) (*Manifest, error) {
 
 // HasImage reports whether a usable base image is cached. All three artifacts
 // must be present: a manifest without its disk, kernel, or initrd is the
-// remains of an interrupted build, not a cache hit.
-func (s *Store) HasImage(distro, tag string) bool {
+// remains of an interrupted build, not a cache hit. A check that fails is an
+// error, not "absent": a caller would otherwise rebuild over an image it could
+// not see, past the checks that protect an image in use.
+func (s *Store) HasImage(distro, tag string) (bool, error) {
 	for _, path := range []string{
 		filepath.Join(s.ImageDir(distro, tag), ManifestFile),
 		s.BaseDiskPath(distro, tag),
 		s.KernelPath(distro, tag),
 		s.InitrdPath(distro, tag),
 	} {
-		if found, err := s.fsys.Exists(path); err != nil || !found {
-			return false
+		found, err := s.fsys.Exists(path)
+		if err != nil {
+			return false, fmt.Errorf("checking for base image %s:%s: %w", distro, tag, err)
+		}
+		if !found {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 // ListImages returns the manifest of every cached base image.
@@ -149,7 +155,14 @@ func (s *Store) ListImages() ([]*Manifest, error) {
 			return nil, fmt.Errorf("listing base images for %s: %w", d, err)
 		}
 		for _, tag := range tags {
-			if strings.HasPrefix(tag, ".") || !s.HasImage(d, tag) {
+			if strings.HasPrefix(tag, ".") {
+				continue
+			}
+			cached, err := s.HasImage(d, tag)
+			if err != nil {
+				return nil, err
+			}
+			if !cached {
 				continue
 			}
 			m, err := s.LoadManifest(d, tag)

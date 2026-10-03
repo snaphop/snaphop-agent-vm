@@ -46,17 +46,22 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	lock, err := store.LockVM(ctx, name, "destroy")
-	if err != nil {
-		return err
-	}
-	// A lock we cannot release is host state the operator needs to know about,
-	// so it is reported rather than dropped (AGENTS.md §6).
-	defer func() {
-		if releaseErr := lock.Release(); releaseErr != nil && err == nil {
-			err = releaseErr
+	// A dry run changes nothing, and taking the lock would: it writes the lock
+	// file. (Over ssh the dry-run runner already skips flock, a mutation.)
+	if !app.dryRun {
+		var lock *state.Lock
+		lock, err = store.LockVM(ctx, name, "destroy")
+		if err != nil {
+			return err
 		}
-	}()
+		// A lock we cannot release is host state the operator needs to know
+		// about, so it is reported rather than dropped (AGENTS.md §6).
+		defer func() {
+			if releaseErr := lock.Release(); releaseErr != nil && err == nil {
+				err = releaseErr
+			}
+		}()
+	}
 
 	// The record is read again under the lock. While this destroy waited,
 	// another may have removed the VM, and a create may then have made a new

@@ -133,10 +133,14 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		return nil, err
 	}
 
-	if !opts.Force && b.Store.HasImage(name, tag) {
+	cached, err := b.Store.HasImage(name, tag)
+	if err != nil {
+		return nil, err
+	}
+	if cached && !opts.Force {
 		return b.Store.LoadManifest(name, tag)
 	}
-	if opts.Force && b.Store.HasImage(name, tag) {
+	if cached {
 		// A rebuild replaces the backing file in place, and an overlay on top
 		// of a different base disk is a corrupt filesystem (ADR-0004).
 		if err := b.refuseWhileInUse(opts.Ref, "rebuild", false); err != nil {
@@ -438,12 +442,56 @@ func (b *Builder) kernelVersion(ctx context.Context, diskPath string) (string, e
 	if len(versions) == 0 {
 		return "", fmt.Errorf("no kernel found in %s of the built image: the build recipe for this distro did not install a kernel", distro.ModulesDir)
 	}
-	// More than one kernel means the recipe installed two; the newest by string
-	// order is the one whose initramfs was generated last. Sorting keeps the
+	// More than one kernel means the recipe installed two; the newest is the
+	// one whose initramfs was generated last. Choosing by version keeps the
 	// choice deterministic instead of depending on directory order.
-	sort.Strings(versions)
-	return versions[len(versions)-1], nil
+	return newestByVersion(versions), nil
 }
+
+// newestByVersion returns the name that sorts last when runs of digits are
+// compared as numbers, so 6.10.0 is newer than 6.9.0 — which plain string
+// order gets backwards.
+func newestByVersion(names []string) string {
+	sorted := append([]string(nil), names...)
+	sort.SliceStable(sorted, func(i, j int) bool { return compareVersions(sorted[i], sorted[j]) < 0 })
+	return sorted[len(sorted)-1]
+}
+
+// compareVersions orders two names chunk by chunk: a run of digits against a
+// run of digits by numeric value, anything else byte by byte.
+func compareVersions(a, b string) int {
+	for a != "" && b != "" {
+		chunkA, restA := versionChunk(a)
+		chunkB, restB := versionChunk(b)
+		if isDigit(chunkA[0]) && isDigit(chunkB[0]) {
+			// Compared as digit strings, not parsed, so a long run cannot
+			// overflow: without leading zeros, the longer one is larger.
+			numA, numB := strings.TrimLeft(chunkA, "0"), strings.TrimLeft(chunkB, "0")
+			if len(numA) != len(numB) {
+				return len(numA) - len(numB)
+			}
+			if c := strings.Compare(numA, numB); c != 0 {
+				return c
+			}
+		} else if c := strings.Compare(chunkA, chunkB); c != 0 {
+			return c
+		}
+		a, b = restA, restB
+	}
+	return len(a) - len(b)
+}
+
+// versionChunk splits off the leading run of digits, or of non-digits.
+func versionChunk(s string) (chunk, rest string) {
+	digits := isDigit(s[0])
+	i := 1
+	for i < len(s) && isDigit(s[i]) == digits {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 // kernelVersionPattern is deliberately strict: this value is used to build
 // paths passed to another tool.
@@ -516,10 +564,10 @@ func matchOne(entries []string, pattern, what, distroName string) (string, error
 	case 1:
 		return matches[0], nil
 	default:
-		// Two kernels means the recipe installed two. Picking one silently
-		// would make the manifest's kernel version a guess.
-		sort.Strings(matches)
-		return matches[len(matches)-1], nil
+		// Two kernels means the recipe installed two. The newest is taken, by
+		// the same version order kernelVersion uses, so the kernel copied out
+		// and the version the manifest records agree.
+		return newestByVersion(matches), nil
 	}
 }
 
@@ -691,7 +739,11 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 	if err := b.recoverInterruptedBuilds(ref.ImageName(), ref.Tag); err != nil {
 		return err
 	}
-	if !b.Store.HasImage(ref.ImageName(), ref.Tag) {
+	cached, err := b.Store.HasImage(ref.ImageName(), ref.Tag)
+	if err != nil {
+		return err
+	}
+	if !cached {
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}
 	}
 

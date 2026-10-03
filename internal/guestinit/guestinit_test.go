@@ -628,3 +628,20 @@ func TestGenerateMetaData_RejectsAnInvalidVMName(t *testing.T) {
 		t.Error("GenerateMetaData accepted a VM name that is not one")
 	}
 }
+
+func TestGenerate_RejectsOperatorUserDataContainingTheMIMEBoundary(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.ExtraUserData = []byte("#cloud-config\nwrite_files:\n  - content: |\n--agent-vm-cloud-init\n      path: /etc/motd\n")
+	opts.ExtraSource = "extra.yaml"
+
+	for name, run := range map[string]func() error{
+		"Generate": func() error { _, err := Generate(opts); return err },
+		"Validate": opts.Validate,
+	} {
+		var validation *config.ValidationError
+		if err := run(); !errors.As(err, &validation) {
+			t.Errorf("%s = %v, want a ValidationError: the line would split the document", name, err)
+		}
+	}
+}

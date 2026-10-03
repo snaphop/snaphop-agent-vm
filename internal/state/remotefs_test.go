@@ -421,3 +421,25 @@ func TestDescribeHolder(t *testing.T) {
 		}
 	}
 }
+
+// A connection that drops while a VM or image is being looked for must not
+// read as "not there": create would write over the VM it could not see, and a
+// build would replace an image past the checks that protect one in use.
+func TestRemoteFS_AFailedExistenceCheckIsAnErrorNotAbsent(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	store := remoteStore(t, fake)
+	fake.RespondPrefix("test -e", hostexec.FakeResponse{ExitCode: 255, Stderr: "ssh: connect to host hv.example.com port 22: Connection reset by peer"})
+
+	if found, err := store.HasVM("web"); err == nil {
+		t.Errorf("HasVM = %v, nil; want the failed check reported", found)
+	}
+	if found, err := store.HasImage("ubuntu", "24.04"); err == nil {
+		t.Errorf("HasImage = %v, nil; want the failed check reported", found)
+	}
+
+	fake.RespondPrefix("test -e", hostexec.FakeResponse{ExitCode: 1})
+	if found, err := store.HasVM("web"); err != nil || found {
+		t.Errorf("HasVM = %v, %v; want a plain false for a VM that is not there", found, err)
+	}
+}

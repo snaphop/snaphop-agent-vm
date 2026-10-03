@@ -273,6 +273,11 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+	// The create left its lock file; a dry run must not write one back.
+	lockFile := filepath.Join(stateDir, "locks", "vm-agent-01.lock")
+	if err := os.Remove(lockFile); err != nil {
+		t.Fatalf("removing the lock file: %v", err)
+	}
 
 	code, stdout, stderr := cliRunStdin(t, fake, stateDir, "", "--dry-run", "--yes", "destroy", "agent-01", "--force")
 	if code != ExitOK {
@@ -290,6 +295,9 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	}
 	if !vmDirExists(t, stateDir, "agent-01") {
 		t.Errorf("--dry-run removed the state directory")
+	}
+	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+		t.Errorf("--dry-run took the VM's lock, writing %s: %v", lockFile, err)
 	}
 }
 

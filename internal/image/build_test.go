@@ -241,7 +241,7 @@ func TestBuild_ProducesAllThreeArtifactsAndAManifest(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Fatal("the built image is not reported as cached")
 	}
 	for _, path := range []string{
@@ -278,7 +278,7 @@ func TestBuild_FailureLeavesNoBootableImageBehind(t *testing.T) {
 		t.Errorf("error %q does not name the tool that failed", err)
 	}
 
-	if store.HasImage("ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("a failed build left a usable image in the cache")
 	}
 	entries, err := os.ReadDir(filepath.Dir(store.ImageDir("ubuntu", "24.04")))
@@ -336,7 +336,7 @@ func TestBuild_RefusesAnUnpinnableDigest(t *testing.T) {
 		if err == nil {
 			t.Errorf("Build accepted the digest response %q", response)
 		}
-		if store.HasImage("ubuntu", "24.04") {
+		if hasImage(t, store, "ubuntu", "24.04") {
 			t.Errorf("an image was cached despite an unusable digest (%q)", response)
 		}
 	}
@@ -436,7 +436,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	if !strings.Contains(err.Error(), "agent-01") {
 		t.Errorf("error %q does not name the VM that still depends on the image", err)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image was removed despite the refusal")
 	}
 
@@ -444,7 +444,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	if err := builder.Remove(ctx, ref, true); err != nil {
 		t.Fatalf("Remove --force: %v", err)
 	}
-	if store.HasImage("ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("--force did not remove the image")
 	}
 }
@@ -478,7 +478,7 @@ func TestRemove_RefusesEvenWithForceWhileACreateIsInProgress(t *testing.T) {
 	if !errors.As(err, &busy) || !strings.Contains(err.Error(), "agent-01") {
 		t.Fatalf("Remove = %v, want a BusyError naming the create in progress", err)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image was removed from under a create in progress")
 	}
 }
@@ -646,7 +646,7 @@ func TestBuild_RestoresTheImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
 	if extra := len(fake.Calls()) - calls; extra != 0 {
 		t.Errorf("the last good image was rebuilt instead of restored: %d tool invocations", extra)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("ubuntu:24.04 was not restored from its backup")
 	}
 	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
@@ -672,7 +672,7 @@ func TestBuild_RemovesABackupLeftBesideAnInstalledImage(t *testing.T) {
 	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the leftover backup is still there: %v", err)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the installed image was lost")
 	}
 }
@@ -719,7 +719,7 @@ func TestBuild_ForcedRebuildLeavesAnImageTaggedLikeABackupAlone(t *testing.T) {
 	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t), Force: true}); err != nil {
 		t.Fatalf("forced Build: %v", err)
 	}
-	if !store.HasImage("ubuntu", "24.04.previous") {
+	if !hasImage(t, store, "ubuntu", "24.04.previous") {
 		t.Error("rebuilding ubuntu:24.04 deleted the separately cached ubuntu:24.04.previous")
 	}
 }
@@ -748,12 +748,12 @@ func TestBuild_SlimImageIsCachedUnderItsOwnNameAndBuiltFromTheSlimRecipe(t *test
 	if manifest.Distro != "ubuntu-slim" || manifest.Ref() != "ubuntu-slim:24.04" {
 		t.Errorf("manifest names the image %s, want ubuntu-slim:24.04", manifest.Ref())
 	}
-	if !store.HasImage("ubuntu-slim", "24.04") {
+	if !hasImage(t, store, "ubuntu-slim", "24.04") {
 		t.Fatal("the built slim image is not reported as cached")
 	}
 	// A slim build must not be mistaken for, or overwrite, the full image of
 	// the same family and tag.
-	if store.HasImage("ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("building ubuntu-slim also produced an image cached as ubuntu")
 	}
 
@@ -803,8 +803,36 @@ func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
 	}
 
 	for _, name := range []string{"ubuntu", "ubuntu-slim"} {
-		if !store.HasImage(name, "24.04") {
+		if !hasImage(t, store, name, "24.04") {
 			t.Errorf("%s:24.04 is not cached after building both", name)
 		}
 	}
+}
+
+func TestNewestByVersion_ComparesVersionNumbersNotStrings(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		names []string
+		want  string
+	}{
+		{[]string{"6.9.0-1-generic", "6.10.0-1-generic"}, "6.10.0-1-generic"},
+		{[]string{"vmlinuz-6.10.0-31-generic", "vmlinuz-6.9.12-31-generic"}, "vmlinuz-6.10.0-31-generic"},
+		{[]string{"6.8.0-31-generic", "6.8.0-100-generic", "6.8.0-9-generic"}, "6.8.0-100-generic"},
+		{[]string{"6.12.4-arch1-1", "6.12.4-arch1-2"}, "6.12.4-arch1-2"},
+		{[]string{"6.8.0", "6.8.0-1"}, "6.8.0-1"},
+		{[]string{"6.08", "6.7"}, "6.08"},
+	} {
+		if got := newestByVersion(tt.names); got != tt.want {
+			t.Errorf("newestByVersion(%q) = %q, want %q", tt.names, got, tt.want)
+		}
+	}
+}
+
+func hasImage(t *testing.T, store *state.Store, distro, tag string) bool {
+	t.Helper()
+	cached, err := store.HasImage(distro, tag)
+	if err != nil {
+		t.Fatalf("HasImage(%s, %s): %v", distro, tag, err)
+	}
+	return cached
 }

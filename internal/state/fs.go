@@ -103,6 +103,12 @@ func (LocalFS) WriteFile(path string, data []byte, perm fs.FileMode) error {
 		_ = tmp.Close()
 		return fmt.Errorf("setting permissions on %s: %w", path, err)
 	}
+	// Flushed before the rename: otherwise a power loss can leave the rename
+	// on disk without the data, and the record replaced by an empty file.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("flushing %s: %w", path, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", path, err)
 	}

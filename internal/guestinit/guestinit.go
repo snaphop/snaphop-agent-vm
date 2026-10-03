@@ -267,6 +267,19 @@ var userDataPrefixes = []struct {
 // Content-Type is how cloud-init chooses a handler inside a multipart document,
 // and the headers below are the same ones it recognizes on a bare payload.
 func partContentType(data []byte, source string) (string, error) {
+	// The operator's file becomes one part of a multipart document with a
+	// fixed boundary, so a line of it that begins with that boundary would end
+	// its part early and turn the rest into parts of their own.
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "--"+mimeBoundary) {
+			return "", &config.ValidationError{
+				Field: "cloud-init user-data", Value: source,
+				Err:    fmt.Errorf("a line begins with %q, the boundary agent-vm wraps the file in", "--"+mimeBoundary),
+				Remedy: "Change that line. It would split the file in two when cloud-init reads it.",
+			}
+		}
+	}
+
 	body := strings.TrimLeft(string(data), " \t\r\n")
 
 	// A jinja-templated payload declares itself on the line above its real
