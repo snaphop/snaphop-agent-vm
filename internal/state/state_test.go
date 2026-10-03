@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -187,5 +188,54 @@ func TestFreeBytes_ReportsSpaceInTheStateDirectory(t *testing.T) {
 	}
 	if free == 0 {
 		t.Error("FreeBytes = 0, want the free space of the temp filesystem")
+	}
+}
+
+// cacheImage writes a complete cached image into dir — manifest, disk, kernel,
+// and initrd — whose manifest names distro:tag, as a build would leave it.
+func cacheImage(t *testing.T, store *Store, dir, distro, tag string) {
+	t.Helper()
+	data, err := MarshalManifest(&Manifest{SchemaVersion: ManifestSchemaVersion, Distro: distro, Tag: tag})
+	if err != nil {
+		t.Fatalf("MarshalManifest: %v", err)
+	}
+	if err := store.MkdirAll(dir); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	files := map[string][]byte{ManifestFile: data, BaseDiskFile: nil, KernelFile: nil, InitrdFile: nil}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+}
+
+func TestListImages_ListsOnlyImagesInTheirOwnDirectory(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	ubuntu := filepath.Dir(store.ImageDir("ubuntu", "24.04"))
+
+	cacheImage(t, store, store.ImageDir("ubuntu", "24.04"), "ubuntu", "24.04")
+	// A real image whose tag happens to end in ".previous" is still an image.
+	cacheImage(t, store, store.ImageDir("ubuntu", "24.04.previous"), "ubuntu", "24.04.previous")
+	// The copy of ubuntu:22.04 a rebuild moves aside, under the current name
+	// and under the name older releases used: neither is an image of its own,
+	// and listing either would show an image `image rm` cannot reach.
+	cacheImage(t, store, filepath.Join(ubuntu, ".22.04.previous"), "ubuntu", "22.04")
+	cacheImage(t, store, filepath.Join(ubuntu, "22.04.previous"), "ubuntu", "22.04")
+	// A build workspace that got as far as writing its manifest.
+	cacheImage(t, store, filepath.Join(ubuntu, ".build-22.04-4242"), "ubuntu", "22.04")
+
+	images, err := store.ListImages()
+	if err != nil {
+		t.Fatalf("ListImages: %v", err)
+	}
+	var refs []string
+	for _, m := range images {
+		refs = append(refs, m.Ref())
+	}
+	want := []string{"ubuntu:24.04", "ubuntu:24.04.previous"}
+	if strings.Join(refs, " ") != strings.Join(want, " ") {
+		t.Errorf("ListImages = %v, want %v", refs, want)
 	}
 }

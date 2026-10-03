@@ -455,11 +455,16 @@ family can be cached at once and are built and removed independently. It is the
 largest of the three — a nix store carrying four toolchains and a browser is
 bigger than the equivalent distro packages, because closures are complete.
 
-The build prepares artifacts in a temporary directory under `images/` and
-installs them on success. During a rebuild the previous image is moved aside
-before the new directory is installed, then removed; failed installation attempts
-restore it. An abrupt interruption during those renames can leave a `.previous`
-directory requiring recovery.
+The build prepares artifacts in a temporary directory beside the image
+(`images/<image>/.build-<tag>-<pid>/`) and installs them on success. During a
+rebuild the previous image is moved aside to `images/<image>/.<tag>.previous/`
+before the new directory is installed, then removed; failed installation
+attempts restore it. Neither name can be a tag, so neither is ever mistaken for
+a cached image. If a build is killed outright (SIGKILL, out of memory, a host
+reboot), the next `image build`, `image rm`, or `create` that uses the same
+image cleans up after it: it removes the dead build's temporary directory, and
+puts the previous image back if the rebuild was killed between moving it aside
+and installing the new one.
 The source image is pulled by its requested reference, then pinned to the digest that was actually
 fetched; everything after the pull is built on the digest, and the digest is what
 `manifest.json` records. The cache is keyed by image name and tag, not digest.

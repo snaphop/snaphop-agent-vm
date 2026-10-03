@@ -219,9 +219,12 @@ background worker. Long waits include image builds, the guest boot wait during `
   registry, distro package mirrors, and tool download services.
 - **Failure behavior:** builds into a temporary directory and renames into place
   on success. Build failures attempt to remove the workspace and report cleanup
-  errors. Publishing a rebuild moves the old directory aside before installing
-  the new one; an abrupt interruption between renames can leave a `.previous`
-  directory requiring recovery. Nothing is retried: a failed pull or
+  errors. Publishing a rebuild moves the old directory aside (to
+  `.<tag>.previous`, a name no tag can take) before installing the new one.
+  Every build of an image holds that image's lock throughout, so whatever a
+  killed build left behind is cleared up the next time the lock is taken: its
+  `.build-<tag>-<pid>` workspace is removed, and a backup with no image beside
+  it is renamed back into place. Nothing is retried: a failed pull or
   build surfaces the tool's own error and the operator reruns `image build`. A
   digest that cannot be read back from what was pulled is fatal, and the build
   never falls back to an unpinned reference. A rebuild keeps the previous image

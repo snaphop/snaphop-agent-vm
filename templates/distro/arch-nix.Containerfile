@@ -116,8 +116,9 @@ RUN set -eu; \
 # source of packages for anyone who ran nix-env inside a guest.
 #
 # The nix version is deliberately unpinned, like mise and the vendor installers
-# in the full recipe: reproducibility comes from the digest the manifest records
-# for the source image (ADR-0006), not from the version of the installer.
+# in the full recipe. The manifest records only the source image's digest, not
+# the installer's version or the nixpkgs revision agent-tools.nix follows, so a
+# rebuild is not reproducible (ADR-0006, ADR-0012).
 RUN set -eu; \
     curl -fsSL -o /tmp/nix-install https://nixos.org/nix/install; \
     sh /tmp/nix-install --no-daemon --no-channel-add; \

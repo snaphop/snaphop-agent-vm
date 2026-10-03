@@ -44,7 +44,7 @@ func Plan(layout state.Layout, opts BuildOptions) []hostexec.Command {
 
 	// The real workspace name carries the PID of the process doing the build;
 	// a plan has no build to name, so it shows the shape instead.
-	work := filepath.Join(layout.Root(), "images", fmt.Sprintf(".build-%s-%s-<pid>", name, tag))
+	work := workspaceDir(layout, name, tag, "<pid>")
 	tarPath := filepath.Join(work, "rootfs.tar")
 	diskPath := filepath.Join(work, state.BaseDiskFile)
 	localTag := fmt.Sprintf("agent-vm/%s:%s", name, tag)

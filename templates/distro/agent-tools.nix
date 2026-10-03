@@ -29,9 +29,10 @@ let
   # A branch name is not a pin: it moves, so two builds a week apart install
   # different versions. scripts/pin-nixpkgs.sh resolves this to a commit
   # revision and its sha256 and rewrites the two bindings below, which is what
-  # makes a rebuild reproducible. Until it has been run the fetch follows the
-  # release branch, which is why manifest.json records the source digest rather
-  # than promising a byte-for-byte reproducible rebuild (ADR-0006).
+  # pins the nix packages. Until it has been run the fetch follows the release
+  # branch. manifest.json records only the source image's digest, not this
+  # revision, so it does not promise a byte-for-byte reproducible rebuild
+  # (ADR-0006).
   nixpkgsRef = "nixos-25.05";
   nixpkgsSha256 = null;
 

@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,6 +129,10 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		}
 	}()
 
+	if err := b.recoverInterruptedBuilds(name, tag); err != nil {
+		return nil, err
+	}
+
 	if !opts.Force && b.Store.HasImage(name, tag) {
 		return b.Store.LoadManifest(name, tag)
 	}
@@ -187,8 +192,107 @@ type workspace struct {
 	diskPath string
 }
 
+// workspacePrefix starts the name of every build workspace. A workspace sits
+// beside the image it will become, in images/<image>/, and is named
+// ".build-<tag>-<pid>". The leading dot keeps it from ever being a tag
+// (distro.ParseRef refuses one), and a PID cannot contain a hyphen, so the tag
+// a workspace belongs to is exactly what lies between the prefix and the last
+// hyphen.
+const workspacePrefix = ".build-"
+
+func workspaceDir(layout state.Layout, imageName, tag, pid string) string {
+	return filepath.Join(filepath.Dir(layout.ImageDir(imageName, tag)), workspacePrefix+tag+"-"+pid)
+}
+
+// isWorkspaceOf reports whether a directory name is a build workspace for this
+// tag. It compares exactly, so tag 24.04 never claims the workspace of tag
+// 24.04.1 or 24.04-1.
+func isWorkspaceOf(name, tag string) bool {
+	rest, ok := strings.CutPrefix(name, workspacePrefix)
+	if !ok {
+		return false
+	}
+	cut := strings.LastIndex(rest, "-")
+	if cut < 0 || rest[:cut] != tag {
+		return false
+	}
+	pid := rest[cut+1:]
+	if pid == "" {
+		return false
+	}
+	for _, r := range pid {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// backupDir is where a rebuild moves the image it replaces while the new one is
+// installed. The leading dot means it can never be the directory of a real
+// image: distro.ParseRef refuses a tag that starts with one, so no other cached
+// image can share the name and be deleted by mistake.
+func backupDir(layout state.Layout, imageName, tag string) string {
+	return filepath.Join(filepath.Dir(layout.ImageDir(imageName, tag)), "."+tag+".previous")
+}
+
+// recoverInterruptedBuilds clears up after a build of this image that was
+// killed — SIGKILL, the OOM killer, a reboot — before it could clean up after
+// itself. It runs under the image's lock, which every build of the image holds
+// for its whole duration, so anything it finds belongs to a build that is no
+// longer running.
+//
+// A workspace left behind is removed: it is gigabytes of root filesystem tar
+// and disk image that nothing would ever use. A backup left by an interrupted
+// commit is put back when the image itself is missing, because it is then the
+// last good image; when the image is present, the new one was installed and
+// the backup is only a leftover.
+func (b *Builder) recoverInterruptedBuilds(imageName, tag string) error {
+	parent := filepath.Dir(b.Store.ImageDir(imageName, tag))
+	entries, err := b.Store.Subdirectories(parent)
+	if err != nil {
+		return fmt.Errorf("looking for interrupted builds of %s:%s: %w", imageName, tag, err)
+	}
+	for _, entry := range entries {
+		if !isWorkspaceOf(entry, tag) {
+			continue
+		}
+		dir := filepath.Join(parent, entry)
+		if err := b.Store.Remove(dir); err != nil {
+			return fmt.Errorf("removing %s, left by an interrupted build of %s:%s: %w", dir, imageName, tag, err)
+		}
+		if b.Logger != nil {
+			b.Logger.Info("removed the workspace of an interrupted build", "dir", dir)
+		}
+	}
+
+	backup := backupDir(b.Store.Layout, imageName, tag)
+	hasBackup, err := b.Store.Exists(backup)
+	if err != nil || !hasBackup {
+		return err
+	}
+	final := b.Store.ImageDir(imageName, tag)
+	hasImage, err := b.Store.Exists(final)
+	if err != nil {
+		return err
+	}
+	if hasImage {
+		if err := b.Store.Remove(backup); err != nil {
+			return fmt.Errorf("removing %s, left by an interrupted rebuild of %s:%s: %w", backup, imageName, tag, err)
+		}
+		return nil
+	}
+	if err := b.Store.Rename(backup, final); err != nil {
+		return fmt.Errorf("restoring %s:%s from %s, left by an interrupted rebuild: %w", imageName, tag, backup, err)
+	}
+	if b.Logger != nil {
+		b.Logger.Info("restored the image an interrupted rebuild had moved aside", "image", imageName+":"+tag)
+	}
+	return nil
+}
+
 func (b *Builder) newWorkspace(imageName, tag string) (*workspace, error) {
-	dir := filepath.Join(b.Store.Root(), "images", fmt.Sprintf(".build-%s-%s-%d", imageName, tag, os.Getpid()))
+	dir := workspaceDir(b.Store.Layout, imageName, tag, strconv.Itoa(os.Getpid()))
 	if err := b.Store.Remove(dir); err != nil {
 		return nil, err
 	}
@@ -512,7 +616,7 @@ func (b *Builder) commit(work *workspace, distroName, tag string) error {
 	// A rebuild replaces an existing image. The old directory is moved aside
 	// first and removed only after the new one is in place, so a failure here
 	// leaves the previous image intact rather than nothing at all.
-	previous := final + ".previous"
+	previous := backupDir(b.Store.Layout, distroName, tag)
 	existed, err := b.Store.Exists(final)
 	if err != nil {
 		return err
@@ -582,6 +686,11 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 		}
 	}()
 
+	// An image an interrupted rebuild left only as its backup is still the
+	// operator's image, so it is put back first and is then removable.
+	if err := b.recoverInterruptedBuilds(ref.ImageName(), ref.Tag); err != nil {
+		return err
+	}
 	if !b.Store.HasImage(ref.ImageName(), ref.Tag) {
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}
 	}

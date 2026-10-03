@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
@@ -123,6 +124,14 @@ func (s *Store) HasImage(distro, tag string) bool {
 }
 
 // ListImages returns the manifest of every cached base image.
+//
+// Only a directory whose manifest names the image that directory is the cache
+// for is listed. Anything else under images/ is not a cached image: a build's
+// temporary workspace or the copy of an old image a rebuild moves aside (both
+// dot-prefixed, which no image name or tag can be), or a leftover directory
+// holding some other image's manifest. Listing one of those under the ref its
+// manifest names would show an image that `image rm` and `create` cannot
+// reach.
 func (s *Store) ListImages() ([]*Manifest, error) {
 	imagesDir := filepath.Join(s.root, "images")
 	distros, err := s.fsys.Subdirectories(imagesDir)
@@ -132,17 +141,23 @@ func (s *Store) ListImages() ([]*Manifest, error) {
 
 	var manifests []*Manifest
 	for _, d := range distros {
+		if strings.HasPrefix(d, ".") {
+			continue
+		}
 		tags, err := s.fsys.Subdirectories(filepath.Join(imagesDir, d))
 		if err != nil {
 			return nil, fmt.Errorf("listing base images for %s: %w", d, err)
 		}
 		for _, tag := range tags {
-			if !s.HasImage(d, tag) {
+			if strings.HasPrefix(tag, ".") || !s.HasImage(d, tag) {
 				continue
 			}
 			m, err := s.LoadManifest(d, tag)
 			if err != nil {
 				return nil, err
+			}
+			if m.Distro != d || m.Tag != tag {
+				continue
 			}
 			manifests = append(manifests, m)
 		}

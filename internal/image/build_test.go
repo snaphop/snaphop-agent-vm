@@ -281,7 +281,7 @@ func TestBuild_FailureLeavesNoBootableImageBehind(t *testing.T) {
 	if store.HasImage("ubuntu", "24.04") {
 		t.Error("a failed build left a usable image in the cache")
 	}
-	entries, err := os.ReadDir(filepath.Join(store.Root(), "images"))
+	entries, err := os.ReadDir(filepath.Dir(store.ImageDir("ubuntu", "24.04")))
 	if err != nil {
 		t.Fatalf("reading the image cache: %v", err)
 	}
@@ -557,6 +557,170 @@ func TestRemove_UnknownImageIsNotFound(t *testing.T) {
 	var notFound *state.NotFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("got %v, want *NotFoundError", err)
+	}
+}
+
+func parseRef(t *testing.T, s string) distro.Ref {
+	t.Helper()
+	ref, err := distro.ParseRef(s)
+	if err != nil {
+		t.Fatalf("ParseRef(%q): %v", s, err)
+	}
+	return ref
+}
+
+// leaveWorkspace plants what a build killed part-way through leaves behind: a
+// workspace directory holding a root filesystem tar.
+func leaveWorkspace(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := touch(filepath.Join(dir, "rootfs.tar")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuild_RemovesWorkspacesLeftByAKilledBuildOfTheSameImage(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ubuntu := filepath.Dir(store.ImageDir("ubuntu", "24.04"))
+
+	// Two dead builds of ubuntu:24.04. This process's PID is not among them,
+	// which is the case a crash leaves.
+	dead := []string{filepath.Join(ubuntu, ".build-24.04-999991"), filepath.Join(ubuntu, ".build-24.04-7")}
+	// Workspaces that look alike but belong to other images, whose builds may
+	// be running right now under their own locks.
+	others := []string{
+		filepath.Join(ubuntu, ".build-24.04.1-999991"),
+		filepath.Join(ubuntu, ".build-24.04-1-999991"),
+		filepath.Join(filepath.Dir(store.ImageDir("ubuntu-slim", "24.04")), ".build-24.04-999991"),
+	}
+	for _, dir := range append(append([]string{}, dead...), others...) {
+		leaveWorkspace(t, dir)
+	}
+
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	for _, dir := range dead {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the workspace of a killed build is still there: %s (%v)", dir, err)
+		}
+	}
+	for _, dir := range others {
+		if _, err := os.Stat(filepath.Join(dir, "rootfs.tar")); err != nil {
+			t.Errorf("a workspace of another image was touched: %s (%v)", dir, err)
+		}
+	}
+}
+
+// backupOf is where a rebuild moves ubuntu:24.04 aside.
+func backupOf(store *state.Store) string {
+	return filepath.Join(filepath.Dir(store.ImageDir("ubuntu", "24.04")), ".24.04.previous")
+}
+
+func TestBuild_RestoresTheImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
+	t.Parallel()
+	fake := ubuntuHost(t)
+	builder, store := newBuilder(t, fake)
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// A rebuild killed between moving the old image aside and installing the
+	// new one.
+	backup := backupOf(store)
+	if err := os.Rename(store.ImageDir("ubuntu", "24.04"), backup); err != nil {
+		t.Fatal(err)
+	}
+	if images, err := store.ListImages(); err != nil || len(images) != 0 {
+		t.Errorf("ListImages = %v, %v; the backup must not be listed as an image", images, err)
+	}
+	calls := len(fake.Calls())
+
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build after the interrupted rebuild: %v", err)
+	}
+	if extra := len(fake.Calls()) - calls; extra != 0 {
+		t.Errorf("the last good image was rebuilt instead of restored: %d tool invocations", extra)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("ubuntu:24.04 was not restored from its backup")
+	}
+	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the backup is still there after being restored: %v", err)
+	}
+}
+
+func TestBuild_RemovesABackupLeftBesideAnInstalledImage(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// A rebuild killed after installing the new image but before removing the
+	// old one.
+	backup := backupOf(store)
+	leaveWorkspace(t, backup)
+
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the leftover backup is still there: %v", err)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("the installed image was lost")
+	}
+}
+
+func TestRemove_ReachesAnImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	backup := backupOf(store)
+	if err := os.Rename(store.ImageDir("ubuntu", "24.04"), backup); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := builder.Remove(ctx, ubuntuRef(t), false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, dir := range []string{store.ImageDir("ubuntu", "24.04"), backup} {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there after image rm: %v", dir, err)
+		}
+	}
+}
+
+func TestBuild_ForcedRebuildLeavesAnImageTaggedLikeABackupAlone(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ctx := context.Background()
+
+	// "24.04.previous" is a valid tag, so it is a separate cached image that a
+	// rebuild of 24.04 must never treat as its own backup. The backup's name
+	// is one no tag can take.
+	if _, err := distro.ParseRef("ubuntu:.24.04.previous"); err == nil {
+		t.Fatal("ParseRef accepted a tag naming a rebuild's backup directory")
+	}
+	for _, ref := range []string{"ubuntu:24.04", "ubuntu:24.04.previous"} {
+		if _, err := builder.Build(ctx, BuildOptions{Ref: parseRef(t, ref)}); err != nil {
+			t.Fatalf("Build %s: %v", ref, err)
+		}
+	}
+
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t), Force: true}); err != nil {
+		t.Fatalf("forced Build: %v", err)
+	}
+	if !store.HasImage("ubuntu", "24.04.previous") {
+		t.Error("rebuilding ubuntu:24.04 deleted the separately cached ubuntu:24.04.previous")
 	}
 }
 

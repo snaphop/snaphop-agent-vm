@@ -287,6 +287,16 @@ func (s *Store) Exists(path string) (bool, error) {
 	return s.fsys.Exists(resolved)
 }
 
+// Subdirectories lists the names of the directories directly inside a
+// directory in the state directory. A directory that does not exist has none.
+func (s *Store) Subdirectories(path string) ([]string, error) {
+	resolved, err := s.Resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	return s.fsys.Subdirectories(resolved)
+}
+
 // FileSize is the size in bytes of a file inside the state directory.
 func (s *Store) FileSize(path string) (int64, error) {
 	resolved, err := s.Resolve(path)
