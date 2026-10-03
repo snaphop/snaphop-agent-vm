@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ func (x xmlDir) WriteNetworkXML(name string, xml []byte) (string, error) {
 const (
 	listAll    = "virsh --connect qemu:///system net-list --name --all"
 	listActive = "virsh --connect qemu:///system net-list --name"
+	dumpXML    = "virsh --connect qemu:///system net-dumpxml agent-vm-nat"
 )
 
 func TestEnsureNAT_DefinesStartsAndAutostartsAMissingNetwork(t *testing.T) {
@@ -51,7 +53,8 @@ func TestEnsureNAT_DoesNotRedefineANetworkThatIsAlreadyRunning(t *testing.T) {
 	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"}).
-		Respond(listActive, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"})
+		Respond(listActive, hostexec.FakeResponse{Stdout: "default\nagent-vm-nat\n"}).
+		Respond(dumpXML, hostexec.FakeResponse{Stdout: toolout(t, "virsh-net-dumpxml.xml")})
 
 	if err := EnsureNAT(context.Background(), fake, "qemu:///system", "agent-vm-nat", xmlDir{t.TempDir()}); err != nil {
 		t.Fatalf("EnsureNAT: %v", err)
@@ -68,7 +71,8 @@ func TestEnsureNAT_StartsANetworkThatIsDefinedButInactive(t *testing.T) {
 	t.Parallel()
 	fake := hostexec.NewFake().
 		Respond(listAll, hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
-		Respond(listActive, hostexec.FakeResponse{Stdout: "\n"})
+		Respond(listActive, hostexec.FakeResponse{Stdout: "\n"}).
+		Respond(dumpXML, hostexec.FakeResponse{Stdout: toolout(t, "virsh-net-dumpxml.xml")})
 
 	if err := EnsureNAT(context.Background(), fake, "qemu:///system", "agent-vm-nat", xmlDir{t.TempDir()}); err != nil {
 		t.Fatalf("EnsureNAT: %v", err)
@@ -81,6 +85,57 @@ func TestEnsureNAT_StartsANetworkThatIsDefinedButInactive(t *testing.T) {
 		if strings.Contains(argv, "net-define") {
 			t.Errorf("EnsureNAT redefined an already-defined network: %q", argv)
 		}
+	}
+}
+
+func TestEnsureNAT_LeavesTheAutostartOfANetworkItDidNotDefine(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake().
+		Respond(listAll, hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
+		Respond(listActive, hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
+		Respond(dumpXML, hostexec.FakeResponse{Stdout: toolout(t, "virsh-net-dumpxml.xml")})
+
+	if err := EnsureNAT(context.Background(), fake, "qemu:///system", "agent-vm-nat", xmlDir{t.TempDir()}); err != nil {
+		t.Fatalf("EnsureNAT: %v", err)
+	}
+	if fake.Ran("virsh --connect qemu:///system net-autostart agent-vm-nat") {
+		t.Error("EnsureNAT changed the autostart setting of a network it did not define")
+	}
+}
+
+func TestEnsureNAT_RefusesAnExistingNetworkThatDoesNotForwardByNAT(t *testing.T) {
+	t.Parallel()
+	nat := toolout(t, "virsh-net-dumpxml.xml")
+	natForward := "<forward mode='nat'>\n    <nat>\n      <port start='1024' end='65535'/>\n    </nat>\n  </forward>"
+	if !strings.Contains(nat, natForward) {
+		t.Fatalf("the fixture no longer has the expected <forward> element:\n%s", nat)
+	}
+	for _, tt := range []struct {
+		name, forward, want string
+	}{
+		// A bridged or routed network puts the guest on the LAN.
+		{"bridged", "<forward mode='bridge'/>", "bridge"},
+		{"routed", "<forward mode='route'/>", "route"},
+		{"isolated", "", "none"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := hostexec.NewFake().
+				Respond(listAll, hostexec.FakeResponse{Stdout: "agent-vm-nat\n"}).
+				Respond(listActive, hostexec.FakeResponse{Stdout: "\n"}).
+				Respond(dumpXML, hostexec.FakeResponse{Stdout: strings.Replace(nat, natForward, tt.forward, 1)})
+
+			err := EnsureNAT(context.Background(), fake, "qemu:///system", "agent-vm-nat", xmlDir{t.TempDir()})
+			var mode *ModeError
+			if !errors.As(err, &mode) || mode.Mode != tt.want {
+				t.Fatalf("EnsureNAT = %v, want a ModeError naming %q", err, tt.want)
+			}
+			for _, argv := range fake.Argvs() {
+				if strings.Contains(argv, "net-start") || strings.Contains(argv, "net-autostart") {
+					t.Errorf("EnsureNAT changed a network it refused: %q", argv)
+				}
+			}
+		})
 	}
 }
 

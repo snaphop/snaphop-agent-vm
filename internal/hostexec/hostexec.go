@@ -92,7 +92,10 @@ type Command struct {
 	// whose value is in watching them run: a package upgrade inside a guest
 	// takes minutes and reports what it is doing the whole time, and holding
 	// that until the command exits would leave the operator staring at
-	// nothing.
+	// nothing. Result then keeps only the last StreamedTail bytes of each
+	// stream: such a command can run for as long as its timeout, and its
+	// output — a guest's, for one — must not be able to exhaust this
+	// process's memory.
 	Output io.Writer
 
 	// DryRunStdout is returned in place of real output when a Mutate command
@@ -214,15 +217,16 @@ func (e *Exec) Run(ctx context.Context, c Command) (*Result, error) {
 	cmd.Dir = c.Dir
 	cmd.Env = commandEnv(c)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var stdout, stderr buffer = &bytes.Buffer{}, &bytes.Buffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if c.Output != nil {
+		stdout, stderr = &tailBuffer{limit: StreamedTail}, &tailBuffer{limit: StreamedTail}
 		// os/exec fills these from two goroutines, so the shared writer is
 		// serialized rather than handed to both.
 		live := &syncWriter{w: c.Output}
-		cmd.Stdout = io.MultiWriter(&stdout, live)
-		cmd.Stderr = io.MultiWriter(&stderr, live)
+		cmd.Stdout = io.MultiWriter(stdout, live)
+		cmd.Stderr = io.MultiWriter(stderr, live)
 	}
 
 	start := time.Now()
@@ -433,6 +437,37 @@ func (nopWriteCloser) Close() error { return nil }
 
 // syncWriter serializes writes from the stdout and stderr copiers onto one
 // destination.
+// StreamedTail is how much of each stream Result keeps for a command whose
+// output is streamed to Command.Output.
+const StreamedTail = 64 << 10
+
+// buffer is where Run collects a stream for Result.
+type buffer interface {
+	io.Writer
+	Bytes() []byte
+}
+
+// tailBuffer keeps only the last limit bytes written to it.
+type tailBuffer struct {
+	limit int
+	buf   []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.limit {
+		t.buf = append(t.buf[:0], p[len(p)-t.limit:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.limit; over > 0 {
+		t.buf = t.buf[:copy(t.buf, t.buf[over:])]
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) Bytes() []byte { return t.buf }
+
 type syncWriter struct {
 	mu sync.Mutex
 	w  io.Writer

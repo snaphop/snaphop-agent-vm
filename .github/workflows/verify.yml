@@ -24,13 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # golangci-lint v2.14 requires Go 1.26 or newer to run. The module's
       # language version stays 1.22 in go.mod; this is only the toolchain this
       # workflow runs on, and that toolchain still applies the go.mod version.
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27"
 
@@ -38,7 +40,7 @@ jobs:
       # scripts/check.sh and a local run and a pull request run the same
       # command. v2.14.0 is the version this repository is linted with.
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
           install-only: true

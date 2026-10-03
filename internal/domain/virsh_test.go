@@ -77,7 +77,7 @@ func TestIPv4Address_SkipsTheGuestsLoopbackInterface(t *testing.T) {
 		Stdout: toolout(t, "virsh-domifaddr-source-agent.txt"),
 	})
 
-	address, err := manager(fake).IPv4Address(context.Background(), "agent-01")
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01", NIC{Bridged: true})
 	if err != nil {
 		t.Fatalf("IPv4Address: %v", err)
 	}
@@ -86,34 +86,65 @@ func TestIPv4Address_SkipsTheGuestsLoopbackInterface(t *testing.T) {
 	}
 }
 
-func TestAddresses_FallsBackFromTheGuestAgentToTheDHCPLease(t *testing.T) {
+func TestIPv4Address_TakesABridgedGuestsAddressOnlyFromItsRecordedInterface(t *testing.T) {
 	t.Parallel()
 	fake := hostexec.NewFake()
-	// A guest whose agent is not up yet: virsh fails the agent query outright.
 	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source agent", hostexec.FakeResponse{
-		ExitCode: 1,
-		Stderr:   "error: Guest agent is not responding: QEMU guest agent is not connected",
+		Stdout: toolout(t, "virsh-domifaddr-source-agent.txt"),
+	})
+
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01",
+		NIC{Bridged: true, MAC: "52:54:00:3D:0C:CF"})
+	if err != nil {
+		t.Fatalf("IPv4Address: %v", err)
+	}
+	if address != "192.168.171.178" {
+		t.Errorf("address = %q, want the address on the recorded interface", address)
+	}
+
+	// An interface the host never defined — docker0, or one a hostile guest
+	// agent invents — is not where the guest is.
+	address, err = manager(fake).IPv4Address(context.Background(), "agent-01",
+		NIC{Bridged: true, MAC: "52:54:00:aa:bb:cc"})
+	if err != nil {
+		t.Fatalf("IPv4Address: %v", err)
+	}
+	if address != "" {
+		t.Errorf("address = %q, want none: no reported interface is the recorded one", address)
+	}
+}
+
+func TestIPv4Address_ANATGuestsAddressComesFromLibvirtsLeaseNotItsAgent(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	// The guest agent runs as root inside the untrusted guest, so it could
+	// report any address at all; on NAT, libvirt's own DHCP server knows.
+	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source agent", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr-source-agent.txt"),
 	})
 	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source lease", hostexec.FakeResponse{
 		Stdout: toolout(t, "virsh-domifaddr.txt"),
 	})
 
-	address, err := manager(fake).IPv4Address(context.Background(), "agent-01")
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01", NIC{MAC: "aa:bb:cc:dd:ee:ff"})
 	if err != nil {
 		t.Fatalf("IPv4Address: %v", err)
 	}
 	if address != "192.168.122.3" {
 		t.Errorf("address = %q, want the leased address", address)
 	}
+	if fake.Ran("virsh --connect " + uri + " domifaddr agent-01 --source agent") {
+		t.Error("a NAT guest's address must not be taken from its guest agent")
+	}
 }
 
-func TestAddresses_ReportsFailureWhenNoSourceAnswers(t *testing.T) {
+func TestAddresses_ReportsFailureWhenTheSourceFails(t *testing.T) {
 	t.Parallel()
 	fake := hostexec.NewFake()
 	fake.Default = hostexec.FakeResponse{ExitCode: 1, Stderr: "error: failed to get domain 'agent-01'"}
 
-	if _, err := manager(fake).Addresses(context.Background(), "agent-01"); err == nil {
-		t.Fatal("want an error when every address source failed")
+	if _, err := manager(fake).Addresses(context.Background(), "agent-01", NIC{}); err == nil {
+		t.Fatal("want an error when the address source failed")
 	}
 }
 
@@ -125,7 +156,7 @@ func TestAddresses_AGuestThatSimplyHasNoAddressIsNotAFailure(t *testing.T) {
 			"-------------------------------------------------------------\n\n",
 	}
 
-	address, err := manager(fake).IPv4Address(context.Background(), "agent-01")
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01", NIC{})
 	if err != nil {
 		t.Fatalf("IPv4Address: %v", err)
 	}
@@ -282,7 +313,7 @@ func TestWaitForAddress_ReturnsTheAddressAsSoonAsItAppears(t *testing.T) {
 		Stdout: toolout(t, "virsh-domifaddr.txt"),
 	})
 
-	address, err := manager(fake).WaitForAddress(context.Background(), "agent-01", time.Second)
+	address, err := manager(fake).WaitForAddress(context.Background(), "agent-01", NIC{}, time.Second)
 	if err != nil {
 		t.Fatalf("WaitForAddress: %v", err)
 	}
@@ -300,7 +331,7 @@ func TestWaitForAddress_TimesOutWithAnActionableError(t *testing.T) {
 	})
 
 	// A zero timeout still checks once: "wait for nothing" is not "skip".
-	_, err := manager(fake).WaitForAddress(context.Background(), "agent-01", 0)
+	_, err := manager(fake).WaitForAddress(context.Background(), "agent-01", NIC{}, 0)
 	var timeout *TimeoutError
 	if !errors.As(err, &timeout) {
 		t.Fatalf("err = %v, want a *TimeoutError", err)
@@ -372,5 +403,53 @@ func TestHostArch_FailsWhenCapabilitiesNamesNoArchitecture(t *testing.T) {
 
 	if _, err := manager(fake).HostArch(context.Background()); err == nil {
 		t.Fatal("HostArch = nil error, want a failure: the XML names no architecture")
+	}
+}
+
+func TestDiskPaths_ReadsARealVirshTable(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domblklist.txt"),
+	})
+
+	got, err := manager(fake).DiskPaths(context.Background(), "agent-01")
+	if err != nil {
+		t.Fatalf("DiskPaths: %v", err)
+	}
+	if len(got) != 1 || got[0] != "/guest/diskimage1" {
+		t.Errorf("DiskPaths = %q, want [/guest/diskimage1]", got)
+	}
+}
+
+// A state directory may sit under a path with spaces in it. Source is the last
+// column, so it is read whole: cut at the first space, the overlay path would
+// match nothing destroy recorded and it would refuse the tool's own VM.
+func TestDiskPaths_KeepsSpacesInASourcePath(t *testing.T) {
+	t.Parallel()
+	overlay := "/home/a b/.local/state/agent-vm/vms/agent-01/overlay.qcow2"
+	seed := "/home/a b/.local/state/agent-vm/vms/agent-01/seed  image.img"
+	table := strings.Replace(toolout(t, "virsh-domblklist.txt"), "/guest/diskimage1", overlay, 1)
+	table = strings.TrimRight(table, "\n") + "\n vdb      " + seed + "   \n sda      -\n\n"
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{Stdout: table})
+
+	got, err := manager(fake).DiskPaths(context.Background(), "agent-01")
+	if err != nil {
+		t.Fatalf("DiskPaths: %v", err)
+	}
+	if want := []string{overlay, seed}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("DiskPaths = %q, want %q", got, want)
+	}
+}
+
+func TestDiskPaths_RefusesARowWithNoSource(t *testing.T) {
+	t.Parallel()
+	table := strings.Replace(toolout(t, "virsh-domblklist.txt"), "/guest/diskimage1", "", 1)
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domblklist agent-01", hostexec.FakeResponse{Stdout: table})
+
+	if _, err := manager(fake).DiskPaths(context.Background(), "agent-01"); err == nil {
+		t.Fatal("DiskPaths = nil error, want a failure: a row has no Source column")
 	}
 }

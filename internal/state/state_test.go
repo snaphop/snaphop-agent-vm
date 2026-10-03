@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,125 @@ func TestResolve_RefusesASymlinkPointingOutOfTheStateDirectory(t *testing.T) {
 	var cerr *ContainmentError
 	if !errors.As(err, &cerr) {
 		t.Fatalf("Resolve through an escaping symlink = %v, want *ContainmentError", err)
+	}
+}
+
+func TestResolve_RefusesADanglingSymlinkPointingOutOfTheStateDirectory(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	dir := store.VMDir("agent-01")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// The target does not exist yet. qemu-img writing the overlay would follow
+	// the link and create it, outside the state directory.
+	target := filepath.Join(t.TempDir(), "outside", "root.qcow2")
+	overlay := filepath.Join(dir, OverlayFile)
+	if err := os.Symlink(target, overlay); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	_, err := store.Resolve(overlay)
+
+	var cerr *ContainmentError
+	if !errors.As(err, &cerr) {
+		t.Fatalf("Resolve through a dangling escaping symlink = %v, want *ContainmentError", err)
+	}
+	if cerr.Resolved != target {
+		t.Errorf("Resolved = %s, want the link's target %s", cerr.Resolved, target)
+	}
+}
+
+func TestResolve_FollowsARelativeDanglingSymlinkBackOutThroughDotDot(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	// vms/a -> ../../escaped: relative, dangling, and climbing out of the
+	// state directory, which only resolving the link itself reveals.
+	link := filepath.Join(store.Root(), "vms", "agent-01")
+	if err := os.Symlink(filepath.Join("..", "..", "escaped"), link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	_, err := store.Resolve(filepath.Join(link, OverlayFile))
+
+	var cerr *ContainmentError
+	if !errors.As(err, &cerr) {
+		t.Fatalf("Resolve through a relative escaping symlink = %v, want *ContainmentError", err)
+	}
+}
+
+func TestResolve_ChecksSymlinksReachedAfterAMissingComponent(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	escape := filepath.Join(store.Root(), "vms", "escape")
+	if err := os.Symlink(t.TempDir(), escape); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	// "missing" does not exist, and ".." climbs back to the existing vms/,
+	// where the next component is the escaping link.
+	_, err := store.Resolve(filepath.Join(store.Root(), "vms", "missing") + "/../escape/root.qcow2")
+
+	var cerr *ContainmentError
+	if !errors.As(err, &cerr) {
+		t.Fatalf("Resolve = %v, want *ContainmentError", err)
+	}
+}
+
+func TestResolve_KeepsNamesThatDoNotExistYet(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	path := filepath.Join(store.VMDir("agent-01"), SeedDirectory, UserDataFile)
+
+	got, err := store.Resolve(path)
+	if err != nil {
+		t.Fatalf("Resolve(%s) = %v, want nil", path, err)
+	}
+	root, err := filepath.EvalSymlinks(store.Root())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	want := filepath.Join(root, "vms", "agent-01", SeedDirectory, UserDataFile)
+	if got != want {
+		t.Errorf("Resolve(%s) = %s, want %s", path, got, want)
+	}
+}
+
+func TestResolve_RefusesASymlinkLoop(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	first := filepath.Join(store.Root(), "vms", "first")
+	second := filepath.Join(store.Root(), "vms", "second")
+	if err := os.Symlink(second, first); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+	if err := os.Symlink(first, second); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	if _, err := store.Resolve(filepath.Join(first, OverlayFile)); err == nil {
+		t.Fatal("Resolve through a symlink loop = nil, want an error")
+	}
+}
+
+func TestRemove_RefusesToDeleteTheStateDirectoryItself(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	keep := filepath.Join(store.Root(), "images", "keep.txt")
+	if err := os.WriteFile(keep, []byte("base image"), 0o600); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+
+	for _, path := range []string{store.Root(), filepath.Join(store.Root(), "vms", "..")} {
+		err := store.Remove(path)
+
+		var cerr *ContainmentError
+		if !errors.As(err, &cerr) {
+			t.Errorf("Remove(%s) = %v, want *ContainmentError", path, err)
+		}
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the state directory's contents were removed: %v", err)
 	}
 }
 
@@ -187,5 +307,54 @@ func TestFreeBytes_ReportsSpaceInTheStateDirectory(t *testing.T) {
 	}
 	if free == 0 {
 		t.Error("FreeBytes = 0, want the free space of the temp filesystem")
+	}
+}
+
+// cacheImage writes a complete cached image into dir — manifest, disk, kernel,
+// and initrd — whose manifest names distro:tag, as a build would leave it.
+func cacheImage(t *testing.T, store *Store, dir, distro, tag string) {
+	t.Helper()
+	data, err := MarshalManifest(&Manifest{SchemaVersion: ManifestSchemaVersion, Distro: distro, Tag: tag})
+	if err != nil {
+		t.Fatalf("MarshalManifest: %v", err)
+	}
+	if err := store.MkdirAll(dir); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	files := map[string][]byte{ManifestFile: data, BaseDiskFile: nil, KernelFile: nil, InitrdFile: nil}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+}
+
+func TestListImages_ListsOnlyImagesInTheirOwnDirectory(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	ubuntu := filepath.Dir(store.ImageDir("ubuntu", "24.04"))
+
+	cacheImage(t, store, store.ImageDir("ubuntu", "24.04"), "ubuntu", "24.04")
+	// A real image whose tag happens to end in ".previous" is still an image.
+	cacheImage(t, store, store.ImageDir("ubuntu", "24.04.previous"), "ubuntu", "24.04.previous")
+	// The copy of ubuntu:22.04 a rebuild moves aside, under the current name
+	// and under the name older releases used: neither is an image of its own,
+	// and listing either would show an image `image rm` cannot reach.
+	cacheImage(t, store, filepath.Join(ubuntu, ".22.04.previous"), "ubuntu", "22.04")
+	cacheImage(t, store, filepath.Join(ubuntu, "22.04.previous"), "ubuntu", "22.04")
+	// A build workspace that got as far as writing its manifest.
+	cacheImage(t, store, filepath.Join(ubuntu, ".build-22.04-4242"), "ubuntu", "22.04")
+
+	images, err := store.ListImages()
+	if err != nil {
+		t.Fatalf("ListImages: %v", err)
+	}
+	var refs []string
+	for _, m := range images {
+		refs = append(refs, m.Ref())
+	}
+	want := []string{"ubuntu:24.04", "ubuntu:24.04.previous"}
+	if strings.Join(refs, " ") != strings.Join(want, " ") {
+		t.Errorf("ListImages = %v, want %v", refs, want)
 	}
 }

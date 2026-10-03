@@ -120,15 +120,31 @@ func (a *App) removeGitHubKey(ctx context.Context, vm *state.VM) error {
 				"  Only a VM created with `agent-vm create --github-ssh-key` has one.", vm.Name)
 	}
 
+	client := github.New(a.runner)
+	// GitHub answers 404 both for a key that is gone and for a token without
+	// the key scope. The scope is checked first so that a 404 below can only
+	// mean the key is not on this account — and the destroy goes on to delete
+	// the only record of it.
+	if err := client.CheckAuth(ctx); err != nil {
+		return err
+	}
+
 	a.out.Progress("Removing GitHub SSH key %q\n", key.Title)
-	removed, err := github.New(a.runner).DeleteKey(ctx, key.ID)
+	removed, err := client.DeleteKey(ctx, key.ID)
 	if err != nil {
 		return err
 	}
 	if !removed {
-		// Someone removed it on github.com already. The end state is the one
-		// that was asked for, so this is worth saying rather than failing on.
-		a.out.Progress("GitHub SSH key %d was already gone\n", key.ID)
+		// Someone removed it on github.com already, which is the end state that
+		// was asked for. A key added while gh was logged in to another account
+		// looks the same from here, so the account is named, with the command
+		// that removes the key wherever it is.
+		account := "the account gh is logged in to"
+		if login, err := client.Login(ctx); err == nil {
+			account = fmt.Sprintf("%s, the account gh is logged in to", login)
+		}
+		a.out.Progress("GitHub has no SSH key %d on %s. It was already removed, or it was added from another account;\n"+
+			"  if so, remove it there with: gh api --method DELETE user/keys/%d\n", key.ID, account, key.ID)
 	}
 	return nil
 }

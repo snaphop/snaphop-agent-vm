@@ -51,9 +51,9 @@ type ufwState struct {
 	InputPolicy string
 	// RulesReadable is whether the operator's own rules could be read at all.
 	RulesReadable bool
-	// ForwardAccepts are the interfaces named by route rules that accept
-	// forwarded traffic. A rule with no interface appears as "any".
-	ForwardAccepts []string
+	// ForwardAccepts are the route rules that accept forwarded traffic, with
+	// the interfaces each one is limited to.
+	ForwardAccepts []forwardRule
 	// InputAccepts maps an interface to the destination ports it accepts
 	// inbound to the host. Only the ports NAT mode depends on are meaningful
 	// here; see acceptsPort.
@@ -86,6 +86,67 @@ func readUFWState(confPath, defaultsPath, rulesPath string) ufwState {
 // applies to all of them.
 const anyInterface = "any"
 
+// forwardRule is one accepting route rule. In is the interface the traffic
+// must arrive on (`-i`) and Out the one it must leave by (`-o`); either is
+// empty when the rule does not restrict it. Both matter: the guest's outbound
+// traffic arrives on the NAT bridge, so a rule limited to another input
+// interface, or only to traffic leaving toward the bridge, does nothing for
+// it.
+type forwardRule struct {
+	In  string
+	Out string
+}
+
+// coversAll reports whether the rule names no interface at all and so accepts
+// forwarded traffic everywhere.
+func (r forwardRule) coversAll() bool {
+	return r.In == "" && r.Out == ""
+}
+
+// String renders the rule the way an operator would write it for ufw.
+func (r forwardRule) String() string {
+	switch {
+	case r.coversAll():
+		return anyInterface
+	case r.Out == "":
+		return "in on " + r.In
+	case r.In == "":
+		return "out on " + r.Out
+	default:
+		return "in on " + r.In + " out on " + r.Out
+	}
+}
+
+// forwardRulesFrom returns the rules that let a guest on bridge reach past the
+// host: those arriving on the bridge, and those naming no interface. With no
+// bridge known, a rule on any input interface is accepted as well, since there
+// is nothing to tie it to. A rule limited only to an output interface never
+// counts, because it governs traffic toward that interface rather than from
+// it.
+func (s ufwState) forwardRulesFrom(bridge string) []forwardRule {
+	var matching []forwardRule
+	for _, rule := range s.ForwardAccepts {
+		switch {
+		case rule.coversAll():
+		case rule.In == "":
+			continue
+		case bridge != "" && rule.In != bridge:
+			continue
+		}
+		matching = append(matching, rule)
+	}
+	return matching
+}
+
+// describeRules joins rules for a check's detail.
+func describeRules(rules []forwardRule) string {
+	names := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		names = append(names, rule.String())
+	}
+	return strings.Join(names, ", ")
+}
+
 // Ports the guest must be able to reach *on the host* for NAT mode to work at
 // all: dnsmasq answers DHCP on 67 and DNS on 53. These are inbound to the host
 // rather than forwarded, which is why allowing forwarding does not cover them.
@@ -104,7 +165,7 @@ const (
 // Only the IPv4 file is read. The v6 twins ufw writes alongside them are
 // identical in shape and never match on an IPv4-only NAT network, so they
 // would add nothing but noise to the verdict.
-func readUFWRules(rulesPath string) (forward []string, input map[string]map[string]bool, readable bool) {
+func readUFWRules(rulesPath string) (forward []forwardRule, input map[string]map[string]bool, readable bool) {
 	file, err := os.Open(rulesPath)
 	if err != nil {
 		return nil, nil, false
@@ -118,15 +179,17 @@ func readUFWRules(rulesPath string) (forward []string, input map[string]map[stri
 		if len(fields) < 2 || fields[0] != "-A" || !hasFlag(fields, "-j", "ACCEPT") {
 			continue
 		}
-		iface, ok := flagValue(fields, "-i")
-		if !ok {
-			iface = anyInterface
-		}
+		in, _ := flagValue(fields, "-i")
 
 		switch fields[1] {
 		case "ufw-user-forward":
-			forward = append(forward, iface)
+			out, _ := flagValue(fields, "-o")
+			forward = append(forward, forwardRule{In: in, Out: out})
 		case "ufw-user-input":
+			iface := in
+			if iface == "" {
+				iface = anyInterface
+			}
 			port, ok := flagValue(fields, "--dport")
 			if !ok {
 				// A rule accepting everything on the interface covers both
@@ -230,12 +293,13 @@ func readShellVar(path, name string) (string, bool) {
 }
 
 // checkForwarding reports a host firewall that will drop the guest's forwarded
-// traffic.
+// traffic. bridge is the device libvirt allocated for the NAT network, or empty
+// when it could not be determined.
 //
 // It warns rather than fails: the live ruleset cannot be read without root, so
 // an operator may have a route rule this check cannot see, and a false failure
 // would exit non-zero on a host that actually works.
-func checkForwarding(cfg *config.Config, conn *config.Connection) check {
+func checkForwarding(cfg *config.Config, conn *config.Connection, bridge string) check {
 	if conn.Remote {
 		// The files below describe this machine's firewall, which has nothing
 		// to do with whether the hypervisor forwards its guests' packets.
@@ -247,13 +311,14 @@ func checkForwarding(cfg *config.Config, conn *config.Connection) check {
 			Remedy: "Run `agent-vm doctor` on " + conn.SSHDestination + " if guests boot but their outbound connections hang.",
 		}
 	}
-	return forwardingCheck(cfg, readUFWState(ufwConfPath, ufwDefaultsPath, ufwRulesPath))
+	return forwardingCheck(cfg, readUFWState(ufwConfPath, ufwDefaultsPath, ufwRulesPath), bridge)
 }
 
 // forwardingCheck is the decision alone, separated from the fixed paths so it
 // can be exercised against every ufw configuration a host might have.
-func forwardingCheck(cfg *config.Config, state ufwState) check {
+func forwardingCheck(cfg *config.Config, state ufwState, bridge string) check {
 	const name = "host firewall forwarding"
+	matching := state.forwardRulesFrom(bridge)
 
 	// A bridged guest is on the operator's LAN directly and its traffic is not
 	// routed through the host, so the forward hook never sees it. This asks
@@ -284,13 +349,29 @@ func forwardingCheck(cfg *config.Config, state ufwState) check {
 			Detail: "ufw is enabled and forwards by default",
 		}
 	// The default policy drops, so the guest gets out only if the operator
-	// added a route rule. Where those rules are readable they settle it; where
-	// they are not, the check says what it could not determine rather than
-	// guessing either way.
-	case len(state.ForwardAccepts) > 0:
+	// added a route rule for traffic arriving from the NAT bridge. Where those
+	// rules are readable they settle it; where they are not, the check says
+	// what it could not determine rather than guessing either way.
+	case len(matching) > 0 && bridge == "":
+		// libvirt allocates the bridge when the network is first started, so
+		// on a fresh host there is nothing to tie the rule to yet and any
+		// input interface's rule is accepted.
 		return check{
 			Name: name, Status: statusPass,
-			Detail: fmt.Sprintf("ufw forwards by rule for %s", strings.Join(state.ForwardAccepts, ", ")),
+			Detail: fmt.Sprintf("ufw forwards by rule for %s; the NAT network's bridge is not known yet, so the rule could not be matched to it",
+				describeRules(matching)),
+		}
+	case len(matching) > 0:
+		return check{
+			Name: name, Status: statusPass,
+			Detail: fmt.Sprintf("ufw forwards by rule for %s, covering the NAT bridge %s", describeRules(matching), bridge),
+		}
+	case len(state.ForwardAccepts) > 0:
+		return check{
+			Name: name, Status: statusWarn,
+			Detail: fmt.Sprintf("ufw is enabled with DEFAULT_FORWARD_POLICY=%s, and none of its route rules (%s) accepts traffic arriving from %s",
+				state.ForwardPolicy, describeRules(state.ForwardAccepts), describeInterface(bridge)),
+			Remedy: forwardingRemedy(cfg),
 		}
 	case state.RulesReadable && state.ForwardPolicy != "":
 		return check{

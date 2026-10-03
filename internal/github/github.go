@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,14 +35,15 @@ func New(runner hostexec.Runner) *Client {
 	return &Client{runner: runner}
 }
 
-// keyScope is the token scope POST /user/keys needs. A login without it gets a
-// 404 from the API, which says nothing useful on its own.
+// keyScope is the token scope adding and deleting keys needs. A login without
+// it gets a 404 from the API, which looks exactly like a key that does not
+// exist.
 const keyScope = "admin:public_key"
 
 // CheckAuth confirms gh has credentials for GitHub, and the scope that lets it
-// add a key. It is worth running before anything is created, so that an
-// expired login or a token that cannot manage keys is a refusal up front
-// rather than a failure after a VM exists.
+// manage keys. It runs before a key is added, so that an expired login or a
+// token that cannot manage keys is a refusal before a VM exists, and before a
+// key is deleted, so that a 404 can only mean the key is not on the account.
 func (c *Client) CheckAuth(ctx context.Context) error {
 	res, err := c.runner.Run(ctx, hostexec.Command{
 		Name:   hostexec.GH.Name,
@@ -63,7 +65,7 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 	scopes, found := tokenScopes(string(res.Stdout))
 	if found && !slices.Contains(scopes, keyScope) {
 		return fmt.Errorf("gh is logged in to github.com, but its token does not have the %q scope "+
-			"that adding an SSH key needs; add it with `gh auth refresh -h github.com -s %s`",
+			"that managing SSH keys needs; add it with `gh auth refresh -h github.com -s %s`",
 			keyScope, keyScope)
 	}
 	return nil
@@ -153,6 +155,28 @@ func (c *Client) DeleteKey(ctx context.Context, id int64) (removed bool, err err
 	default:
 		return false, err
 	}
+}
+
+// loginPattern is GitHub's username rule. The login is only ever shown in a
+// message, but it is output from another program and is checked before it is.
+var loginPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+
+// Login returns the account gh is logged in to.
+func (c *Client) Login(ctx context.Context) (string, error) {
+	res, err := c.runner.Run(ctx, hostexec.Command{
+		Name:     hostexec.GH.Name,
+		Args:     []string{"api", "user", "--jq", ".login"},
+		Effect:   hostexec.Read,
+		Location: hostexec.Client,
+	})
+	if err != nil {
+		return "", err
+	}
+	login := strings.TrimSpace(string(res.Stdout))
+	if !loginPattern.MatchString(login) {
+		return "", &hostexec.ParseError{Tool: hostexec.GH.Name, What: "the login of the account it uses", Output: string(res.Stdout)}
+	}
+	return login, nil
 }
 
 // isNotFound reports whether gh failed because the key no longer exists. gh

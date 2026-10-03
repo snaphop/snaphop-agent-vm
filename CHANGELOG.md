@@ -16,6 +16,142 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Security
+
+- `agent-vm ssh`, `create`'s boot wait, `list`, and `info` no longer let a guest
+  choose the address they connect to. The address used to come from the QEMU
+  guest agent, which runs as root inside the untrusted guest, and anything it
+  reported was accepted. Because ssh into a guest skips host-key checking, a
+  malicious guest could redirect the operator's session — and the keys it
+  offers — to the hypervisor, another VM, or a LAN host. NAT VMs now use only
+  the address libvirt's own DHCP server leased. Bridged VMs still ask the guest
+  agent, but only the interface libvirt defined, by the MAC recorded in
+  `vm.json`, is used.
+- `create` no longer uses an existing libvirt network that has the NAT
+  network's name but does not forward by NAT. A bridged or routed network by
+  that name would have put the guest on the LAN while `vm.json`, `list`, and
+  `info` reported it as NAT; `create` now refuses it (exit `5`). It also no
+  longer turns on autostart for a network it did not define.
+- `update` no longer holds everything a guest prints in memory. A compromised
+  guest could stream output for the whole of a step's timeout and exhaust the
+  host's memory; only the last 64 KiB of each stream is now kept for error
+  reports, while the full output still reaches the terminal.
+- On a remote hypervisor, files in the state directory are now written through
+  a temporary file that `mktemp` creates readable only by its owner, under a
+  unique name. Cloud-init user-data used to be briefly readable by other users
+  on the hypervisor while it was written, and two creates could collide on the
+  same temporary file for the network definition.
+
+- agent-vm no longer follows a broken shortcut (symlink) inside its state
+  directory to a location outside it. Such a link used to pass the check that
+  keeps every file the tool writes or deletes inside the state directory.
+- A damaged or hand-edited VM record (`vm.json`) that points at another VM's
+  directory, or at the whole state directory, is now refused, so `destroy`
+  cannot be made to wipe other VMs or base images. The state directory itself
+  is never deleted.
+- The release process now pins every third-party build step to an exact
+  version, and only the final publishing step can write to the repository.
+
+### Fixed
+
+- A `create` that is interrupted with Ctrl-C or `SIGTERM` now cleans up after
+  itself. The cleanup used to run on the already-cancelled command, so it could
+  not power off or undefine anything. It could leave a running domain with its
+  state directory already deleted, which `agent-vm destroy` could no longer
+  remove.
+- A `create` whose `virt-install` fails, times out, or is interrupted after it
+  has already defined the domain no longer leaves that domain behind, untracked
+  and blocking the name.
+- A `create` whose cleanup leaves host state behind now always exits `7`. It
+  used to exit with the code of the original failure when that was a timeout,
+  invalid input, or a missing tool.
+- `image rm` and `image build --force` no longer remove or replace a base image
+  that a `create` is still using. The image used to be removable between the
+  moment `create` found it and the moment the VM was recorded, leaving that VM
+  on a backing file that was gone. Both now refuse while a create is in
+  progress (exit `5`).
+- `image build --force` now refuses to rebuild an image that a recorded VM
+  still uses, naming the VMs. Rebuilding in place left their disks on a
+  different base, which corrupts them. Destroy them first, or replace the image
+  deliberately with `image rm --force` followed by `image build`.
+- `destroy --github-ssh-key` checks that `gh`'s token can manage SSH keys
+  before deleting one. Without that scope GitHub answers with the same "not
+  found" as a key that is already gone, so the destroy went ahead and deleted
+  the only record of a key that was still on the account. When a key really is
+  not there, the message now names the account `gh` is logged in to, since a
+  key added from another account looks the same, along with the command that
+  removes it.
+- On a remote hypervisor, a `create`, `destroy`, or `image build` waiting for a
+  lock no longer fails when the other process releases it at just the wrong
+  moment.
+- `destroy` no longer removes a VM that was destroyed and re-created under the
+  same name while it waited for the VM's lock. It now reads the record again
+  once it holds the lock, and leaves such a VM alone (exit `5`).
+- `create` now checks your `--cloud-init` and `--opencode-config` files before
+  doing anything else, including with `--dry-run`. A bad file no longer waits
+  behind a base image build or leaves work half-done. A `--cloud-init` file
+  with a line that begins with `--agent-vm-cloud-init` is refused, because that
+  line would split the file in two.
+- `create` now checks up front that `virt-make-fs` (libguestfs 1.50 or newer)
+  is installed, instead of failing partway through.
+- An SSH key whose comment contains invisible control characters is now refused
+  with a clear message. Before, the VM booted with no user account and no way
+  to log in.
+- `destroy` no longer refuses to remove a VM this tool created when the state
+  directory's path contains spaces.
+- `agent-vm list` now shows your other VMs when one VM's record cannot be read,
+  and warns about that one. It also ignores stray folders that are not VMs,
+  such as `lost+found`. Removing a base image still refuses if any record
+  cannot be read.
+- A state directory reached through a different path than the one it was
+  created under (a symlinked home, or `/home` against `/var/home`) keeps
+  working.
+- When a check for an existing VM or image fails (for example, a dropped
+  connection to a remote hypervisor), `create` and `image build` now stop with
+  the error instead of treating the VM or image as absent.
+- Sizes written with a space, such as `4 G`, are accepted, and nonsense values
+  such as `NaN` are rejected.
+- When `HOME` is unset or relative, agent-vm now stops with a clear message
+  asking for an explicit path, instead of creating files relative to the
+  current folder. A relative `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is ignored.
+- If an image build is killed outright (for example by running out of memory
+  or a host reboot), the next build, removal, or VM creation using that image
+  deletes the gigabytes of temporary files it left behind.
+- If an image rebuild is killed at the moment the new image replaces the old
+  one, the old image is now restored automatically instead of becoming
+  invisible to `image rm`. `image list` no longer shows such leftovers.
+- Rebuilding an image no longer deletes a separately cached image whose tag
+  ends in `.previous` (rebuilding `ubuntu:24.04` could delete
+  `ubuntu:24.04.previous`).
+- When a base image contains more than one kernel, the newest is now chosen by
+  version: 6.10 used to lose to 6.9.
+- `agent-vm doctor` no longer reports the host firewall as allowing VM internet
+  access just because ufw has a rule for some other network interface, such as
+  a VPN. It now checks that the rule covers the VMs' own network.
+- Tab completion in bash now works for image names like `ubuntu:24.04` and for
+  options written as `--output=json`.
+- `agent-vm destroy --help` now lists the `--timeout` option, and
+  `destroy --dry-run` no longer takes the VM's lock.
+- `scripts/check.sh` no longer says "all checks passed" when golangci-lint was
+  not installed and lint was skipped.
+
+### Changed
+
+- Misspelled or unknown settings in `config.toml`, and `vcpus = 0`, are now
+  reported as errors instead of being silently ignored.
+- A state directory whose path contains a quote or a backslash, such as
+  `/home/o'brien`, is now refused with an explanation. Before, VM creation
+  could fail with a confusing error or use the wrong file.
+- Temporary build directories now sit inside each image's own folder
+  (`images/<image>/.build-<tag>-<pid>`), and a rebuild keeps the image it
+  replaces as `images/<image>/.<tag>.previous` until the new one is in place.
+  Leftovers under the old names (`images/.build-*`) from earlier versions are
+  not removed automatically; delete them by hand when no build is running.
+- The CLI documentation now says that, on a remote hypervisor, Tab completion
+  connects to that host; that `doctor` can warn about an outdated `gh`; and
+  that `create` and `destroy` wait for another operation on the same VM to
+  finish instead of failing.
+
 ## [0.1.0] - 2026-10-02
 
 Entries record changes during development, including intermediate designs later

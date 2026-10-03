@@ -10,17 +10,21 @@ import (
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
+// destroyUsage is shared by the command table and the flag set, so the summary
+// in `agent-vm --help` and the one `destroy --help` prints cannot disagree.
+const destroyUsage = "agent-vm destroy <name> [--keep-disk] [--force] [--timeout <duration>] [--github-ssh-key]"
+
 func destroyCommand() *command {
 	return &command{
 		name:    "destroy",
 		summary: "power off a VM, undefine it, and delete its state",
-		usage:   "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]",
+		usage:   destroyUsage,
 		run:     runDestroy,
 	}
 }
 
 func runDestroy(ctx context.Context, app *App, args []string) (err error) {
-	flags := newFlagSet("destroy", "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]", app.Stderr)
+	flags := newFlagSet("destroy", destroyUsage, app.Stderr)
 	keepDisk := flags.Bool("keep-disk", false, "keep the overlay and state directory; only remove the libvirt domain")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
@@ -33,7 +37,7 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	// Loading the record first is what makes destroy safe: a VM this state
 	// directory has no record of is a not-found error, and no libvirt domain or
 	// path is ever touched on its behalf.
-	vm, manager, err := app.vmTarget(name)
+	vm, _, err := app.vmTarget(name)
 	if err != nil {
 		return err
 	}
@@ -42,17 +46,37 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	lock, err := store.LockVM(ctx, name, "destroy")
+	// A dry run changes nothing, and taking the lock would: it writes the lock
+	// file. (Over ssh the dry-run runner already skips flock, a mutation.)
+	if !app.dryRun {
+		var lock *state.Lock
+		lock, err = store.LockVM(ctx, name, "destroy")
+		if err != nil {
+			return err
+		}
+		// A lock we cannot release is host state the operator needs to know
+		// about, so it is reported rather than dropped (AGENTS.md §6).
+		defer func() {
+			if releaseErr := lock.Release(); releaseErr != nil && err == nil {
+				err = releaseErr
+			}
+		}()
+	}
+
+	// The record is read again under the lock. While this destroy waited,
+	// another may have removed the VM, and a create may then have made a new
+	// one under the same name — whose overlay path, and so whose ownership
+	// check, is the same as the old one's.
+	current, manager, err := app.vmTarget(name)
 	if err != nil {
 		return err
 	}
-	// A lock we cannot release is host state the operator needs to know about,
-	// so it is reported rather than dropped (AGENTS.md §6).
-	defer func() {
-		if releaseErr := lock.Release(); releaseErr != nil && err == nil {
-			err = releaseErr
-		}
-	}()
+	if !current.CreatedAt.Equal(vm.CreatedAt) {
+		return exitf(ExitConflict,
+			"VM %q was destroyed and created again while this destroy waited for its lock, so nothing was changed.\n"+
+				"  Run destroy again if the new VM is the one to remove.", name)
+	}
+	vm = current
 
 	confirmed, err := app.confirm(destroyPrompt(vm, *keepDisk, *force, *githubSSHKey))
 	if err != nil {
@@ -149,9 +173,11 @@ func (a *App) destroyVM(ctx context.Context, req destroyRequest) error {
 		return nil
 	}
 
-	// Store.Remove refuses any path that does not resolve inside the state
-	// directory, so this cannot delete anything else even if vm.json were
-	// tampered with.
+	// The directory comes from vm.json, which LoadVM accepted only because it
+	// names exactly this VM's own directory; Store.Remove then refuses anything
+	// resolving outside the state directory, or the state directory itself.
+	// Neither makes a tampered record harmless — a deleted VM is deleted — but
+	// together they keep one record from reaching any other VM or image.
 	if err := a.removeVMState(vm); err != nil {
 		return &CleanupError{
 			Operation: fmt.Sprintf("destroying VM %s", vm.Name),

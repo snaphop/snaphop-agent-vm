@@ -11,7 +11,6 @@ package image
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,8 +129,23 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		}
 	}()
 
-	if !opts.Force && b.Store.HasImage(name, tag) {
+	if err := b.recoverInterruptedBuilds(name, tag); err != nil {
+		return nil, err
+	}
+
+	cached, err := b.Store.HasImage(name, tag)
+	if err != nil {
+		return nil, err
+	}
+	if cached && !opts.Force {
 		return b.Store.LoadManifest(name, tag)
+	}
+	if cached {
+		// A rebuild replaces the backing file in place, and an overlay on top
+		// of a different base disk is a corrupt filesystem (ADR-0004).
+		if err := b.refuseWhileInUse(opts.Ref, "rebuild", false); err != nil {
+			return nil, err
+		}
 	}
 
 	sourceRef := opts.Ref.SourceRef()
@@ -181,8 +196,107 @@ type workspace struct {
 	diskPath string
 }
 
+// workspacePrefix starts the name of every build workspace. A workspace sits
+// beside the image it will become, in images/<image>/, and is named
+// ".build-<tag>-<pid>". The leading dot keeps it from ever being a tag
+// (distro.ParseRef refuses one), and a PID cannot contain a hyphen, so the tag
+// a workspace belongs to is exactly what lies between the prefix and the last
+// hyphen.
+const workspacePrefix = ".build-"
+
+func workspaceDir(layout state.Layout, imageName, tag, pid string) string {
+	return filepath.Join(filepath.Dir(layout.ImageDir(imageName, tag)), workspacePrefix+tag+"-"+pid)
+}
+
+// isWorkspaceOf reports whether a directory name is a build workspace for this
+// tag. It compares exactly, so tag 24.04 never claims the workspace of tag
+// 24.04.1 or 24.04-1.
+func isWorkspaceOf(name, tag string) bool {
+	rest, ok := strings.CutPrefix(name, workspacePrefix)
+	if !ok {
+		return false
+	}
+	cut := strings.LastIndex(rest, "-")
+	if cut < 0 || rest[:cut] != tag {
+		return false
+	}
+	pid := rest[cut+1:]
+	if pid == "" {
+		return false
+	}
+	for _, r := range pid {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// backupDir is where a rebuild moves the image it replaces while the new one is
+// installed. The leading dot means it can never be the directory of a real
+// image: distro.ParseRef refuses a tag that starts with one, so no other cached
+// image can share the name and be deleted by mistake.
+func backupDir(layout state.Layout, imageName, tag string) string {
+	return filepath.Join(filepath.Dir(layout.ImageDir(imageName, tag)), "."+tag+".previous")
+}
+
+// recoverInterruptedBuilds clears up after a build of this image that was
+// killed — SIGKILL, the OOM killer, a reboot — before it could clean up after
+// itself. It runs under the image's lock, which every build of the image holds
+// for its whole duration, so anything it finds belongs to a build that is no
+// longer running.
+//
+// A workspace left behind is removed: it is gigabytes of root filesystem tar
+// and disk image that nothing would ever use. A backup left by an interrupted
+// commit is put back when the image itself is missing, because it is then the
+// last good image; when the image is present, the new one was installed and
+// the backup is only a leftover.
+func (b *Builder) recoverInterruptedBuilds(imageName, tag string) error {
+	parent := filepath.Dir(b.Store.ImageDir(imageName, tag))
+	entries, err := b.Store.Subdirectories(parent)
+	if err != nil {
+		return fmt.Errorf("looking for interrupted builds of %s:%s: %w", imageName, tag, err)
+	}
+	for _, entry := range entries {
+		if !isWorkspaceOf(entry, tag) {
+			continue
+		}
+		dir := filepath.Join(parent, entry)
+		if err := b.Store.Remove(dir); err != nil {
+			return fmt.Errorf("removing %s, left by an interrupted build of %s:%s: %w", dir, imageName, tag, err)
+		}
+		if b.Logger != nil {
+			b.Logger.Info("removed the workspace of an interrupted build", "dir", dir)
+		}
+	}
+
+	backup := backupDir(b.Store.Layout, imageName, tag)
+	hasBackup, err := b.Store.Exists(backup)
+	if err != nil || !hasBackup {
+		return err
+	}
+	final := b.Store.ImageDir(imageName, tag)
+	hasImage, err := b.Store.Exists(final)
+	if err != nil {
+		return err
+	}
+	if hasImage {
+		if err := b.Store.Remove(backup); err != nil {
+			return fmt.Errorf("removing %s, left by an interrupted rebuild of %s:%s: %w", backup, imageName, tag, err)
+		}
+		return nil
+	}
+	if err := b.Store.Rename(backup, final); err != nil {
+		return fmt.Errorf("restoring %s:%s from %s, left by an interrupted rebuild: %w", imageName, tag, backup, err)
+	}
+	if b.Logger != nil {
+		b.Logger.Info("restored the image an interrupted rebuild had moved aside", "image", imageName+":"+tag)
+	}
+	return nil
+}
+
 func (b *Builder) newWorkspace(imageName, tag string) (*workspace, error) {
-	dir := filepath.Join(b.Store.Root(), "images", fmt.Sprintf(".build-%s-%s-%d", imageName, tag, os.Getpid()))
+	dir := workspaceDir(b.Store.Layout, imageName, tag, strconv.Itoa(os.Getpid()))
 	if err := b.Store.Remove(dir); err != nil {
 		return nil, err
 	}
@@ -328,12 +442,56 @@ func (b *Builder) kernelVersion(ctx context.Context, diskPath string) (string, e
 	if len(versions) == 0 {
 		return "", fmt.Errorf("no kernel found in %s of the built image: the build recipe for this distro did not install a kernel", distro.ModulesDir)
 	}
-	// More than one kernel means the recipe installed two; the newest by string
-	// order is the one whose initramfs was generated last. Sorting keeps the
+	// More than one kernel means the recipe installed two; the newest is the
+	// one whose initramfs was generated last. Choosing by version keeps the
 	// choice deterministic instead of depending on directory order.
-	sort.Strings(versions)
-	return versions[len(versions)-1], nil
+	return newestByVersion(versions), nil
 }
+
+// newestByVersion returns the name that sorts last when runs of digits are
+// compared as numbers, so 6.10.0 is newer than 6.9.0 — which plain string
+// order gets backwards.
+func newestByVersion(names []string) string {
+	sorted := append([]string(nil), names...)
+	sort.SliceStable(sorted, func(i, j int) bool { return compareVersions(sorted[i], sorted[j]) < 0 })
+	return sorted[len(sorted)-1]
+}
+
+// compareVersions orders two names chunk by chunk: a run of digits against a
+// run of digits by numeric value, anything else byte by byte.
+func compareVersions(a, b string) int {
+	for a != "" && b != "" {
+		chunkA, restA := versionChunk(a)
+		chunkB, restB := versionChunk(b)
+		if isDigit(chunkA[0]) && isDigit(chunkB[0]) {
+			// Compared as digit strings, not parsed, so a long run cannot
+			// overflow: without leading zeros, the longer one is larger.
+			numA, numB := strings.TrimLeft(chunkA, "0"), strings.TrimLeft(chunkB, "0")
+			if len(numA) != len(numB) {
+				return len(numA) - len(numB)
+			}
+			if c := strings.Compare(numA, numB); c != 0 {
+				return c
+			}
+		} else if c := strings.Compare(chunkA, chunkB); c != 0 {
+			return c
+		}
+		a, b = restA, restB
+	}
+	return len(a) - len(b)
+}
+
+// versionChunk splits off the leading run of digits, or of non-digits.
+func versionChunk(s string) (chunk, rest string) {
+	digits := isDigit(s[0])
+	i := 1
+	for i < len(s) && isDigit(s[i]) == digits {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 // kernelVersionPattern is deliberately strict: this value is used to build
 // paths passed to another tool.
@@ -406,10 +564,10 @@ func matchOne(entries []string, pattern, what, distroName string) (string, error
 	case 1:
 		return matches[0], nil
 	default:
-		// Two kernels means the recipe installed two. Picking one silently
-		// would make the manifest's kernel version a guess.
-		sort.Strings(matches)
-		return matches[len(matches)-1], nil
+		// Two kernels means the recipe installed two. The newest is taken, by
+		// the same version order kernelVersion uses, so the kernel copied out
+		// and the version the manifest records agree.
+		return newestByVersion(matches), nil
 	}
 }
 
@@ -506,7 +664,7 @@ func (b *Builder) commit(work *workspace, distroName, tag string) error {
 	// A rebuild replaces an existing image. The old directory is moved aside
 	// first and removed only after the new one is in place, so a failure here
 	// leaves the previous image intact rather than nothing at all.
-	previous := final + ".previous"
+	previous := backupDir(b.Store.Layout, distroName, tag)
 	existed, err := b.Store.Exists(final)
 	if err != nil {
 		return err
@@ -576,37 +734,69 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 		}
 	}()
 
-	if !b.Store.HasImage(ref.ImageName(), ref.Tag) {
+	// An image an interrupted rebuild left only as its backup is still the
+	// operator's image, so it is put back first and is then removable.
+	if err := b.recoverInterruptedBuilds(ref.ImageName(), ref.Tag); err != nil {
+		return err
+	}
+	cached, err := b.Store.HasImage(ref.ImageName(), ref.Tag)
+	if err != nil {
+		return err
+	}
+	if !cached {
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}
+	}
+
+	if err := b.refuseWhileInUse(ref, "remove", force); err != nil {
+		return err
+	}
+	return b.Store.Remove(b.Store.ImageDir(ref.ImageName(), ref.Tag))
+}
+
+// refuseWhileInUse refuses to remove or replace a base image that an overlay
+// depends on. It runs under the image's lock. A create in progress is refused
+// even with force: its overlay may already be on the image, and its record —
+// the only thing that would show the dependency — is not written yet. Such a
+// create cannot be missed, because create makes its VM directory before it
+// looks the image up, and that lookup waits for this lock (EnsureImage).
+func (b *Builder) refuseWhileInUse(ref distro.Ref, action string, force bool) error {
+	creating, err := b.Store.CreatesInProgress()
+	if err != nil {
+		return err
+	}
+	if len(creating) > 0 {
+		return &state.BusyError{
+			Resource: "base image " + ref.String(),
+			Holder:   "a create is in progress for " + strings.Join(creating, ", ") + "; try again once it finishes",
+		}
 	}
 
 	users, err := b.Store.VMsUsingImage(ref.ImageName(), ref.Tag)
 	if err != nil {
 		return err
 	}
-	if len(users) > 0 && !force {
-		names := make([]string, 0, len(users))
-		for _, vm := range users {
-			names = append(names, vm.Name)
-		}
-		return fmt.Errorf("base image %s is still the backing file for %d VM(s): %s\n"+
-			"  Destroy them first, or pass --force to remove it anyway and make their disks unreadable",
-			ref, len(users), strings.Join(names, ", "))
+	if len(users) == 0 || force {
+		return nil
 	}
-	return b.Store.Remove(b.Store.ImageDir(ref.ImageName(), ref.Tag))
+	names := make([]string, 0, len(users))
+	for _, vm := range users {
+		names = append(names, vm.Name)
+	}
+	remedy := "Destroy them first, or pass --force to remove it anyway and make their disks unreadable"
+	if action == "rebuild" {
+		remedy = "Destroy them first: rebuilding it in place would leave their disks on a different base, which corrupts them"
+	}
+	return fmt.Errorf("cannot %s base image %s: it is still the backing file for %d VM(s): %s\n  %s",
+		action, ref, len(users), strings.Join(names, ", "), remedy)
 }
 
 // EnsureImage returns the cached base image for a reference, building it if the
 // cache misses. It is what `create` calls.
+//
+// A cache hit still takes the image's lock, through Build. That orders the
+// lookup against `image rm` and `image build --force`: one of them either
+// finishes before the lookup, or finds the create's VM directory and refuses
+// (refuseWhileInUse).
 func (b *Builder) EnsureImage(ctx context.Context, ref distro.Ref) (*state.Manifest, error) {
-	manifest, err := b.Store.LoadManifest(ref.ImageName(), ref.Tag)
-	if err == nil && b.Store.HasImage(ref.ImageName(), ref.Tag) {
-		return manifest, nil
-	}
-
-	var notFound *state.NotFoundError
-	if err != nil && !errors.As(err, &notFound) {
-		return nil, err
-	}
 	return b.Build(ctx, BuildOptions{Ref: ref})
 }

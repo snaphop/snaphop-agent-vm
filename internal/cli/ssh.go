@@ -119,7 +119,7 @@ func (a *App) reachableAddress(ctx context.Context, vm *state.VM, manager *domai
 			vm.Name, current, vm.Name)
 	}
 
-	address, err := manager.IPv4Address(ctx, vm.Name)
+	address, err := manager.IPv4Address(ctx, vm.Name, guestNIC(vm))
 	if err != nil {
 		return "", err
 	}

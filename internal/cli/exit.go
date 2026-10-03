@@ -84,6 +84,14 @@ func exitCodeFor(err error) int {
 		return ExitOK
 	}
 
+	// A CleanupError wraps the failure that started the cleanup, and that
+	// cause's own code must not hide what matters more: host state was left
+	// behind.
+	var cleanup *CleanupError
+	if errors.As(err, &cleanup) {
+		return ExitCleanup
+	}
+
 	var explicit *ExitError
 	if errors.As(err, &explicit) {
 		return explicit.Code
@@ -96,12 +104,13 @@ func exitCodeFor(err error) int {
 		busy       *state.BusyError
 		schema     *state.SchemaError
 		contained  *state.ContainmentError
+		record     *state.RecordError
 		missing    *hostexec.NotFoundError
 		tooOld     *hostexec.VersionError
 		timeout    *hostexec.TimeoutError
 		waitedOut  *domain.TimeoutError
 		bridge     *network.BridgeError
-		cleanup    *CleanupError
+		netMode    *network.ModeError
 	)
 	switch {
 	case errors.As(err, &validation), errors.As(err, &schema):
@@ -110,15 +119,14 @@ func exitCodeFor(err error) int {
 		return ExitHostNotReady
 	case errors.As(err, &notFound):
 		return ExitNotFound
-	case errors.As(err, &exists), errors.As(err, &busy):
+	case errors.As(err, &exists), errors.As(err, &busy), errors.As(err, &netMode):
 		return ExitConflict
 	case errors.As(err, &timeout), errors.As(err, &waitedOut):
 		return ExitTimeout
-	case errors.As(err, &cleanup):
-		return ExitCleanup
-	case errors.As(err, &contained):
-		// A path escaping the state directory is a bug or an attack, never a
-		// routine failure; it gets the generic code and a loud message.
+	case errors.As(err, &contained), errors.As(err, &record):
+		// A path escaping the state directory, or a record naming paths that
+		// are not its own, is a bug, corruption, or an attack, never a routine
+		// failure; it gets the generic code and a loud message.
 		return ExitFailure
 	default:
 		return ExitFailure

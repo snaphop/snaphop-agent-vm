@@ -187,3 +187,24 @@ func TestCheckAuth_AcceptsALoginWithNoScopeLine(t *testing.T) {
 		t.Fatalf("CheckAuth: %v", err)
 	}
 }
+
+func TestLogin_ReadsTheAccountGHUses(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("gh api user --jq .login", hostexec.FakeResponse{Stdout: "wensington\n"})
+
+	login, err := New(fake).Login(context.Background())
+	if err != nil || login != "wensington" {
+		t.Fatalf("Login = %q, %v; want wensington", login, err)
+	}
+}
+
+func TestLogin_RefusesOutputThatIsNotALogin(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("gh api user --jq .login", hostexec.FakeResponse{Stdout: "\x1b[2Jnot a login\n"})
+
+	if login, err := New(fake).Login(context.Background()); err == nil {
+		t.Fatalf("Login = %q, want an error", login)
+	}
+}

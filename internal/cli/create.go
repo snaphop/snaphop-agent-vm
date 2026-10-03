@@ -102,9 +102,10 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return err
 	}
 
-	// Key material and operator-supplied user-data are read before anything on
-	// the host changes, so a typo in a path is a usage error rather than a
-	// half-created VM.
+	// Key material and operator-supplied files are read and validated before
+	// anything on the host changes, so a typo in a path or a file cloud-init or
+	// opencode would refuse is a usage error rather than a half-created VM or a
+	// base image built for nothing.
 	keyPaths := cfg.SSHKeys
 	keys, err := guestinit.LoadPublicKeys(keyPaths)
 	if err != nil {
@@ -141,12 +142,30 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	userData := guestinit.Options{
+		Hostname:          name,
+		User:              cfg.GuestUser,
+		SSHAuthorizedKeys: keys,
+		ExtraUserData:     extraUserData,
+		ExtraSource:       *cloudInit,
+		OpencodeConfig:    opencodeJSON,
+		OpencodeSource:    *opencodeConfig,
+		AgentVMVersion:    Version,
+	}
+	// The same checks Generate makes later, run here so they precede the
+	// tool checks, the lock, and any base image build — and so a dry run
+	// reports a file the real run would refuse.
+	if err := userData.Validate(); err != nil {
+		return err
+	}
 
 	if app.dryRun {
 		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey)
 	}
 
-	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg}
+	// virt-make-fs writes the cloud-init seed, so its floor is checked here with
+	// the others rather than discovered once the VM directory exists.
+	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg, hostexec.VirtMakeFS}
 	if *githubSSHKey {
 		tools = append(tools, hostexec.GH)
 	}
@@ -179,7 +198,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		}
 	}()
 
-	if store.HasVM(name) {
+	exists, err := store.HasVM(name)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return &state.ExistsError{Kind: "VM", Name: name}
 	}
 
@@ -204,9 +227,23 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	// The VM directory exists before the base image is looked up, so that
+	// `image rm` and `image build --force` see this create in progress and
+	// refuse, rather than removing the image its overlay is about to use.
+	vmDir := store.VMDir(name)
+	if err := store.MkdirAll(vmDir); err != nil {
+		return err
+	}
 	app.out.Progress("Using base image %s\n", cfg.Distro)
 	manifest, err := builder.EnsureImage(ctx, cfg.Distro)
 	if err != nil {
+		if rmErr := store.Remove(vmDir); rmErr != nil {
+			return &CleanupError{
+				Operation: fmt.Sprintf("creating VM %s failed and cleaning up after it", name),
+				Cause:     err,
+				Remaining: []string{fmt.Sprintf("state directory %s: %v", vmDir, rmErr)},
+			}
+		}
 		return err
 	}
 
@@ -216,12 +253,8 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		store:           store,
 		manager:         manager,
 		manifest:        manifest,
-		keys:            keys,
+		userData:        userData,
 		keyPaths:        keyPaths,
-		extraUserData:   extraUserData,
-		extraSource:     *cloudInit,
-		opencodeConfig:  opencodeJSON,
-		opencodeSource:  *opencodeConfig,
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
@@ -405,14 +438,12 @@ type createRequest struct {
 	store    *state.Store
 	manager  *domain.Manager
 	manifest *state.Manifest
-	keys     []string
-	// keyPaths are the files keys came from, recorded in vm.json so a VM's
-	// authorized keys can be traced back to their source.
+	// userData is what the guest's cloud-init user-data is generated from,
+	// already validated.
+	userData guestinit.Options
+	// keyPaths are the files the authorized keys came from, recorded in
+	// vm.json so a VM's authorized keys can be traced back to their source.
 	keyPaths        []string
-	extraUserData   []byte
-	extraSource     string
-	opencodeConfig  []byte
-	opencodeSource  string
 	virtInstallArgs []string
 	waitForSSH      time.Duration
 	githubSSHKey    bool
@@ -483,16 +514,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	}
 	rollback.directory = vm.Paths.Dir
 
-	userData, err := guestinit.Generate(guestinit.Options{
-		Hostname:          name,
-		User:              cfg.GuestUser,
-		SSHAuthorizedKeys: req.keys,
-		ExtraUserData:     req.extraUserData,
-		ExtraSource:       req.extraSource,
-		OpencodeConfig:    req.opencodeConfig,
-		OpencodeSource:    req.opencodeSource,
-		AgentVMVersion:    Version,
-	})
+	userData, err := guestinit.Generate(req.userData)
 	if err != nil {
 		return nil, err
 	}
@@ -546,6 +568,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	}
 
 	a.out.Progress("Defining and starting domain %s\n", name)
+	rollback.domainAttempted = true
 	argv, err := req.manager.Create(ctx, domain.CreateOptions{
 		Name:           name,
 		LibvirtURI:     req.manager.LibvirtURI(),
@@ -643,7 +666,7 @@ func (a *App) waitForGuest(ctx context.Context, req createRequest, vm *state.VM)
 	deadline := time.Now().Add(req.waitForSSH)
 	a.out.Progress("Waiting for the guest to boot (up to %s)\n", req.waitForSSH)
 
-	address, err := req.manager.WaitForAddress(ctx, req.name, req.waitForSSH)
+	address, err := req.manager.WaitForAddress(ctx, req.name, guestNIC(vm), req.waitForSSH)
 	if err != nil {
 		return "", err
 	}
@@ -709,14 +732,31 @@ type createRollback struct {
 	manager *domain.Manager
 	name    string
 
-	domainDefined bool
-	directory     string
+	// domainAttempted is set before virt-install runs and domainDefined once it
+	// succeeds. virt-install defines the domain before it boots it, so a run
+	// that failed or was killed in between can still have left one behind.
+	domainAttempted bool
+	domainDefined   bool
+	directory       string
 }
 
+// rollbackTimeout bounds the whole rollback once it no longer follows the
+// caller's context.
+const rollbackTimeout = 2 * time.Minute
+
 func (r *createRollback) undo(ctx context.Context, cause error) error {
+	// A create interrupted by Ctrl-C or SIGTERM still has to clean up after
+	// itself, and with the caller's context canceled every virsh call would
+	// fail without running.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+
 	remaining := []string{}
 
-	if r.domainDefined {
+	switch {
+	case r.domainAttempted && !r.domainDefined:
+		remaining = append(remaining, r.undoUnconfirmedDomain(ctx)...)
+	case r.domainDefined:
 		// The domain is running: virt-install started it. Powering it off
 		// first is what makes undefine succeed on a live domain.
 		if err := r.manager.ForceOff(ctx, r.name); err != nil {
@@ -742,6 +782,29 @@ func (r *createRollback) undo(ctx context.Context, cause error) error {
 		Cause:     cause,
 		Remaining: remaining,
 	}
+}
+
+// undoUnconfirmedDomain removes a domain a failed virt-install may have left.
+// The name was checked free under the VM lock before virt-install ran, so a
+// domain by this name now is this create's own and is safe to remove.
+func (r *createRollback) undoUnconfirmedDomain(ctx context.Context) []string {
+	current, err := r.manager.State(ctx, r.name)
+	if err != nil {
+		return []string{fmt.Sprintf("libvirt domain %s may have been defined, and its state could not be read: %v", r.name, err)}
+	}
+	if current == domain.StateMissing {
+		return nil
+	}
+	var remaining []string
+	if current != domain.StateShutOff {
+		if err := r.manager.ForceOff(ctx, r.name); err != nil {
+			remaining = append(remaining, fmt.Sprintf("domain %s could not be powered off: %v", r.name, err))
+		}
+	}
+	if err := r.manager.Undefine(ctx, r.name); err != nil {
+		remaining = append(remaining, fmt.Sprintf("libvirt domain %s: %v", r.name, err))
+	}
+	return remaining
 }
 
 // printCreatePlan prints what a create would run and write. Like the image

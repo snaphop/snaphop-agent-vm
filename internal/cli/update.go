@@ -253,10 +253,11 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 
 // updateOutput is where the guest's own output goes while a step runs: stderr,
 // like every other kind of progress, so `--output json` on stdout stays
-// machine-readable. Under --quiet it is discarded.
+// machine-readable. Under --quiet it is discarded, but still streamed, so the
+// runner keeps only its tail rather than all of it.
 func (a *App) updateOutput() io.Writer {
 	if a.quiet {
-		return nil
+		return io.Discard
 	}
 	return a.Stderr
 }

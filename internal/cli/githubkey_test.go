@@ -225,12 +225,45 @@ func TestDestroy_AKeyAlreadyRemovedOnGitHubIsNotAFailure(t *testing.T) {
 		Stderr:   "gh: Not Found (HTTP 404)\n",
 	})
 
+	fake.Respond("gh api user --jq .login", hostexec.FakeResponse{Stdout: "wensington\n"})
+
 	code, _, stderr := cliRunStdin(t, fake, stateDir, "", "--yes", "destroy", "agent-01", "--force", "--github-ssh-key")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, stderr)
 	}
 	if vmDirExists(t, stateDir, "agent-01") {
 		t.Error("the VM state was left behind")
+	}
+	// A key added from another account looks the same, so the account and the
+	// command that removes the key are both named.
+	for _, want := range []string{"wensington", "gh api --method DELETE user/keys/119548016"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the message does not name %q:\n%s", want, stderr)
+		}
+	}
+}
+
+func TestDestroy_ATokenThatCannotManageKeysLeavesTheVMAlone(t *testing.T) {
+	t.Parallel()
+	stateDir := createdVMWithGitHubKey(t, "agent-01")
+	fake := withGitHub(ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), "119548016")
+	// Without admin:public_key, GitHub answers the DELETE with a 404 — which
+	// would read as "already gone" and delete the only record of the key.
+	fake.RespondPrefix("gh auth status", hostexec.FakeResponse{Stdout: readToolout(t, "gh-auth-status.txt")})
+	fake.RespondPrefix("gh api --method DELETE", hostexec.FakeResponse{ExitCode: 1, Stderr: "gh: Not Found (HTTP 404)\n"})
+
+	code, _, stderr := cliRunStdin(t, fake, stateDir, "", "--yes", "destroy", "agent-01", "--force", "--github-ssh-key")
+	if code == ExitOK {
+		t.Fatalf("a token without the key scope was accepted:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "admin:public_key") {
+		t.Errorf("the refusal does not name the missing scope:\n%s", stderr)
+	}
+	if fake.Ran("gh api --method DELETE user/keys/119548016 --silent") {
+		t.Error("the key was deleted with a token that cannot tell a missing key from a forbidden one")
+	}
+	if !vmDirExists(t, stateDir, "agent-01") {
+		t.Error("the VM and the record of its key were destroyed")
 	}
 }
 

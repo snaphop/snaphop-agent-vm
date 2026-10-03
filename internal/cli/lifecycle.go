@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/domain"
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
@@ -38,6 +39,12 @@ func restartCommand() *command {
 		usage:   "agent-vm restart <name> [--timeout <duration>] [--force]",
 		run:     runRestart,
 	}
+}
+
+// guestNIC is the host's own account of a VM's network interface, which is what
+// its address is looked up from.
+func guestNIC(vm *state.VM) domain.NIC {
+	return domain.NIC{Bridged: vm.Network.Mode == config.NetworkBridge, MAC: vm.Network.MAC}
 }
 
 // vmTarget loads a recorded VM and returns a manager bound to the connection it
@@ -188,7 +195,7 @@ func (a *App) reportState(ctx context.Context, vm *state.VM, manager *domain.Man
 	}
 	status := vmStatus{VM: vm, State: string(current)}
 	if current.IsRunning() {
-		address, err := manager.IPv4Address(ctx, vm.Name)
+		address, err := manager.IPv4Address(ctx, vm.Name, guestNIC(vm))
 		if err != nil {
 			a.logger.Debug("could not read guest address", "vm", vm.Name, "error", err)
 		}

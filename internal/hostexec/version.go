@@ -106,11 +106,6 @@ var (
 		versionArgs: []string{"--version"},
 		versionRe:   regexp.MustCompile(`podman version (\d+\.\d+(?:\.\d+)?)`),
 	}
-	Skopeo = Tool{
-		Name: "skopeo", Package: "skopeo", Minimum: Version{Major: 1, Minor: 11},
-		versionArgs: []string{"--version"},
-		versionRe:   regexp.MustCompile(`skopeo version (\d+\.\d+(?:\.\d+)?)`),
-	}
 	VirtMakeFS  = libguestfsTool("virt-make-fs")
 	VirtLs      = libguestfsTool("virt-ls")
 	VirtCopyOut = libguestfsTool("virt-copy-out")

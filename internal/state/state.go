@@ -151,9 +151,15 @@ type ContainmentError struct {
 	Path     string
 	Resolved string
 	Root     string
+	// IsRoot marks a deletion of the state directory itself, which is inside
+	// it but is never removed.
+	IsRoot bool
 }
 
 func (e *ContainmentError) Error() string {
+	if e.IsRoot {
+		return fmt.Sprintf("refusing to delete %s: it is the state directory itself, which holds every VM and base image", e.Path)
+	}
 	return fmt.Sprintf("refusing to touch %s: it resolves to %s, which is outside the state directory %s",
 		e.Path, e.Resolved, e.Root)
 }
@@ -227,10 +233,21 @@ func within(root, path string) bool {
 // Remove deletes a path after confirming it is inside the state directory.
 // This is the only deletion path in the project; libvirt is never asked to
 // remove storage on our behalf (SECURITY.md).
+//
+// The state directory itself is inside it for every other purpose, but never
+// something to delete: no operation removes every VM and image at once, so a
+// request to is a corrupted record or a bug.
 func (s *Store) Remove(path string) error {
 	resolved, err := s.Resolve(path)
 	if err != nil {
 		return err
+	}
+	root, err := s.fsys.Canonicalize(s.root)
+	if err != nil {
+		return err
+	}
+	if resolved == root {
+		return &ContainmentError{Path: path, Resolved: resolved, Root: root, IsRoot: true}
 	}
 	return s.fsys.RemoveAll(resolved)
 }
@@ -285,6 +302,16 @@ func (s *Store) Exists(path string) (bool, error) {
 		return false, err
 	}
 	return s.fsys.Exists(resolved)
+}
+
+// Subdirectories lists the names of the directories directly inside a
+// directory in the state directory. A directory that does not exist has none.
+func (s *Store) Subdirectories(path string) ([]string, error) {
+	resolved, err := s.Resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	return s.fsys.Subdirectories(resolved)
 }
 
 // FileSize is the size in bytes of a file inside the state directory.

@@ -55,7 +55,12 @@ type XMLWriter interface {
 
 // EnsureNAT makes sure the NAT network exists and is running, defining it from
 // the embedded XML if it does not. It is idempotent: on a host where the
-// network is already up, it only runs the two read-only queries.
+// network is already up, it only runs read-only queries.
+//
+// A network that already exists under the configured name is used only if it
+// forwards by NAT. Another mode — bridge, route, open — would put the guest on
+// the LAN while vm.json, list, and info all say "nat", so it is refused rather
+// than used (SECURITY.md, "Networking Boundaries").
 func EnsureNAT(ctx context.Context, runner hostexec.Runner, libvirtURI, name string, xml XMLWriter) error {
 	if !namePattern.MatchString(name) {
 		return fmt.Errorf("invalid NAT network name %q: names must match %s", name, namePattern)
@@ -65,7 +70,16 @@ func EnsureNAT(ctx context.Context, runner hostexec.Runner, libvirtURI, name str
 	if err != nil {
 		return err
 	}
-	if !contains(defined, name) {
+	created := false
+	if contains(defined, name) {
+		mode, err := forwardMode(ctx, runner, libvirtURI, name)
+		if err != nil {
+			return err
+		}
+		if mode != "nat" {
+			return &ModeError{Network: name, Mode: mode}
+		}
+	} else {
 		rendered, err := RenderNAT(name)
 		if err != nil {
 			return err
@@ -77,6 +91,7 @@ func EnsureNAT(ctx context.Context, runner hostexec.Runner, libvirtURI, name str
 		if _, err := runner.Run(ctx, virsh(libvirtURI, hostexec.Mutate, "net-define", path)); err != nil {
 			return fmt.Errorf("defining the %s network: %w", name, err)
 		}
+		created = true
 	}
 
 	active, err := networkNames(ctx, runner, libvirtURI, false)
@@ -90,11 +105,53 @@ func EnsureNAT(ctx context.Context, runner hostexec.Runner, libvirtURI, name str
 	}
 
 	// Autostart makes the network survive a host reboot, which is what an
-	// operator expects of a network this tool created.
-	if _, err := runner.Run(ctx, virsh(libvirtURI, hostexec.Mutate, "net-autostart", name)); err != nil {
-		return fmt.Errorf("enabling autostart for the %s network: %w", name, err)
+	// operator expects of a network this tool created. A network someone else
+	// defined keeps the autostart setting they gave it.
+	if created {
+		if _, err := runner.Run(ctx, virsh(libvirtURI, hostexec.Mutate, "net-autostart", name)); err != nil {
+			return fmt.Errorf("enabling autostart for the %s network: %w", name, err)
+		}
 	}
 	return nil
+}
+
+// ModeError is an existing libvirt network, named as the NAT network, that does
+// not forward by NAT.
+type ModeError struct {
+	Network string
+	// Mode is the network's <forward mode>, or "none" for an isolated network.
+	Mode string
+}
+
+func (e *ModeError) Error() string {
+	return fmt.Sprintf("the libvirt network %q is configured as the NAT network, but it forwards by %q, not NAT.\n"+
+		"  Using it would attach guests somewhere other than a host-local NAT network while recording them as NAT.\n"+
+		"  Set [network.nat] name to a network this tool may create, or change that network yourself.", e.Network, e.Mode)
+}
+
+// forwardMode reads a network's <forward mode> from net-dumpxml, the
+// machine-readable form of its definition. libvirt omits mode for its default,
+// "nat", and omits <forward> entirely for an isolated network.
+func forwardMode(ctx context.Context, runner hostexec.Runner, libvirtURI, name string) (string, error) {
+	res, err := runner.Run(ctx, virsh(libvirtURI, hostexec.Read, "net-dumpxml", name))
+	if err != nil {
+		return "", fmt.Errorf("reading the definition of the %s network: %w", name, err)
+	}
+	var network struct {
+		Forward *struct {
+			Mode string `xml:"mode,attr"`
+		} `xml:"forward"`
+	}
+	if err := xml.Unmarshal(res.Stdout, &network); err != nil {
+		return "", fmt.Errorf("reading the definition of the %s network: %w", name, err)
+	}
+	switch {
+	case network.Forward == nil:
+		return "none", nil
+	case network.Forward.Mode == "":
+		return "nat", nil
+	}
+	return network.Forward.Mode, nil
 }
 
 // NATStatus reports whether the network is defined and active, for doctor.

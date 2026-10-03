@@ -247,6 +247,11 @@ section named here.
   which is host-local. On a bridge the guest shares the operator's LAN, and
   the missing host-key check is a weaker guarantee. The guest address is still
   validated as a bare IP before it is placed in the ssh argument vector.
+- Because the host key is not checked, the ssh destination MUST NOT be chosen
+  by the guest. On NAT it comes from libvirt's DHCP leases, never from the
+  guest agent. On a bridge, where the guest agent is the only source, only the
+  interface whose MAC is recorded in `vm.json` is used. A guest that lies about
+  that interface's address can still misdirect the connection on a bridge.
 - The ssh connection to a guest runs on the client and uses the operator's
   keys. It is not a channel from the guest back to the host.
 
@@ -360,9 +365,11 @@ section named here.
   ADR where `AGENTS.md` requires one.
 - CI runs on GitHub-hosted runners. The pull-request and `master` workflow has
   `contents: read` and MUST NOT receive secrets that untrusted pull-request
-  code could read. The release workflow has `contents: write` only so it can
-  attach a release. This repository does not use a persistent self-hosted
-  runner.
+  code could read. In the release workflow only the publish job has
+  `contents: write`, so it can attach a release; it runs no repository code,
+  and the build job that does runs with `contents: read`. Third-party actions
+  are pinned to a commit SHA. This repository does not use a persistent
+  self-hosted runner.
 - Release artifacts MUST be built from a tagged commit through
   `.github/workflows/release.yml`. Merging MUST NOT publish anything. Pushing a
   `vX.Y.Z` tag builds the static binaries and attaches them, with `LICENSE` and

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +68,47 @@ func TestRun_CapturesStdoutAndStderrSeparately(t *testing.T) {
 	}
 	if len(res.Stderr) != 0 {
 		t.Errorf("Stderr = %q, want empty", res.Stderr)
+	}
+}
+
+func TestRun_KeepsOnlyTheTailOfAStreamedCommandsOutput(t *testing.T) {
+	t.Parallel()
+	runner := New(quietLogger())
+
+	// A streamed command can run for as long as its timeout; what it writes
+	// reaches Output in full, and Result keeps only the end.
+	var streamed bytes.Buffer
+	res, err := runner.Run(context.Background(), Command{
+		Name:   "head",
+		Args:   []string{"-c", strconv.Itoa(3*StreamedTail + 17), "/dev/zero"},
+		Effect: Read,
+		Output: &streamed,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Stdout) != StreamedTail {
+		t.Errorf("Result kept %d bytes of stdout, want the last %d", len(res.Stdout), StreamedTail)
+	}
+	if streamed.Len() != 3*StreamedTail+17 {
+		t.Errorf("Output received %d bytes, want all %d", streamed.Len(), 3*StreamedTail+17)
+	}
+}
+
+func TestTailBuffer_KeepsTheLastBytesWritten(t *testing.T) {
+	t.Parallel()
+	tail := &tailBuffer{limit: 5}
+	for _, chunk := range []string{"ab", "cd", "efg", "h"} {
+		if _, err := tail.Write([]byte(chunk)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	if got := string(tail.Bytes()); got != "defgh" {
+		t.Errorf("tail = %q, want %q", got, "defgh")
+	}
+	_, _ = tail.Write([]byte("0123456789"))
+	if got := string(tail.Bytes()); got != "56789" {
+		t.Errorf("tail after a long write = %q, want %q", got, "56789")
 	}
 }
 

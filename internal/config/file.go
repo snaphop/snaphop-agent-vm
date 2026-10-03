@@ -2,9 +2,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -59,10 +61,25 @@ func loadFile(path string) (Overrides, bool, error) {
 	}
 
 	var file fileConfig
-	if _, err := toml.Decode(string(contents), &file); err != nil {
+	meta, err := toml.Decode(string(contents), &file)
+	if err != nil {
 		return Overrides{}, false, &ValidationError{
 			Field: "config file", Value: path, Err: err,
 			Remedy: "See docs/cli.md for the supported keys.",
+		}
+	}
+	// A key this build does not know is refused rather than skipped: a
+	// misspelled `netwrok = "nat"` or `[defualts]` would otherwise leave the
+	// operator running with a setting they believe they changed.
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, key := range undecoded {
+			keys = append(keys, key.String())
+		}
+		return Overrides{}, false, &ValidationError{
+			Field: "config file", Value: path,
+			Err:    fmt.Errorf("unknown keys: %s", strings.Join(keys, ", ")),
+			Remedy: "Check their spelling against the keys docs/cli.md lists, and remove any this version of agent-vm does not support.",
 		}
 	}
 
@@ -80,7 +97,9 @@ func loadFile(path string) (Overrides, bool, error) {
 		GuestUser:       file.Guest.User,
 		SSHKeys:         file.Guest.SSHKeys,
 	}
-	if file.Defaults.VCPUs != 0 {
+	// Whether vcpus was written is asked of the file, not inferred from the
+	// value: `vcpus = 0` is a mistake to report, not an absent key.
+	if meta.IsDefined("defaults", "vcpus") {
 		o.VCPUs = strconv.Itoa(file.Defaults.VCPUs)
 	}
 	return o, true, nil

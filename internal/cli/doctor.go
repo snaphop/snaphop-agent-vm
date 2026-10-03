@@ -98,8 +98,11 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkStateDir(app, cfg))
 	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
-	report.Checks = append(report.Checks, checkForwarding(cfg, conn))
-	report.Checks = append(report.Checks, checkGuestServices(cfg, conn, app.natBridge(ctx, cfg, libvirt.Status == statusPass)))
+	// Both firewall checks must name the bridge the guest's traffic arrives
+	// on, so it is looked up once for the two of them.
+	natBridge := app.natBridge(ctx, cfg, libvirt.Status == statusPass)
+	report.Checks = append(report.Checks, checkForwarding(cfg, conn, natBridge))
+	report.Checks = append(report.Checks, checkGuestServices(cfg, conn, natBridge))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
 	return app.reportDoctor(report)

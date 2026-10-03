@@ -11,6 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 fail=0
+lint_skipped=0
 step() { printf '\n== %s\n' "$1"; }
 
 step "gofmt"
@@ -33,6 +34,7 @@ if command -v golangci-lint >/dev/null 2>&1; then
   # tail of a backlog and makes a partial fix look complete.
   golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 || fail=1
 else
+  lint_skipped=1
   echo "WARNING: golangci-lint is not installed; lint was NOT run."
   echo "Install it from https://golangci-lint.run/ before claiming a clean run."
 fi
@@ -45,6 +47,12 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-printf '\nall checks passed\n'
+if [ "$lint_skipped" -ne 0 ]; then
+  # Not a failure, so a host without the linter can still run the rest, but
+  # never reported as a clean run either.
+  printf '\nchecks passed, but golangci-lint was NOT run: install it before claiming a clean run\n'
+else
+  printf '\nall checks passed\n'
+fi
 printf 'Integration tests are separate and need a KVM host:\n'
 printf '  go test -tags integration ./test/integration/...\n'

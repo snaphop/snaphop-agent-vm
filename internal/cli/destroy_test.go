@@ -3,10 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
@@ -269,6 +273,11 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")
 	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+	// The create left its lock file; a dry run must not write one back.
+	lockFile := filepath.Join(stateDir, "locks", "vm-agent-01.lock")
+	if err := os.Remove(lockFile); err != nil {
+		t.Fatalf("removing the lock file: %v", err)
+	}
 
 	code, stdout, stderr := cliRunStdin(t, fake, stateDir, "", "--dry-run", "--yes", "destroy", "agent-01", "--force")
 	if code != ExitOK {
@@ -287,11 +296,172 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	if !vmDirExists(t, stateDir, "agent-01") {
 		t.Errorf("--dry-run removed the state directory")
 	}
+	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
+		t.Errorf("--dry-run took the VM's lock, writing %s: %v", lockFile, err)
+	}
+}
+
+// TestDestroy_UsageNamesEveryFlag is the regression for a usage line that
+// left out --timeout although the command accepts it and docs/cli.md lists it.
+func TestDestroy_UsageNamesEveryFlag(t *testing.T) {
+	t.Parallel()
+	_, stdout, stderr := cliRun(t, createHost(t), t.TempDir(), "destroy", "--help")
+	help := stdout + stderr
+
+	_, rest, ok := strings.Cut(help, "Usage:\n")
+	if !ok {
+		t.Fatalf("help has no usage line:\n%s", help)
+	}
+	usageLine, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+
+	flags := helpFlagPattern.FindAllStringSubmatch(help, -1)
+	if len(flags) == 0 {
+		t.Fatalf("help lists no flags:\n%s", help)
+	}
+	for _, match := range flags {
+		if !strings.Contains(usageLine, "[--"+match[1]) {
+			t.Errorf("usage %q does not mention --%s", usageLine, match[1])
+		}
+	}
+	if !strings.Contains(usageLine, "[--timeout <duration>]") {
+		t.Errorf("usage %q does not show --timeout's argument", usageLine)
+	}
 }
 
 func TestDestroy_RejectsAMissingName(t *testing.T) {
 	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "destroy"); code != ExitUsage {
 		t.Errorf("exit code = %d, want %d", code, ExitUsage)
+	}
+}
+
+// lockRaceFS runs race the first time a lock is taken: the moment a destroy
+// that read its record while another process held the lock finally gets it.
+type lockRaceFS struct {
+	state.FS
+	race func()
+	once sync.Once
+}
+
+func (f *lockRaceFS) TryLock(path, holder string) (io.Closer, error) {
+	f.once.Do(f.race)
+	return f.FS.TryLock(path, holder)
+}
+
+func cliRunWithLockRace(t *testing.T, fake *hostexec.Fake, stateDir string, race func(), args ...string) (int, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(""),
+		Env: func(string) string { return "" }, Runner: fake,
+		StateFS: &lockRaceFS{FS: state.Local(), race: race},
+	}
+	full := append([]string{"--state-dir", stateDir, "--config", t.TempDir() + "/absent.toml"}, args...)
+	return app.Main(context.Background(), full), stderr.String()
+}
+
+func assertNothingDestroyed(t *testing.T, fake *hostexec.Fake) {
+	t.Helper()
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "undefine") || strings.Contains(argv, " destroy ") || strings.Contains(argv, " shutdown ") {
+			t.Errorf("a VM this destroy did not mean must not be touched: %v", argv)
+		}
+	}
+}
+
+func TestDestroy_LeavesAVMRecreatedWhileItWaitedForTheLock(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+	record := filepath.Join(stateDir, "vms", "agent-01", "vm.json")
+	// Another destroy removed agent-01 and a create made a new one under the
+	// same name, while this destroy waited.
+	recreate := func() {
+		var vm map[string]any
+		data, err := os.ReadFile(record)
+		if err == nil {
+			err = json.Unmarshal(data, &vm)
+		}
+		if err != nil {
+			t.Errorf("reading %s: %v", record, err)
+			return
+		}
+		vm["createdAt"] = time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
+		if data, err = json.Marshal(vm); err == nil {
+			err = os.WriteFile(record, data, 0o600)
+		}
+		if err != nil {
+			t.Errorf("rewriting %s: %v", record, err)
+		}
+	}
+
+	code, stderr := cliRunWithLockRace(t, fake, stateDir, recreate, "--yes", "destroy", "agent-01", "--force")
+	if code != ExitConflict {
+		t.Errorf("exit code = %d, want %d: %s", code, ExitConflict, stderr)
+	}
+	assertNothingDestroyed(t, fake)
+	if !vmDirExists(t, stateDir, "agent-01") {
+		t.Error("the new VM's state was deleted")
+	}
+}
+
+func TestDestroy_ReportsAVMDestroyedWhileItWaitedForTheLock(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+	removed := func() {
+		if err := os.RemoveAll(filepath.Join(stateDir, "vms", "agent-01")); err != nil {
+			t.Errorf("removing the VM: %v", err)
+		}
+	}
+
+	code, stderr := cliRunWithLockRace(t, fake, stateDir, removed, "--yes", "destroy", "agent-01", "--force")
+	if code != ExitNotFound {
+		t.Errorf("exit code = %d, want %d: %s", code, ExitNotFound, stderr)
+	}
+	assertNothingDestroyed(t, fake)
+}
+
+func TestDestroy_RefusesARecordNamingTheStateDirectory(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	// A corrupted or hand-edited vm.json that names the state directory as
+	// the VM's own would otherwise have destroy delete every VM and image.
+	recordPath := filepath.Join(stateDir, "vms", "agent-01", state.VMRecordFile)
+	raw, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decoding vm.json: %v", err)
+	}
+	record["paths"].(map[string]any)["dir"] = stateDir
+	tampered, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("encoding vm.json: %v", err)
+	}
+	if err := os.WriteFile(recordPath, tampered, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+
+	code, _, stderr := cliRunStdin(t, fake, stateDir, "", "--yes", "destroy", "agent-01", "--force")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d: %s", code, ExitFailure, stderr)
+	}
+	if !strings.Contains(stderr, "paths.dir") {
+		t.Errorf("the error does not name the field at fault:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "undefine") || strings.Contains(argv, " destroy ") {
+			t.Errorf("a VM with an untrustworthy record must not be touched: %v", argv)
+		}
+	}
+	for _, dir := range []string{"images", "vms", filepath.Join("vms", "agent-01")} {
+		if _, err := os.Stat(filepath.Join(stateDir, dir)); err != nil {
+			t.Errorf("%s was removed: %v", dir, err)
+		}
 	}
 }

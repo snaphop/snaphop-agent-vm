@@ -26,6 +26,13 @@ func imageHost() *hostexec.Fake {
 // returns the exit code with what was written.
 func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) (int, string, string) {
 	t.Helper()
+	return cliRunContext(context.Background(), t, fake, stateDir, args...)
+}
+
+// cliRunContext is cliRun under a context the test controls, for the paths that
+// begin with an interrupted command.
+func cliRunContext(ctx context.Context, t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) (int, string, string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
 
 	app := &App{
@@ -37,7 +44,7 @@ func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) 
 	}
 	full := append([]string{"--state-dir", stateDir, "--config", t.TempDir() + "/absent.toml"}, args...)
 
-	code := app.Main(context.Background(), full)
+	code := app.Main(ctx, full)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -207,7 +214,7 @@ func TestImageRm_RefusesWithoutConfirmationWhenThereIsNoTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image was removed without confirmation")
 	}
 }
@@ -222,7 +229,7 @@ func TestImageRm_RemovesWithYes(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want 0: %s", code, stderr)
 	}
-	if store.HasImage("ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image is still cached after `image rm --yes`")
 	}
 }
@@ -247,7 +254,7 @@ func TestImageRm_DeclinedAtThePromptRemovesNothing(t *testing.T) {
 	if code != ExitOK {
 		t.Errorf("exit code = %d, want 0", code)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image was removed after the operator declined")
 	}
 }
@@ -271,7 +278,7 @@ func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
 	if !strings.Contains(stderr, "agent-01") {
 		t.Errorf("stderr does not name the dependent VM:\n%s", stderr)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("the image was removed despite the refusal")
 	}
 }
@@ -310,7 +317,7 @@ func TestImageRm_DryRunRemovesNothing(t *testing.T) {
 	if !strings.Contains(stdout, "ubuntu/24.04") {
 		t.Errorf("plan does not say what it would remove:\n%s", stdout)
 	}
-	if !store.HasImage("ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "24.04") {
 		t.Error("--dry-run removed the image")
 	}
 }
@@ -415,4 +422,13 @@ func TestImage_RejectsASecondDistroArgument(t *testing.T) {
 			t.Errorf("%v: the error does not name the unexpected argument: %s", args, stderr)
 		}
 	}
+}
+
+func hasImage(t *testing.T, store *state.Store, distro, tag string) bool {
+	t.Helper()
+	cached, err := store.HasImage(distro, tag)
+	if err != nil {
+		t.Fatalf("HasImage(%s, %s): %v", distro, tag, err)
+	}
+	return cached
 }

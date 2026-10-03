@@ -44,6 +44,28 @@ func TestSSH_ExecsSSHToTheGuestAsTheGuestUser(t *testing.T) {
 	}
 }
 
+func TestSSH_ConnectsToTheAddressLibvirtLeasedNotOneTheGuestReports(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	fake := runningHost(t, "agent-01")
+	// The guest agent runs as root in the untrusted guest. Pointed at the
+	// hypervisor, it would send the operator's session — and keys — there.
+	fake.RespondPrefix("virsh --connect qemu:///system domifaddr agent-01 --source agent", hostexec.FakeResponse{
+		Stdout: readToolout(t, "virsh-domifaddr-source-agent.txt"),
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, "ssh", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if argv := becameArgv(t, fake); !strings.Contains(argv, "agent@192.168.122.3") {
+		t.Errorf("ssh was not pointed at the leased address: %s", argv)
+	}
+	if fake.Ran("virsh --connect qemu:///system domifaddr agent-01 --source agent") {
+		t.Error("a NAT guest's address must not be taken from its guest agent")
+	}
+}
+
 func TestSSH_RunsACommandInTheGuest(t *testing.T) {
 	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")

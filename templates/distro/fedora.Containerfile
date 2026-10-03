@@ -230,9 +230,9 @@ RUN set -eu; \
 # Like the agents it comes from mise's registry, so the name resolves to the
 # vendor's own release binary and an account that needs another release runs
 # `mise use -g herdr@<version>` for itself. The version is unpinned for the same
-# reason theirs are: reproducibility comes from the digest the manifest records
-# for the source image (ADR-0006), not from the version of a tool that ships
-# several releases a week.
+# reason theirs are: a pin on a tool that ships several releases a week is soon
+# a release behind. The manifest records only the source image's digest, not
+# this version, so a rebuild is not reproducible (ADR-0006).
 #
 # The install goes into the shared store, like everything else mise manages
 # here, so herdr is in place before anyone logs in rather than being downloaded
@@ -248,8 +248,9 @@ RUN set -eu; \
 # The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
 #
 # Neither version is pinned, like every other package here -- a pinned one would
-# be a release behind before the image was rebuilt, and reproducibility comes
-# from the digest the manifest records for the source image (ADR-0006).
+# be a release behind before the image was rebuilt. The manifest records only
+# the source image's digest, not these versions, so a rebuild is not
+# reproducible (ADR-0006).
 # The JDK is `java@temurin` and not `java@latest`, which is an Oracle build of
 # OpenJDK: mise names a distribution by prefix, and an unprefixed version takes
 # whichever one it defaults to. A version mise cannot resolve or install fails
@@ -283,9 +284,9 @@ RUN set -eu; \
 # the JDK above, and an account that needs another one runs
 # `mise use -g go@1.25` for itself rather than asking an operator to unpack a
 # tarball into /usr/local. Neither is pinned, for the same reason the JDK is
-# not: reproducibility comes from the digest the manifest records for the
-# source image (ADR-0006), and a pin here would be a release behind before the
-# image was rebuilt.
+# not: a pin here would be a release behind before the image was rebuilt. The
+# manifest records only the source image's digest, not these versions, so a
+# rebuild is not reproducible (ADR-0006).
 #
 # Rust is not here. mise's `rust` is rustup underneath and re-reads
 # RUSTUP_HOME and CARGO_HOME from the environment of whoever runs cargo, so it
@@ -621,8 +622,9 @@ RUN set -eu; \
 # is deliberately left unset, so `cargo install` writes into that account's own
 # ~/.cargo.
 #
-# The version is unpinned like every other one here: reproducibility comes from
-# the digest the manifest records for the source image (ADR-0006).
+# The version is unpinned like every other one here, and the installer is piped
+# to sh straight from the vendor. The manifest records only the source image's
+# digest, not either of them, so a rebuild is not reproducible (ADR-0006).
 RUN set -eu; \
     export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; \
     curl -fsSL https://sh.rustup.rs \

@@ -47,9 +47,16 @@ func runList(ctx context.Context, app *App, args []string) error {
 	// Only VMs this state directory recorded are listed. A domain that exists
 	// in libvirt but not here belongs to someone else, and showing it would
 	// invite acting on it (SECURITY.md).
-	vms, err := store.ListVMs()
+	//
+	// A record that cannot be read is reported, not allowed to hide every
+	// other VM. It goes to stderr so `--output json` stays parseable, and it
+	// survives --quiet because it is something to act on.
+	vms, unreadable, err := store.ScanVMs()
 	if err != nil {
 		return err
+	}
+	for _, bad := range unreadable {
+		app.out.Warn("Warning: skipping VM %s, whose record cannot be read: %v\n", bad.Name, bad.Err)
 	}
 
 	statuses, err := app.statusesOf(ctx, vms)
@@ -107,7 +114,7 @@ func (a *App) statusesOf(ctx context.Context, vms []*state.VM) ([]vmStatus, erro
 				// A running guest may still have no address: it is booting, or
 				// its network never came up. That is reported as no address,
 				// not as a failure to list.
-				address, err := manager.IPv4Address(ctx, vm.Name)
+				address, err := manager.IPv4Address(ctx, vm.Name, guestNIC(vm))
 				if err != nil {
 					a.logger.Debug("could not read guest address", "vm", vm.Name, "error", err)
 				}

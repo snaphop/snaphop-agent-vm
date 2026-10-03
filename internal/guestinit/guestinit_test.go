@@ -2,6 +2,7 @@ package guestinit
 
 import (
 	"encoding/base64"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/golden"
 )
 
@@ -134,6 +136,83 @@ func TestGenerate_QuotesAKeyCommentThatWouldChangeTheYAML(t *testing.T) {
 	}
 }
 
+// cloud-init parses user-data with PyYAML, which refuses a whole document
+// holding a character outside its printable set. A key comment carrying one
+// would leave the guest with no user and no key, so it is refused up front.
+func TestGenerate_RejectsAKeyCommentCloudInitCannotParse(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, comment string }{
+		{"DEL", "agent\x7f@example"},
+		{"C1 control", "agent\u0080@example"},
+		{"last C1 control", "agent\u009f@example"},
+		{"next line, a YAML line break", "agent\u0085@example"},
+		{"line separator, a YAML line break", "agent\u2028@example"},
+		{"paragraph separator, a YAML line break", "agent\u2029@example"},
+		{"tab", "agent\t@example"},
+		{"noncharacter U+FFFE", "agent\ufffe@example"},
+		{"noncharacter U+FFFF", "agent\uffff@example"},
+		{"invalid UTF-8", "agent\xff@example"},
+		{"truncated UTF-8", "agent\xc3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := options()
+			opts.SSHAuthorizedKeys = []string{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ1TfEt0YKXQ+eZmJHCcTKQ0lMSzQFm/kQGHMvhE7Hqx " + tc.comment}
+
+			_, err := Generate(opts)
+			var validation *config.ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("Generate error = %v, want a *config.ValidationError", err)
+			}
+			if !strings.Contains(err.Error(), "does not look like an OpenSSH public key line") {
+				t.Errorf("the refusal should say what is wrong with the key: %v", err)
+			}
+		})
+	}
+}
+
+func TestGenerate_AcceptsAKeyCommentInAnyPrintableScript(t *testing.T) {
+	t.Parallel()
+	for _, comment := range []string{
+		"agent@example",
+		"José Müller",
+		"agent\u00a0at\u00a0example",
+		"エージェント@例",
+		"agent 🚀",
+		"agent\ufffd",
+	} {
+		opts := options()
+		key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ1TfEt0YKXQ+eZmJHCcTKQ0lMSzQFm/kQGHMvhE7Hqx " + comment
+		opts.SSHAuthorizedKeys = []string{key}
+
+		got, err := Generate(opts)
+		if err != nil {
+			t.Errorf("Generate refused the comment %q: %v", comment, err)
+			continue
+		}
+		if !strings.Contains(string(got), key) {
+			t.Errorf("the key with comment %q is not in the user-data:\n%s", comment, got)
+		}
+	}
+}
+
+func TestLoadPublicKeys_RejectsAKeyWithADELInItsComment(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "id_ed25519.pub")
+	line := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ1TfEt0YKXQ+eZmJHCcTKQ0lMSzQFm/kQGHMvhE7Hqx agent\x7f@example\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatalf("writing the key file: %v", err)
+	}
+
+	_, err := LoadPublicKeys([]string{path})
+	if err == nil {
+		t.Fatal("want a refusal: cloud-init cannot parse user-data holding a DEL")
+	}
+	if !strings.Contains(err.Error(), "line 1 is not an SSH public key") {
+		t.Errorf("the refusal should name the line: %v", err)
+	}
+}
+
 func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
 	t.Parallel()
 	opts := options()
@@ -193,6 +272,27 @@ func TestGenerate_RejectsUserDataCloudInitWouldIgnore(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "ripgrep") {
 		t.Errorf("operator user-data must never be echoed: %v", err)
+	}
+}
+
+func TestValidate_RefusesWhatGenerateRefusesWithoutRendering(t *testing.T) {
+	t.Parallel()
+	headerless := options()
+	headerless.ExtraUserData = []byte("packages:\n  - ripgrep\n")
+	headerless.ExtraSource = "/home/operator/extra.yaml"
+	notJSON := options()
+	notJSON.OpencodeConfig = []byte("permission:\n  bash: allow\n")
+	notJSON.OpencodeSource = "/home/operator/opencode.json"
+
+	for name, opts := range map[string]Options{"user-data without a header": headerless, "opencode config that is not JSON": notJSON} {
+		if err := opts.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted what Generate refuses", name)
+		} else if !strings.Contains(err.Error(), "/home/operator/") {
+			t.Errorf("%s: the refusal does not name the file: %v", name, err)
+		}
+	}
+	if err := options().Validate(); err != nil {
+		t.Errorf("Validate refused valid options: %v", err)
 	}
 }
 
@@ -526,5 +626,22 @@ func TestGenerateMetaData_RejectsAnInvalidVMName(t *testing.T) {
 
 	if _, err := GenerateMetaData(opts); err == nil {
 		t.Error("GenerateMetaData accepted a VM name that is not one")
+	}
+}
+
+func TestGenerate_RejectsOperatorUserDataContainingTheMIMEBoundary(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.ExtraUserData = []byte("#cloud-config\nwrite_files:\n  - content: |\n--agent-vm-cloud-init\n      path: /etc/motd\n")
+	opts.ExtraSource = "extra.yaml"
+
+	for name, run := range map[string]func() error{
+		"Generate": func() error { _, err := Generate(opts); return err },
+		"Validate": opts.Validate,
+	} {
+		var validation *config.ValidationError
+		if err := run(); !errors.As(err, &validation) {
+			t.Errorf("%s = %v, want a ValidationError: the line would split the document", name, err)
+		}
 	}
 }

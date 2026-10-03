@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
@@ -107,22 +108,36 @@ func (s *Store) LoadManifest(distro, tag string) (*Manifest, error) {
 
 // HasImage reports whether a usable base image is cached. All three artifacts
 // must be present: a manifest without its disk, kernel, or initrd is the
-// remains of an interrupted build, not a cache hit.
-func (s *Store) HasImage(distro, tag string) bool {
+// remains of an interrupted build, not a cache hit. A check that fails is an
+// error, not "absent": a caller would otherwise rebuild over an image it could
+// not see, past the checks that protect an image in use.
+func (s *Store) HasImage(distro, tag string) (bool, error) {
 	for _, path := range []string{
 		filepath.Join(s.ImageDir(distro, tag), ManifestFile),
 		s.BaseDiskPath(distro, tag),
 		s.KernelPath(distro, tag),
 		s.InitrdPath(distro, tag),
 	} {
-		if found, err := s.fsys.Exists(path); err != nil || !found {
-			return false
+		found, err := s.fsys.Exists(path)
+		if err != nil {
+			return false, fmt.Errorf("checking for base image %s:%s: %w", distro, tag, err)
+		}
+		if !found {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 // ListImages returns the manifest of every cached base image.
+//
+// Only a directory whose manifest names the image that directory is the cache
+// for is listed. Anything else under images/ is not a cached image: a build's
+// temporary workspace or the copy of an old image a rebuild moves aside (both
+// dot-prefixed, which no image name or tag can be), or a leftover directory
+// holding some other image's manifest. Listing one of those under the ref its
+// manifest names would show an image that `image rm` and `create` cannot
+// reach.
 func (s *Store) ListImages() ([]*Manifest, error) {
 	imagesDir := filepath.Join(s.root, "images")
 	distros, err := s.fsys.Subdirectories(imagesDir)
@@ -132,17 +147,30 @@ func (s *Store) ListImages() ([]*Manifest, error) {
 
 	var manifests []*Manifest
 	for _, d := range distros {
+		if strings.HasPrefix(d, ".") {
+			continue
+		}
 		tags, err := s.fsys.Subdirectories(filepath.Join(imagesDir, d))
 		if err != nil {
 			return nil, fmt.Errorf("listing base images for %s: %w", d, err)
 		}
 		for _, tag := range tags {
-			if !s.HasImage(d, tag) {
+			if strings.HasPrefix(tag, ".") {
+				continue
+			}
+			cached, err := s.HasImage(d, tag)
+			if err != nil {
+				return nil, err
+			}
+			if !cached {
 				continue
 			}
 			m, err := s.LoadManifest(d, tag)
 			if err != nil {
 				return nil, err
+			}
+			if m.Distro != d || m.Tag != tag {
+				continue
 			}
 			manifests = append(manifests, m)
 		}

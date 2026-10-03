@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
@@ -35,6 +36,9 @@ func createHost(t *testing.T) *hostexec.Fake {
 	fake.RespondPrefix("virsh --connect qemu:///system list --all --name", hostexec.FakeResponse{Stdout: "\n"})
 	fake.Respond("virsh --connect qemu:///system capabilities", hostexec.FakeResponse{
 		Stdout: readToolout(t, "virsh-capabilities.txt"),
+	})
+	fake.Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat", hostexec.FakeResponse{
+		Stdout: readToolout(t, "virsh-net-dumpxml.xml"),
 	})
 	return fake
 }
@@ -430,6 +434,148 @@ func TestCreate_RollsBackWithoutUndefiningADomainItNeverDefined(t *testing.T) {
 	}
 }
 
+// definedByVirtInstall makes virt-install define agent-01 and then end with
+// fail, the way a run killed or failing between defining and booting the guest
+// does. The domain is listed only once virt-install has run, so the existence
+// check before it still finds the name free.
+func definedByVirtInstall(fake *hostexec.Fake, fail func() error) {
+	var defined atomic.Bool
+	fake.RespondPrefix("virt-install", hostexec.FakeResponse{Do: func(hostexec.Command) error {
+		defined.Store(true)
+		return fail()
+	}})
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if strings.Join(c.Argv(), " ") == "virsh --connect qemu:///system list --all --name" && defined.Load() {
+			return hostexec.FakeResponse{Stdout: "agent-01\n\n"}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+	fake.RespondPrefix("virsh --connect qemu:///system domstate agent-01", hostexec.FakeResponse{Stdout: "running\n"})
+}
+
+func assertRolledBack(t *testing.T, fake *hostexec.Fake, stateDir string, code int, stderr string) {
+	t.Helper()
+	if code == ExitCleanup || strings.Contains(stderr, "still present") {
+		t.Errorf("rollback left host state behind (exit %d):\n%s", code, stderr)
+	}
+	for _, want := range []string{
+		"virsh --connect qemu:///system destroy agent-01",
+		"virsh --connect qemu:///system undefine agent-01",
+	} {
+		if !fake.Ran(want) {
+			t.Errorf("rollback did not run %q:\n%s", want, strings.Join(fake.Argvs(), "\n"))
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the VM state directory survived a failed create: %v", err)
+	}
+}
+
+func TestCreate_RollsBackADomainVirtInstallDefinedBeforeFailing(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	definedByVirtInstall(fake, func() error {
+		return &hostexec.ToolError{Tool: "virt-install", ExitCode: 1, Stderr: "ERROR    internal error: process exited while connecting to monitor"}
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitFailure, stderr)
+	}
+	assertRolledBack(t, fake, stateDir, code, stderr)
+}
+
+func TestCreate_InterruptedDuringVirtInstallStillRollsBack(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Ctrl-C arrives while virt-install runs, after it has defined the domain.
+	definedByVirtInstall(fake, func() error {
+		cancel()
+		return context.Canceled
+	})
+
+	code, _, stderr := cliRunContext(ctx, t, fake, stateDir, createArgs(keyPath)...)
+	assertRolledBack(t, fake, stateDir, code, stderr)
+}
+
+func TestCreate_InterruptedAfterTheDomainIsDefinedStillRollsBack(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Ctrl-C arrives while the domain XML is being captured.
+	fake.RespondPrefix("virsh --connect qemu:///system dumpxml", hostexec.FakeResponse{Do: func(hostexec.Command) error {
+		cancel()
+		return context.Canceled
+	}})
+
+	code, _, stderr := cliRunContext(ctx, t, fake, stateDir, createArgs(keyPath)...)
+	assertRolledBack(t, fake, stateDir, code, stderr)
+}
+
+func TestCreate_ReportsADomainItCouldNotConfirmWasNeverDefined(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	definedByVirtInstall(fake, func() error {
+		return &hostexec.ToolError{Tool: "virt-install", ExitCode: 1, Stderr: "ERROR    lost the connection"}
+	})
+	fake.RespondPrefix("virsh --connect qemu:///system domstate agent-01", hostexec.FakeResponse{
+		ExitCode: 1, Stderr: "error: failed to connect to the hypervisor",
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitCleanup {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitCleanup, stderr)
+	}
+	if !strings.Contains(stderr, "may have been defined") {
+		t.Errorf("a domain rollback could not rule out must be reported:\n%s", stderr)
+	}
+}
+
+func TestCreate_ACleanupFailureExitsSevenWhateverStartedIt(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	// The step after virt-install times out, and undefining then fails.
+	fake.RespondPrefix("virsh --connect qemu:///system dumpxml", hostexec.FakeResponse{
+		Err: &hostexec.TimeoutError{Tool: "virsh"},
+	})
+	fake.RespondPrefix("virsh --connect qemu:///system undefine", hostexec.FakeResponse{
+		ExitCode: 1, Stderr: "error: Failed to undefine domain",
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitCleanup {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitCleanup, stderr)
+	}
+}
+
+func TestCreate_AFailedBaseImageBuildLeavesNoVMDirectory(t *testing.T) {
+	t.Parallel()
+	// No cached image, and podman is missing, so the build fails at once.
+	stateDir := t.TempDir()
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519.pub")
+	if err := os.WriteFile(keyPath, []byte(publicKey), 0o600); err != nil {
+		t.Fatalf("writing the key file: %v", err)
+	}
+	fake := createHost(t)
+	fake.Missing["podman"] = true
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code == ExitOK {
+		t.Fatalf("create succeeded without a base image:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the failed create left its VM directory behind: %v", err)
+	}
+}
+
 func TestCreate_ReportsHostStateItCouldNotCleanUp(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
@@ -605,6 +751,30 @@ func TestCreate_NATModeRecordsTheNetworkAndNoBridge(t *testing.T) {
 	}
 }
 
+func TestCreate_RefusesANATNetworkThatForwardsByBridge(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	// Someone else's network has the configured name, and it bridges onto the
+	// LAN: using it would expose the guest while recording it as NAT.
+	fake.Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat", hostexec.FakeResponse{
+		Stdout: "<network>\n  <name>agent-vm-nat</name>\n  <forward mode='bridge'/>\n  <bridge name='br0'/>\n</network>\n",
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitConflict {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitConflict, stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "net-autostart") || strings.HasPrefix(argv, "virt-install --connect") {
+			t.Errorf("create went ahead on a network it refused: %s", argv)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the refused create left its state directory: %v", err)
+	}
+}
+
 func TestCreate_RefusesBridgeModeWithNoBridge(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
@@ -746,6 +916,112 @@ func TestCreate_RejectsAMissingOpencodeConfig(t *testing.T) {
 	// A path typo must cost nothing on the host.
 	if len(fake.Calls()) != 0 {
 		t.Errorf("nothing may run before the inputs are accepted:\n%s", fake)
+	}
+}
+
+// badInputFiles are operator-supplied files the guest would refuse: user-data
+// cloud-init would ignore for lack of a header, and an opencode.json that is
+// not JSON.
+var badInputFiles = []struct {
+	name, flag, contents string
+}{
+	{"cloud-init without a header", "--cloud-init", "packages:\n  - ripgrep\n"},
+	{"opencode config that is not JSON", "--opencode-config", "permission:\n  bash: allow\n"},
+}
+
+// assertNothingRan checks that a create was refused before it touched the
+// host: no tool ran — not a version check, not a base image build, not a virsh
+// query — no lock was taken, and no VM directory was made.
+func assertNothingRan(t *testing.T, fake *hostexec.Fake, stateDir string) {
+	t.Helper()
+	if len(fake.Calls()) != 0 {
+		t.Errorf("nothing may run before the input files are accepted:\n%s", fake)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "locks", "vm-agent-01.lock")); !os.IsNotExist(err) {
+		t.Errorf("the VM was locked before its input files were accepted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the VM directory was made before its input files were accepted: %v", err)
+	}
+}
+
+func TestCreate_RejectsBadInputFilesBeforeTouchingTheHost(t *testing.T) {
+	t.Parallel()
+	for _, tc := range badInputFiles {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// No cached base image: a create that got as far as ensuring it
+			// would start a build.
+			stateDir := t.TempDir()
+			keyPath := filepath.Join(t.TempDir(), "id_ed25519.pub")
+			if err := os.WriteFile(keyPath, []byte(publicKey), 0o600); err != nil {
+				t.Fatalf("writing the key file: %v", err)
+			}
+			input := filepath.Join(t.TempDir(), "input")
+			if err := os.WriteFile(input, []byte(tc.contents), 0o600); err != nil {
+				t.Fatalf("writing the input file: %v", err)
+			}
+
+			fake := createHost(t)
+			code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, tc.flag, input)...)
+			if code != ExitUsage {
+				t.Errorf("exit code = %d, want %d\n%s", code, ExitUsage, stderr)
+			}
+			if !strings.Contains(stderr, input) {
+				t.Errorf("the refusal does not name the file:\n%s", stderr)
+			}
+			assertNothingRan(t, fake, stateDir)
+		})
+	}
+}
+
+func TestCreate_DryRunRejectsBadInputFiles(t *testing.T) {
+	t.Parallel()
+	for _, tc := range badInputFiles {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stateDir, keyPath := createEnv(t)
+			input := filepath.Join(t.TempDir(), "input")
+			if err := os.WriteFile(input, []byte(tc.contents), 0o600); err != nil {
+				t.Fatalf("writing the input file: %v", err)
+			}
+
+			fake := createHost(t)
+			args := append([]string{"--dry-run"}, createArgs(keyPath, tc.flag, input)...)
+			code, stdout, stderr := cliRun(t, fake, stateDir, args...)
+			if code != ExitUsage {
+				t.Errorf("a dry run must refuse what the real run would: exit code = %d, want %d\nstdout:\n%s\nstderr:\n%s",
+					code, ExitUsage, stdout, stderr)
+			}
+			if strings.Contains(stdout, "virt-install") {
+				t.Errorf("a refused dry run must not print a plan:\n%s", stdout)
+			}
+			assertNothingRan(t, fake, stateDir)
+		})
+	}
+}
+
+func TestCreate_ChecksVirtMakeFSBeforeLocking(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	// libguestfs 1.48 is below the 1.50 floor virt-make-fs is held to.
+	fake.Respond("virt-make-fs --version", hostexec.FakeResponse{Stdout: "virt-make-fs 1.48.6\n"})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitHostNotReady, stderr)
+	}
+	if !strings.Contains(stderr, "virt-make-fs") {
+		t.Errorf("the refusal does not name the tool:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "locks", "vm-agent-01.lock")); !os.IsNotExist(err) {
+		t.Errorf("the VM was locked before its tools were checked: %v", err)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virsh --connect") || strings.HasPrefix(argv, "virt-make-fs --type") {
+			t.Errorf("create ran %q before refusing an unusable virt-make-fs", argv)
+		}
 	}
 }
 

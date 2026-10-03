@@ -296,7 +296,11 @@ func (o CreateOptions) validate() error {
 	// A path containing a comma would be read by virt-install as the start of
 	// the next suboption, so it is refused rather than escaped — these are all
 	// paths this tool chose inside the state directory, and none of them has
-	// any business containing one.
+	// any business containing one. virtinst splits suboptions with POSIX shlex,
+	// so quotes and backslashes are refused for the same reason: an unpaired
+	// one fails with "No closing quotation", and a paired one is silently
+	// removed, pointing the domain at a different file. They can reach a path
+	// only through the state directory, such as a home directory /home/o'brien.
 	paths := map[string]string{
 		"root disk":   o.OverlayPath,
 		"kernel":      o.KernelPath,
@@ -313,6 +317,12 @@ func (o CreateOptions) validate() error {
 		}
 		if strings.Contains(path, ",") {
 			return fmt.Errorf("the %s path %q contains a comma, which virt-install reads as a suboption separator", what, path)
+		}
+		if strings.ContainsAny(path, `'"\`) {
+			return fmt.Errorf("the %s path %q contains a quote or a backslash, which virt-install's suboption parser "+
+				"reads as quoting and would reject or strip;\n"+
+				"  choose a state directory without quotes or backslashes in its path (--state-dir or AGENT_VM_STATE_DIR)",
+				what, path)
 		}
 	}
 

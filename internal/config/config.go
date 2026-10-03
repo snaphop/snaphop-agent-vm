@@ -9,6 +9,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -150,7 +151,7 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 		env = os.Getenv
 	}
 
-	cfg := defaults(env)
+	cfg := defaults()
 	fromEnv := environOverrides(env)
 
 	// The config file's location is itself configurable, at flag-then-env
@@ -172,6 +173,9 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 			return nil, err
 		}
 	}
+	if err := cfg.resolveDefaultStateDir(env); err != nil {
+		return nil, err
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -179,9 +183,11 @@ func Load(env Environ, flags Overrides) (*Config, error) {
 	return cfg, nil
 }
 
-func defaults(env Environ) *Config {
+// defaults is the built-in profile. The state directory is filled in only
+// after every source has been applied, by resolveDefaultStateDir, because
+// locating the default can fail and must not when something else names one.
+func defaults() *Config {
 	return &Config{
-		StateDir:          filepath.Join(userDataDir(env), "agent-vm"),
 		StateDirIsDefault: true,
 		LibvirtURI:        DefaultLibvirtURI,
 		Distro:            distro.Ref{Distro: distro.Default, Tag: distro.Default.DefaultTag},
@@ -194,19 +200,40 @@ func defaults(env Environ) *Config {
 	}
 }
 
-// defaultConfigFile is where the configuration file lives when no other
-// location is given.
-func defaultConfigFile(env Environ) string {
-	return filepath.Join(userConfigDir(env), "agent-vm", "config.toml")
+// resolveDefaultStateDir fills in the built-in state directory when no source
+// named one. With no usable home directory there is no default to give, and
+// that is reported here rather than as a relative path that would be resolved
+// against whatever directory agent-vm happened to start in.
+//
+// A remote hypervisor is the exception: its default lives under that
+// account's home, which the CLI asks the hypervisor for (ADR-0010), so this
+// machine's home is not needed and its absence is not an error.
+func (c *Config) resolveDefaultStateDir(env Environ) error {
+	if !c.StateDirIsDefault {
+		return nil
+	}
+	dir, err := userDataDir(env)
+	if err != nil {
+		if c.RemoteHypervisor() {
+			return nil
+		}
+		return err
+	}
+	c.StateDir = filepath.Join(dir, "agent-vm")
+	return nil
 }
 
 func configFilePath(env Environ, flags, fromEnv Overrides) (string, error) {
-	path := defaultConfigFile(env)
-	if fromEnv.ConfigFile != "" {
-		path = fromEnv.ConfigFile
-	}
+	path := fromEnv.ConfigFile
 	if flags.ConfigFile != "" {
 		path = flags.ConfigFile
+	}
+	if path == "" {
+		dir, err := userConfigDir(env)
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(dir, "agent-vm", "config.toml")
 	}
 	return expandPath(env, path)
 }
@@ -342,31 +369,49 @@ func (c *Config) VMsDir() string { return filepath.Join(c.StateDir, "vms") }
 // The XDG directories and the home directory are read through the injected
 // Environ rather than from the process environment, so that a test resolving
 // configuration cannot pick up the config file of whoever is running it.
-func userDataDir(env Environ) string {
-	if dir := env("XDG_DATA_HOME"); dir != "" {
-		return dir
-	}
-	home := homeDir(env)
-	if home == "" {
-		return ".local/share"
-	}
-	return filepath.Join(home, ".local", "share")
+//
+// The XDG Base Directory specification says a relative XDG_*_HOME is invalid
+// and must be ignored, so it falls back to the home directory exactly as an
+// unset one does.
+func userDataDir(env Environ) (string, error) {
+	return xdgDir(env, "XDG_DATA_HOME", filepath.Join(".local", "share"), "the default state directory",
+		"name the state directory with --state-dir, AGENT_VM_STATE_DIR, or the state_dir config key")
 }
 
-func userConfigDir(env Environ) string {
-	if dir := env("XDG_CONFIG_HOME"); dir != "" {
-		return dir
-	}
-	home := homeDir(env)
-	if home == "" {
-		return ".config"
-	}
-	return filepath.Join(home, ".config")
+func userConfigDir(env Environ) (string, error) {
+	return xdgDir(env, "XDG_CONFIG_HOME", ".config", "the default configuration file",
+		"name the configuration file with --config or AGENT_VM_CONFIG")
 }
 
-// homeDir is os.UserHomeDir against the injected environment. This tool is
-// Linux-only, where that function reads exactly this variable.
-func homeDir(env Environ) string { return env("HOME") }
+func xdgDir(env Environ, variable, underHome, what, alternative string) (string, error) {
+	if dir := env(variable); filepath.IsAbs(dir) {
+		return dir, nil
+	}
+	home, err := homeDir(env)
+	if err != nil {
+		return "", &ValidationError{
+			Field: "HOME", Value: env("HOME"),
+			Err:    fmt.Errorf("cannot locate %s: %w, and %s is not set to an absolute path", what, err, variable),
+			Remedy: fmt.Sprintf("Set HOME or %s to an absolute path, or %s.", variable, alternative),
+		}
+	}
+	return filepath.Join(home, underHome), nil
+}
+
+// homeDir is os.UserHomeDir against the injected environment, which on Linux
+// reads exactly this variable. A relative HOME is refused alongside an unset
+// one: either would turn every path derived from it into one relative to
+// whatever directory agent-vm was started in.
+func homeDir(env Environ) (string, error) {
+	home := env("HOME")
+	switch {
+	case home == "":
+		return "", errors.New("$HOME is not set")
+	case !filepath.IsAbs(home):
+		return "", errors.New("$HOME is not an absolute path")
+	}
+	return home, nil
+}
 
 // expandPath resolves a leading "~" and makes the path absolute. It does not
 // resolve symlinks — containment checks against the state directory do that,
@@ -376,9 +421,9 @@ func expandPath(env Environ, path string) (string, error) {
 		return "", nil
 	}
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		home := homeDir(env)
-		if home == "" {
-			return "", &ValidationError{Field: "path", Value: path, Err: fmt.Errorf("cannot resolve ~: $HOME is not set")}
+		home, err := homeDir(env)
+		if err != nil {
+			return "", &ValidationError{Field: "path", Value: path, Err: fmt.Errorf("cannot resolve ~: %w", err)}
 		}
 		path = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/"))
 	}

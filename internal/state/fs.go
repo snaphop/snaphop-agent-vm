@@ -46,9 +46,10 @@ type FS interface {
 	// Subdirectories lists the immediate subdirectory names of a directory,
 	// and is empty rather than an error when the directory does not exist.
 	Subdirectories(path string) ([]string, error)
-	// Canonicalize resolves symlinks in the longest existing prefix of a path
-	// and re-appends the rest, so a path that has not been created yet can
-	// still be checked for containment.
+	// Canonicalize resolves every symlink in a path, dangling ones included,
+	// and keeps components that do not exist as written, so a path that has
+	// not been created yet can still be checked for containment. It matches
+	// `readlink -m`.
 	Canonicalize(path string) (string, error)
 	// FreeBytes is the space available to an unprivileged user on the
 	// filesystem holding path.
@@ -101,6 +102,12 @@ func (LocalFS) WriteFile(path string, data []byte, perm fs.FileMode) error {
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("setting permissions on %s: %w", path, err)
+	}
+	// Flushed before the rename: otherwise a power loss can leave the rename
+	// on disk without the data, and the record replaced by an empty file.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("flushing %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", path, err)
@@ -164,26 +171,74 @@ func (LocalFS) Subdirectories(path string) ([]string, error) {
 	return names, nil
 }
 
+// maxSymlinks bounds how many symlinks Canonicalize follows for one path, as
+// the kernel does, so a loop of links is an error rather than a hang.
+const maxSymlinks = 40
+
+// Canonicalize resolves path the way `readlink -m` does on a remote
+// hypervisor, so containment means the same thing on both. Each component is
+// examined with Lstat: a symlink is replaced by its target, followed even when
+// that target does not exist, and a component that does not exist is kept as
+// written. filepath.EvalSymlinks cannot do this: it fails on a dangling link,
+// which would let vms/a/root.qcow2 -> /elsewhere pass as a name not yet
+// created, and qemu-img would then follow it out of the state directory.
 func (LocalFS) Canonicalize(path string) (string, error) {
-	remainder := ""
-	current := path
-	for {
-		evaluated, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			return filepath.Join(evaluated, remainder), nil
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
+	if !filepath.IsAbs(path) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
 			return "", fmt.Errorf("resolving %s: %w", path, err)
 		}
-
-		parent := filepath.Dir(current)
-		if parent == current {
-			// Reached the filesystem root without finding anything that exists.
-			return path, nil
-		}
-		remainder = filepath.Join(filepath.Base(current), remainder)
-		current = parent
+		path = absolute
 	}
+
+	resolved := string(filepath.Separator)
+	pending := splitPath(path)
+	followed := 0
+	for len(pending) > 0 {
+		component := pending[0]
+		pending = pending[1:]
+		switch component {
+		case "", ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+
+		// Every component is examined, even after a missing one: a later ".."
+		// can climb back to something that exists and may be a symlink.
+		candidate := filepath.Join(resolved, component)
+		info, err := os.Lstat(candidate)
+		switch {
+		case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+			resolved = candidate
+			continue
+		case err != nil:
+			return "", fmt.Errorf("resolving %s: %w", path, err)
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			resolved = candidate
+			continue
+		}
+
+		followed++
+		if followed > maxSymlinks {
+			return "", fmt.Errorf("resolving %s: too many levels of symbolic links", path)
+		}
+		target, err := os.Readlink(candidate)
+		if err != nil {
+			return "", fmt.Errorf("resolving %s: %w", path, err)
+		}
+		if filepath.IsAbs(target) {
+			resolved = string(filepath.Separator)
+		}
+		pending = append(splitPath(target), pending...)
+	}
+	return resolved, nil
+}
+
+func splitPath(path string) []string {
+	return strings.Split(path, string(filepath.Separator))
 }
 
 // FreeBytes reports space available to an unprivileged user, which is what

@@ -128,7 +128,7 @@ disk    = "50G"
 network = "nat"
 
 [network.nat]
-name = "agent-vm-nat"
+name = "agent-vm-nat"   # an existing network by this name must forward by NAT
 
 [network.bridge]
 interface = "br0"
@@ -138,7 +138,17 @@ user     = "agent"
 ssh_keys = ["~/.ssh/id_ed25519.pub"]
 ```
 
-Local default paths honor `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when set.
+A key the file does not support — including a misspelled key or table name —
+is a usage error (exit `2`) naming the key, never silently ignored. A key that
+is present is used as written: `vcpus = 0` is rejected, not treated as unset.
+
+Local default paths honor `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when they are
+set to absolute paths; a relative value is ignored, as the XDG Base Directory
+specification requires, and the default falls back to `$HOME`. When a default
+path is needed and neither an absolute XDG directory nor an absolute `HOME` is
+available, `agent-vm` exits `2` and asks for an explicit path (`--state-dir`,
+`--config`, or their environment variables) rather than resolving against the
+current directory.
 For a remote hypervisor, an unset state directory uses that account's
 `~/.local/share/agent-vm`. Explicit paths beginning with `~` expand against
 the **client** home directory, so use absolute remote paths.
@@ -216,8 +226,10 @@ stops mattering and the check confirms instead that the configured directory
 holds the kernel and module tree supermin will be pointed at. See
 [`docs/host-setup.md`](./host-setup.md#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance).
 
-`gh` is checked too, but only ever reports `pass` or `skip`: it is needed solely
-by `--github-ssh-key`, so a host without it is still a ready host.
+`gh` is checked too, but never fails the report: it is needed solely by
+`--github-ssh-key`, so a host without it is still a ready host. It reports
+`skip` when `gh` is not installed, and `warn` when it is older than the minimum
+or its version cannot be read, since `--github-ssh-key` would then fail.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
@@ -264,7 +276,13 @@ neither ever changes a rule. They report `pass` when `ufw` is absent, disabled, 
 default on the hook in question, or carries rules covering it (naming the
 interfaces those rules cover, so you can confirm the right bridge is among
 them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
-them never match on an IPv4-only NAT network. They report
+them never match on an IPv4-only NAT network. A forwarding rule counts only if
+it accepts traffic arriving *from* the NAT network's bridge (`route allow in on
+<bridge>`) or names no interface at all; a rule for another interface, such as
+a VPN, or one limited to traffic going out toward the bridge does not let the
+guest out. Before the first `create` the bridge does not exist yet, so a rule
+on any input interface is accepted and the detail says it could not be matched
+to the bridge. They report
 `warn` — never `fail` — when `ufw` is enabled and dropping, because the live
 ruleset cannot be read without root and a false failure would exit non-zero on a
 working host. Both are skipped for a
@@ -356,9 +374,12 @@ safe to run concurrently for different distros, and a second build of the same
 one waits for the first to finish rather than racing it.
 
 Before `image build --force`, destroy VMs backed by that image name and tag.
-A rebuild replaces the backing disk and host-side kernel at the same paths; it
-does not preserve the old artifacts for existing overlays or refuse an in-use
-image. Create replacement VMs after the rebuild.
+A rebuild replaces the backing disk and host-side kernel at the same paths, and
+an existing overlay on a different base disk is corrupt. So `image build
+--force` refuses an image that a recorded VM still uses, naming the VMs, and
+refuses while any `create` is in progress (exit `5`). Destroy the dependent VMs,
+rebuild, and create replacement VMs after the rebuild. `image rm --force`
+followed by `image build` is the deliberate way to replace an image regardless.
 
 #### Slim images
 
@@ -452,11 +473,16 @@ family can be cached at once and are built and removed independently. It is the
 largest of the three — a nix store carrying four toolchains and a browser is
 bigger than the equivalent distro packages, because closures are complete.
 
-The build prepares artifacts in a temporary directory under `images/` and
-installs them on success. During a rebuild the previous image is moved aside
-before the new directory is installed, then removed; failed installation attempts
-restore it. An abrupt interruption during those renames can leave a `.previous`
-directory requiring recovery.
+The build prepares artifacts in a temporary directory beside the image
+(`images/<image>/.build-<tag>-<pid>/`) and installs them on success. During a
+rebuild the previous image is moved aside to `images/<image>/.<tag>.previous/`
+before the new directory is installed, then removed; failed installation
+attempts restore it. Neither name can be a tag, so neither is ever mistaken for
+a cached image. If a build is killed outright (SIGKILL, out of memory, a host
+reboot), the next `image build`, `image rm`, or `create` that uses the same
+image cleans up after it: it removes the dead build's temporary directory, and
+puts the previous image back if the rebuild was killed between moving it aside
+and installing the new one.
 The source image is pulled by its requested reference, then pinned to the digest that was actually
 fetched; everything after the pull is built on the digest, and the digest is what
 `manifest.json` records. The cache is keyed by image name and tag, not digest.
@@ -929,6 +955,10 @@ backing file. Prompts for confirmation unless `--yes` is given.
 |---|---|---|
 | `--force` | off | Remove even while VMs still use it as a backing file. Destructive: those VMs' disks become unreadable. |
 
+It also refuses, even with `--force`, while any `create` is in progress (exit
+`5`): until that create records its VM, the record that would show it depends on
+the image does not exist yet. Run it again once the create finishes.
+
 ### `agent-vm create <name>`
 
 Creates and starts a VM. `<name>` must match `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`
@@ -955,9 +985,21 @@ and must not already exist.
 On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
 
+Inputs are checked before anything on the host is touched. The SSH keys, the
+`--cloud-init` file (it must begin with a header cloud-init recognizes), and the
+`--opencode-config` file (it must be valid JSON) are read and validated first,
+and a bad one exits `2` — under `--dry-run` too. Next, the minimum versions of
+`virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` with
+`--github-ssh-key`) are checked, and a missing or too-old tool exits `3`. Only
+then is the VM locked and its base image looked up or built.
+
 `create` is transactional. If a step through recording `vm.json` fails, the tool
 removes the domain, the overlay, the generated seed, and the state directory
 it created, and reports both the original failure and any cleanup problem.
+This includes a `virt-install` that fails, times out, or is interrupted after it
+has already defined the domain, and a create interrupted with Ctrl-C or
+`SIGTERM`: the cleanup still runs. Whenever the cleanup leaves anything behind,
+`create` exits `7` and lists it, whatever the original failure was.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
 files after verifying they are inside the state directory.
 
@@ -1114,6 +1156,13 @@ are not listed; domains in state that have vanished from libvirt are reported as
 `missing`. With `--output json`, emits an array of stored VM records augmented
 with live `state` and an optional `address`.
 
+A VM whose `vm.json` cannot be read — another `schemaVersion`, a parse error,
+or a record that does not match its directory — is left out and named in a
+warning on stderr, and the other VMs are still listed. Subdirectories of `vms/`
+whose names are not valid VM names (`lost+found`, for example) are not VMs and
+are ignored. `image rm`, by contrast, refuses to proceed past a record it
+cannot read, because that VM may depend on the image.
+
 ### `agent-vm info <name>`
 
 Prints one VM's full record, including the base image digest it was created from,
@@ -1150,7 +1199,11 @@ Flags for `stop` and `restart`:
 
 Execs `ssh` to the VM as the guest user, or runs a command non-interactively and
 forwards its exit status. Resolves the address with
-`virsh domifaddr --source agent` (falling back to `--source lease`). This is a
+`virsh domifaddr --source lease` for a NAT VM — the address libvirt's own DHCP
+server handed out — and `virsh domifaddr --source agent` for a bridged VM, whose
+DHCP server is the LAN's. Either way only the interface libvirt defined, by the
+MAC recorded in `vm.json`, is used. The guest is untrusted and is never asked
+where it is on NAT. This is a
 convenience wrapper around `ssh`, not an SSH implementation — `--dry-run` prints
 the `ssh` command so you can use it directly.
 
@@ -1266,7 +1319,11 @@ overlay, and generated seed. Prompts for confirmation unless `--yes` is given.
 `--github-ssh-key` removes the key `create --github-ssh-key` added, by the id
 recorded in `vm.json`. It runs **first**, while the VM is still intact: if `gh`
 fails, nothing is destroyed and the record that names the key is still there to
-retry with. A key someone already deleted on github.com is not an error, and a
+retry with. `gh auth status` is checked first, because GitHub answers a token
+without the `admin:public_key` scope with the same 404 as a key that does not
+exist. A key someone already deleted on github.com is not an error; the message
+names the account `gh` is logged in to, since a key added from another account
+looks the same, along with the command that removes it. A
 VM with no recorded key exits `4`. Without the flag, a destroy of a VM that has
 one says so and prints the `gh` command that removes it — the key is never
 deleted implicitly.
@@ -1275,6 +1332,9 @@ deleted implicitly.
 It refuses to remove a path that does not resolve inside the state directory,
 and it refuses to undefine a libvirt domain it did not create — a domain whose
 disk is not the overlay recorded here exits `5` and names the disks it found.
+The record is read again once the VM's lock is held. A VM that another command
+destroyed while this one waited exits `4`. One that was destroyed and created
+again under the same name exits `5` with nothing changed.
 
 A guest that ignores the shutdown request exits `6` with the VM intact and
 nothing removed; `destroy` never escalates to a force-off on its own, because
@@ -1337,11 +1397,18 @@ and the cached images for `image inspect`, `image rm`, and `--distro`. Where
 The scripts call `agent-vm __complete <word>...`, a hidden command that takes
 the words typed so far — the last being the word under the cursor — and prints
 one candidate per line. It is an interface for shells, not for operators: it
-reads the state directory without creating it, never runs a host tool, and
+reads the state directory without creating it, never changes anything, and
 always exits `0`, because an error printed by a completion helper would land in
-the middle of what the operator is typing. Its output format is not a stable
-contract; the shell scripts are generated from the same build, so the two
-cannot drift apart.
+the middle of what the operator is typing. With a local libvirt URI it spawns
+no process. With a `qemu+ssh://` URI the state directory is on the hypervisor,
+so each Tab that completes a VM name or cached image runs `ssh` and
+read-only commands such as `find`, `cat`, and `test`
+there; that is slower than a local read, but reading this machine instead would
+offer nothing. A flag written as `--output=j` completes its value, and the bash
+script rebuilds the words from `COMP_LINE` rather than bash's own word list,
+which splits at `:` and `=`, so image refs such as `ubuntu:24.04` complete
+too. Its output format is not a stable contract; the shell scripts are
+generated from the same build, so the two cannot drift apart.
 
 ## Underlying Commands
 
@@ -1355,19 +1422,19 @@ table below is the summary.
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
-| `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
+| `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
 | `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
-| `completion` / `__complete` | none — completion reads the state directory and spawns no process |
+| `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes
@@ -1385,7 +1452,7 @@ staying stable.
 | `2` | Usage error: unknown flag, bad argument, invalid name or size. |
 | `3` | Host not ready: no KVM, no libvirt connection, missing helper binary. |
 | `4` | Not found: unknown VM or base image. |
-| `5` | Conflict: VM already exists or is locked, wrong state for the operation. Image builds wait for their image lock. |
+| `5` | Conflict: VM already exists, wrong state for the operation, or a base image is in use. A held lock is never itself a conflict: `create` and `destroy` wait for the VM's lock, and `image build` and `image rm` wait for the image's lock (see [State Layout](#state-layout)). |
 | `6` | Timeout: guest did not boot, become reachable, or shut down in time. |
 | `7` | Cleanup incomplete: an operation or its rollback left host state behind that needs attention. |
 
@@ -1416,13 +1483,22 @@ $STATE_DIR/
 └── locks/                      # advisory file locks, one per VM and per base image
 ```
 
-`networks/` and `locks/` hold the tool's own bookkeeping. Locks are released by
-the kernel when the process holding one exits, so a crashed run never leaves a
-lock that has to be cleared by hand.
+`networks/` and `locks/` hold the tool's own bookkeeping. `create` and
+`destroy` take the VM's lock, and `image build` and `image rm` take the base
+image's lock; each waits for a lock another process holds rather than failing,
+until that process finishes or the command is interrupted. Other commands take
+no lock. Locks are released by the kernel when the process holding one exits,
+so a crashed run never leaves a lock that has to be cleared by hand.
 
 Both `manifest.json` and `vm.json` carry a `schemaVersion`. The tool refuses to
 operate on a version it does not understand and says what to rebuild instead of
 guessing. Both are at version `1`.
+
+A `vm.json` is also refused (exit `1`) when its `name` differs from the
+directory it is in, when `paths.dir` is not exactly that directory, or when any
+other recorded path lies outside it: commands act on those paths, and
+`destroy` deletes `paths.dir`, so a corrupted or hand-edited record is never
+trusted to point elsewhere.
 
 ## Stored Records
 
