@@ -355,7 +355,7 @@ var completionScripts = map[string]string{
 #   agent-vm completion bash > ~/.local/share/bash-completion/completions/agent-vm
 _agent_vm_complete() {
     # bash's own word array is split at every COMP_WORDBREAKS character, so
-    # an image ref (ubuntu:24.04) or a --flag=value would reach agent-vm in
+    # an image ref (ubuntu:26.04) or a --flag=value would reach agent-vm in
     # pieces. The words are rebuilt from the line up to the cursor instead,
     # split on whitespace only, without the optional bash-completion package.
     # Quoting is not interpreted; nothing agent-vm completes needs it.
@@ -369,7 +369,7 @@ _agent_vm_complete() {
 
     # bash replaces only the text after the last word-break character in the
     # current word, so that part of each candidate is all it may be given;
-    # otherwise ubuntu:<Tab> would become ubuntu:ubuntu:24.04.
+    # otherwise ubuntu:<Tab> would become ubuntu:ubuntu:26.04.
     local breaks="" prefix=""
     [[ $COMP_WORDBREAKS == *:* ]] && breaks+=":"
     [[ $COMP_WORDBREAKS == *=* ]] && breaks+="="

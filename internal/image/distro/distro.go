@@ -127,7 +127,7 @@ var (
 	Ubuntu = Distro{
 		Name:                "ubuntu",
 		Repo:                "docker.io/library/ubuntu",
-		DefaultTag:          "24.04",
+		DefaultTag:          "26.04",
 		KernelPackage:       "linux-image-virtual",
 		Initramfs:           "initramfs-tools",
 		Containerfile:       "ubuntu.Containerfile",
@@ -155,7 +155,7 @@ var (
 	Fedora = Distro{
 		Name:                "fedora",
 		Repo:                "registry.fedoraproject.org/fedora",
-		DefaultTag:          "42",
+		DefaultTag:          "44",
 		KernelPackage:       "kernel-core",
 		Initramfs:           "dracut",
 		Containerfile:       "fedora.Containerfile",
@@ -172,7 +172,7 @@ var (
 	Arch = Distro{
 		Name:                "arch",
 		Repo:                "docker.io/library/archlinux",
-		DefaultTag:          "base",
+		DefaultTag:          "base-20260927.0.600689",
 		KernelPackage:       "linux",
 		Initramfs:           "mkinitcpio",
 		Containerfile:       "arch.Containerfile",
@@ -417,7 +417,7 @@ func (r Ref) Containerfile() string {
 	}
 }
 
-// String renders the reference as the operator wrote it: "ubuntu:24.04".
+// String renders the reference as the operator wrote it: "ubuntu:26.04".
 func (r Ref) String() string { return r.ImageName() + ":" + r.Tag }
 
 // SourceRef is the OCI reference this base image is built from.
@@ -430,8 +430,9 @@ var tagPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // ParseRef reads "<distro>" or "<distro>:<tag>", applying the family's default
 // tag when none is given. A "-slim", "-nix", or "-runner" suffix on the
-// distro selects that variant of the family, so "ubuntu-runner:24.04" is the
-// runner build of the same tag.
+// distro selects that variant of the family, so "ubuntu-runner:26.04" is the
+// runner build of the same tag. An explicit tag, including Ubuntu "24.04",
+// Fedora "43", and Arch "base", stays a separate image.
 func ParseRef(s string) (Ref, error) {
 	name, tag, hasTag := strings.Cut(s, ":")
 

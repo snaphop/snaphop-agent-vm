@@ -160,7 +160,7 @@ func TestBuild_RunsTheDocumentedToolPipeline(t *testing.T) {
 
 // workspacePID matches the process ID that ends a temporary build directory
 // name. The trailing delimiter is part of the match so that a version number
-// inside the name (".build-ubuntu-24.04-1234") is not mistaken for the PID.
+// inside the name (".build-ubuntu-26.04-1234") is not mistaken for the PID.
 var workspacePID = regexp.MustCompile(`(\.build-[a-z0-9.\-]+?)-\d+(/|\s|$)`)
 
 // redactWorkspace removes the PID from the temporary build directory so the
@@ -241,20 +241,20 @@ func TestBuild_ProducesAllThreeArtifactsAndAManifest(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Fatal("the built image is not reported as cached")
 	}
 	for _, path := range []string{
-		store.BaseDiskPath("ubuntu", "24.04"),
-		store.KernelPath("ubuntu", "24.04"),
-		store.InitrdPath("ubuntu", "24.04"),
+		store.BaseDiskPath("ubuntu", "26.04"),
+		store.KernelPath("ubuntu", "26.04"),
+		store.InitrdPath("ubuntu", "26.04"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing artifact %s: %v", filepath.Base(path), err)
 		}
 	}
 	// The exported tar is large and useless once the disk exists.
-	if _, err := os.Stat(filepath.Join(store.ImageDir("ubuntu", "24.04"), "rootfs.tar")); err == nil {
+	if _, err := os.Stat(filepath.Join(store.ImageDir("ubuntu", "26.04"), "rootfs.tar")); err == nil {
 		t.Error("the exported root filesystem tar was left in the image cache")
 	}
 }
@@ -278,10 +278,10 @@ func TestBuild_FailureLeavesNoBootableImageBehind(t *testing.T) {
 		t.Errorf("error %q does not name the tool that failed", err)
 	}
 
-	if hasImage(t, store, "ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("a failed build left a usable image in the cache")
 	}
-	entries, err := os.ReadDir(filepath.Dir(store.ImageDir("ubuntu", "24.04")))
+	entries, err := os.ReadDir(filepath.Dir(store.ImageDir("ubuntu", "26.04")))
 	if err != nil {
 		t.Fatalf("reading the image cache: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestBuild_RefusesAnUnpinnableDigest(t *testing.T) {
 		if err == nil {
 			t.Errorf("Build accepted the digest response %q", response)
 		}
-		if hasImage(t, store, "ubuntu", "24.04") {
+		if hasImage(t, store, "ubuntu", "26.04") {
 			t.Errorf("an image was cached despite an unusable digest (%q)", response)
 		}
 	}
@@ -389,7 +389,7 @@ func TestBuild_HonoursTheFromOverride(t *testing.T) {
 func TestRepoOf_SeparatesATagFromARegistryPort(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ in, want string }{
-		{"docker.io/library/ubuntu:24.04", "docker.io/library/ubuntu"},
+		{"docker.io/library/ubuntu:26.04", "docker.io/library/ubuntu"},
 		{"docker.io/library/ubuntu", "docker.io/library/ubuntu"},
 		{"registry.example.com:5000/team/img:tag", "registry.example.com:5000/team/img"},
 		{"registry.example.com:5000/team/img", "registry.example.com:5000/team/img"},
@@ -424,7 +424,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	}
 
 	vm := store.NewVM("agent-01")
-	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "24.04"}
+	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "26.04"}
 	if err := store.SaveVM(vm); err != nil {
 		t.Fatalf("SaveVM: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	if !strings.Contains(err.Error(), "agent-01") {
 		t.Errorf("error %q does not name the VM that still depends on the image", err)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image was removed despite the refusal")
 	}
 
@@ -444,7 +444,7 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	if err := builder.Remove(ctx, ref, true); err != nil {
 		t.Fatalf("Remove --force: %v", err)
 	}
-	if hasImage(t, store, "ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("--force did not remove the image")
 	}
 }
@@ -478,7 +478,7 @@ func TestRemove_RefusesEvenWithForceWhileACreateIsInProgress(t *testing.T) {
 	if !errors.As(err, &busy) || !strings.Contains(err.Error(), "agent-01") {
 		t.Fatalf("Remove = %v, want a BusyError naming the create in progress", err)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image was removed from under a create in progress")
 	}
 }
@@ -493,7 +493,7 @@ func TestBuild_ForceRefusesToReplaceAnImageAVMDependsOn(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	vm := store.NewVM("agent-01")
-	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "24.04"}
+	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "26.04"}
 	if err := store.SaveVM(vm); err != nil {
 		t.Fatalf("SaveVM: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestEnsureImage_WaitsForTheImageLock(t *testing.T) {
 	}
 	// An image rm holds the lock. A cache hit must not read past it, or the
 	// create would go on to use an image that is being removed.
-	held, err := store.LockImage(context.Background(), "ubuntu", "24.04", "image rm")
+	held, err := store.LockImage(context.Background(), "ubuntu", "26.04", "image rm")
 	if err != nil {
 		t.Fatalf("LockImage: %v", err)
 	}
@@ -584,17 +584,17 @@ func leaveWorkspace(t *testing.T, dir string) {
 func TestBuild_RemovesWorkspacesLeftByAKilledBuildOfTheSameImage(t *testing.T) {
 	t.Parallel()
 	builder, store := newBuilder(t, ubuntuHost(t))
-	ubuntu := filepath.Dir(store.ImageDir("ubuntu", "24.04"))
+	ubuntu := filepath.Dir(store.ImageDir("ubuntu", "26.04"))
 
-	// Two dead builds of ubuntu:24.04. This process's PID is not among them,
+	// Two dead builds of ubuntu:26.04. This process's PID is not among them,
 	// which is the case a crash leaves.
-	dead := []string{filepath.Join(ubuntu, ".build-24.04-999991"), filepath.Join(ubuntu, ".build-24.04-7")}
+	dead := []string{filepath.Join(ubuntu, ".build-26.04-999991"), filepath.Join(ubuntu, ".build-26.04-7")}
 	// Workspaces that look alike but belong to other images, whose builds may
 	// be running right now under their own locks.
 	others := []string{
-		filepath.Join(ubuntu, ".build-24.04.1-999991"),
-		filepath.Join(ubuntu, ".build-24.04-1-999991"),
-		filepath.Join(filepath.Dir(store.ImageDir("ubuntu-slim", "24.04")), ".build-24.04-999991"),
+		filepath.Join(ubuntu, ".build-26.04.1-999991"),
+		filepath.Join(ubuntu, ".build-26.04-1-999991"),
+		filepath.Join(filepath.Dir(store.ImageDir("ubuntu-slim", "26.04")), ".build-26.04-999991"),
 	}
 	for _, dir := range append(append([]string{}, dead...), others...) {
 		leaveWorkspace(t, dir)
@@ -616,9 +616,9 @@ func TestBuild_RemovesWorkspacesLeftByAKilledBuildOfTheSameImage(t *testing.T) {
 	}
 }
 
-// backupOf is where a rebuild moves ubuntu:24.04 aside.
+// backupOf is where a rebuild moves ubuntu:26.04 aside.
 func backupOf(store *state.Store) string {
-	return filepath.Join(filepath.Dir(store.ImageDir("ubuntu", "24.04")), ".24.04.previous")
+	return filepath.Join(filepath.Dir(store.ImageDir("ubuntu", "26.04")), ".26.04.previous")
 }
 
 func TestBuild_RestoresTheImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
@@ -632,7 +632,7 @@ func TestBuild_RestoresTheImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
 	// A rebuild killed between moving the old image aside and installing the
 	// new one.
 	backup := backupOf(store)
-	if err := os.Rename(store.ImageDir("ubuntu", "24.04"), backup); err != nil {
+	if err := os.Rename(store.ImageDir("ubuntu", "26.04"), backup); err != nil {
 		t.Fatal(err)
 	}
 	if images, err := store.ListImages(); err != nil || len(images) != 0 {
@@ -646,8 +646,8 @@ func TestBuild_RestoresTheImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
 	if extra := len(fake.Calls()) - calls; extra != 0 {
 		t.Errorf("the last good image was rebuilt instead of restored: %d tool invocations", extra)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
-		t.Error("ubuntu:24.04 was not restored from its backup")
+	if !hasImage(t, store, "ubuntu", "26.04") {
+		t.Error("ubuntu:26.04 was not restored from its backup")
 	}
 	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the backup is still there after being restored: %v", err)
@@ -672,7 +672,7 @@ func TestBuild_RemovesABackupLeftBesideAnInstalledImage(t *testing.T) {
 	if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the leftover backup is still there: %v", err)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the installed image was lost")
 	}
 }
@@ -685,14 +685,14 @@ func TestRemove_ReachesAnImageAKilledRebuildLeftOnlyAsItsBackup(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	backup := backupOf(store)
-	if err := os.Rename(store.ImageDir("ubuntu", "24.04"), backup); err != nil {
+	if err := os.Rename(store.ImageDir("ubuntu", "26.04"), backup); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := builder.Remove(ctx, ubuntuRef(t), false); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	for _, dir := range []string{store.ImageDir("ubuntu", "24.04"), backup} {
+	for _, dir := range []string{store.ImageDir("ubuntu", "26.04"), backup} {
 		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s is still there after image rm: %v", dir, err)
 		}
@@ -704,13 +704,13 @@ func TestBuild_ForcedRebuildLeavesAnImageTaggedLikeABackupAlone(t *testing.T) {
 	builder, store := newBuilder(t, ubuntuHost(t))
 	ctx := context.Background()
 
-	// "24.04.previous" is a valid tag, so it is a separate cached image that a
-	// rebuild of 24.04 must never treat as its own backup. The backup's name
+	// "26.04.previous" is a valid tag, so it is a separate cached image that a
+	// rebuild of 26.04 must never treat as its own backup. The backup's name
 	// is one no tag can take.
-	if _, err := distro.ParseRef("ubuntu:.24.04.previous"); err == nil {
+	if _, err := distro.ParseRef("ubuntu:.26.04.previous"); err == nil {
 		t.Fatal("ParseRef accepted a tag naming a rebuild's backup directory")
 	}
-	for _, ref := range []string{"ubuntu:24.04", "ubuntu:24.04.previous"} {
+	for _, ref := range []string{"ubuntu:26.04", "ubuntu:26.04.previous"} {
 		if _, err := builder.Build(ctx, BuildOptions{Ref: parseRef(t, ref)}); err != nil {
 			t.Fatalf("Build %s: %v", ref, err)
 		}
@@ -719,8 +719,8 @@ func TestBuild_ForcedRebuildLeavesAnImageTaggedLikeABackupAlone(t *testing.T) {
 	if _, err := builder.Build(ctx, BuildOptions{Ref: ubuntuRef(t), Force: true}); err != nil {
 		t.Fatalf("forced Build: %v", err)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04.previous") {
-		t.Error("rebuilding ubuntu:24.04 deleted the separately cached ubuntu:24.04.previous")
+	if !hasImage(t, store, "ubuntu", "26.04.previous") {
+		t.Error("rebuilding ubuntu:26.04 deleted the separately cached ubuntu:26.04.previous")
 	}
 }
 
@@ -745,15 +745,15 @@ func TestBuild_SlimImageIsCachedUnderItsOwnNameAndBuiltFromTheSlimRecipe(t *test
 
 	// The name is what every later operation addresses the image by: the cache
 	// directory, `image rm`, and the vm.json of every VM built on it.
-	if manifest.Distro != "ubuntu-slim" || manifest.Ref() != "ubuntu-slim:24.04" {
-		t.Errorf("manifest names the image %s, want ubuntu-slim:24.04", manifest.Ref())
+	if manifest.Distro != "ubuntu-slim" || manifest.Ref() != "ubuntu-slim:26.04" {
+		t.Errorf("manifest names the image %s, want ubuntu-slim:26.04", manifest.Ref())
 	}
-	if !hasImage(t, store, "ubuntu-slim", "24.04") {
+	if !hasImage(t, store, "ubuntu-slim", "26.04") {
 		t.Fatal("the built slim image is not reported as cached")
 	}
 	// A slim build must not be mistaken for, or overwrite, the full image of
 	// the same family and tag.
-	if hasImage(t, store, "ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("building ubuntu-slim also produced an image cached as ubuntu")
 	}
 
@@ -803,8 +803,8 @@ func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
 	}
 
 	for _, name := range []string{"ubuntu", "ubuntu-slim"} {
-		if !hasImage(t, store, name, "24.04") {
-			t.Errorf("%s:24.04 is not cached after building both", name)
+		if !hasImage(t, store, name, "26.04") {
+			t.Errorf("%s:26.04 is not cached after building both", name)
 		}
 	}
 }
@@ -841,13 +841,13 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if manifest.Distro != "ubuntu-runner" || manifest.Ref() != "ubuntu-runner:24.04" {
-		t.Errorf("manifest names the image %s, want ubuntu-runner:24.04", manifest.Ref())
+	if manifest.Distro != "ubuntu-runner" || manifest.Ref() != "ubuntu-runner:26.04" {
+		t.Errorf("manifest names the image %s, want ubuntu-runner:26.04", manifest.Ref())
 	}
-	if !hasImage(t, store, "ubuntu-runner", "24.04") {
+	if !hasImage(t, store, "ubuntu-runner", "26.04") {
 		t.Error("the built runner image is not reported as cached")
 	}
-	if hasImage(t, store, "ubuntu", "24.04") || hasImage(t, store, "ubuntu-slim", "24.04") {
+	if hasImage(t, store, "ubuntu", "26.04") || hasImage(t, store, "ubuntu-slim", "26.04") {
 		t.Error("building ubuntu-runner also cached ubuntu or ubuntu-slim")
 	}
 

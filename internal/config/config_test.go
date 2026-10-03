@@ -60,8 +60,8 @@ func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
 	if cfg.Network != NetworkNAT {
 		t.Errorf("Network = %s, want nat", cfg.Network)
 	}
-	if cfg.Distro.String() != "ubuntu:24.04" {
-		t.Errorf("Distro = %s, want ubuntu:24.04", cfg.Distro)
+	if cfg.Distro.String() != "ubuntu:26.04" {
+		t.Errorf("Distro = %s, want ubuntu:26.04", cfg.Distro)
 	}
 	if cfg.LibvirtURI != "qemu:///system" {
 		t.Errorf("LibvirtURI = %s, want qemu:///system", cfg.LibvirtURI)
@@ -105,8 +105,8 @@ disk   = "100G"
 	if cfg.Disk.String() != "100G" {
 		t.Errorf("Disk = %s, want 100G (file beats defaults)", cfg.Disk)
 	}
-	if cfg.Distro.String() != "fedora:42" {
-		t.Errorf("Distro = %s, want fedora:42 (file beats defaults)", cfg.Distro)
+	if cfg.Distro.String() != "fedora:44" {
+		t.Errorf("Distro = %s, want fedora:44 (file beats defaults)", cfg.Distro)
 	}
 }
 
@@ -361,8 +361,8 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 	if cfg.LibvirtURI != SessionURI {
 		t.Errorf("LibvirtURI = %s", cfg.LibvirtURI)
 	}
-	if cfg.Distro.String() != "arch:base" {
-		t.Errorf("Distro = %s, want arch:base", cfg.Distro)
+	if cfg.Distro.String() != "arch:base-20260927.0.600689" {
+		t.Errorf("Distro = %s, want arch:base-20260927.0.600689", cfg.Distro)
 	}
 	if cfg.VCPUs != 6 || cfg.Memory.String() != "2G" || cfg.Disk.String() != "20G" {
 		t.Errorf("resources = %d vcpu / %s / %s", cfg.VCPUs, cfg.Memory, cfg.Disk)

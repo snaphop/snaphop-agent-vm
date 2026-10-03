@@ -14,10 +14,13 @@ func TestParseRef_AppliesTheFamilyDefaultTag(t *testing.T) {
 		want      string
 		sourceRef string
 	}{
-		{"ubuntu", "ubuntu:24.04", "docker.io/library/ubuntu:24.04"},
-		{"fedora", "fedora:42", "registry.fedoraproject.org/fedora:42"},
-		{"arch", "arch:base", "docker.io/library/archlinux:base"},
+		{"ubuntu", "ubuntu:26.04", "docker.io/library/ubuntu:26.04"},
+		{"fedora", "fedora:44", "registry.fedoraproject.org/fedora:44"},
+		{"arch", "arch:base-20260927.0.600689", "docker.io/library/archlinux:base-20260927.0.600689"},
+		{"ubuntu:24.04", "ubuntu:24.04", "docker.io/library/ubuntu:24.04"},
 		{"ubuntu:22.04", "ubuntu:22.04", "docker.io/library/ubuntu:22.04"},
+		{"fedora:43", "fedora:43", "registry.fedoraproject.org/fedora:43"},
+		{"arch:base", "arch:base", "docker.io/library/archlinux:base"},
 	}
 	for _, tt := range tests {
 		ref, err := ParseRef(tt.in)
@@ -209,15 +212,21 @@ func TestParseRef_ReadsTheVariantsOfAFamily(t *testing.T) {
 		containerfile string
 		sourceRef     string
 	}{
-		{"ubuntu-slim", Slim, "ubuntu-slim:24.04", "ubuntu-slim", "ubuntu-slim.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"ubuntu-slim", Slim, "ubuntu-slim:26.04", "ubuntu-slim", "ubuntu-slim.Containerfile", "docker.io/library/ubuntu:26.04"},
+		{"fedora-slim", Slim, "fedora-slim:44", "fedora-slim", "fedora-slim.Containerfile", "registry.fedoraproject.org/fedora:44"},
 		{"fedora-slim:41", Slim, "fedora-slim:41", "fedora-slim", "fedora-slim.Containerfile", "registry.fedoraproject.org/fedora:41"},
-		{"arch-slim", Slim, "arch-slim:base", "arch-slim", "arch-slim.Containerfile", "docker.io/library/archlinux:base"},
-		{"ubuntu-nix", Nix, "ubuntu-nix:24.04", "ubuntu-nix", "ubuntu-nix.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"arch-slim", Slim, "arch-slim:base-20260927.0.600689", "arch-slim", "arch-slim.Containerfile", "docker.io/library/archlinux:base-20260927.0.600689"},
+		{"ubuntu-nix", Nix, "ubuntu-nix:26.04", "ubuntu-nix", "ubuntu-nix.Containerfile", "docker.io/library/ubuntu:26.04"},
+		{"fedora-nix", Nix, "fedora-nix:44", "fedora-nix", "fedora-nix.Containerfile", "registry.fedoraproject.org/fedora:44"},
 		{"fedora-nix:41", Nix, "fedora-nix:41", "fedora-nix", "fedora-nix.Containerfile", "registry.fedoraproject.org/fedora:41"},
-		{"arch-nix", Nix, "arch-nix:base", "arch-nix", "arch-nix.Containerfile", "docker.io/library/archlinux:base"},
-		{"ubuntu-runner", Runner, "ubuntu-runner:24.04", "ubuntu-runner", "ubuntu-runner.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"arch-nix", Nix, "arch-nix:base-20260927.0.600689", "arch-nix", "arch-nix.Containerfile", "docker.io/library/archlinux:base-20260927.0.600689"},
+		{"ubuntu-runner", Runner, "ubuntu-runner:26.04", "ubuntu-runner", "ubuntu-runner.Containerfile", "docker.io/library/ubuntu:26.04"},
+		{"ubuntu-runner:24.04", Runner, "ubuntu-runner:24.04", "ubuntu-runner", "ubuntu-runner.Containerfile", "docker.io/library/ubuntu:24.04"},
+		{"fedora-runner", Runner, "fedora-runner:44", "fedora-runner", "fedora-runner.Containerfile", "registry.fedoraproject.org/fedora:44"},
+		{"fedora-runner:43", Runner, "fedora-runner:43", "fedora-runner", "fedora-runner.Containerfile", "registry.fedoraproject.org/fedora:43"},
 		{"fedora-runner:41", Runner, "fedora-runner:41", "fedora-runner", "fedora-runner.Containerfile", "registry.fedoraproject.org/fedora:41"},
-		{"arch-runner", Runner, "arch-runner:base", "arch-runner", "arch-runner.Containerfile", "docker.io/library/archlinux:base"},
+		{"arch-runner", Runner, "arch-runner:base-20260927.0.600689", "arch-runner", "arch-runner.Containerfile", "docker.io/library/archlinux:base-20260927.0.600689"},
+		{"arch-runner:base", Runner, "arch-runner:base", "arch-runner", "arch-runner.Containerfile", "docker.io/library/archlinux:base"},
 	}
 	for _, tt := range tests {
 		ref, err := ParseRef(tt.in)

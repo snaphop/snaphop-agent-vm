@@ -149,7 +149,12 @@ much faster — but it is real disk. Reclaim it with the usual podman commands:
 ```bash
 podman images                       # what is actually there
 podman image prune                  # dangling layers
-podman rmi agent-vm/ubuntu:24.04    # the built image; agent-vm rebuilds it on demand
+podman rmi agent-vm/ubuntu:26.04    # the built default image; agent-vm rebuilds it on demand
+podman rmi agent-vm/ubuntu:24.04    # the same, for a 24.04 image built by naming that tag
+podman rmi agent-vm/fedora:44       # the built default Fedora image
+podman rmi agent-vm/fedora:43       # the same, for a 43 image built by naming that tag
+podman rmi agent-vm/arch:base-20260927.0.600689   # the built default Arch image
+podman rmi agent-vm/arch:base       # the same, for an image built from the rolling tag
 ```
 
 Overlays are thin. A 50 GiB VM starts at a few megabytes, so `df` at creation

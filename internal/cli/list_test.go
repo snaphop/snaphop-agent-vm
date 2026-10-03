@@ -46,7 +46,7 @@ func TestList_ReportsStateAndAddressForARecordedVM(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, stderr)
 	}
-	for _, want := range []string{"agent-01", "running", "ubuntu:24.04", "nat", "192.168.122.3"} {
+	for _, want := range []string{"agent-01", "running", "ubuntu:26.04", "nat", "192.168.122.3"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("list output is missing %q:\n%s", want, stdout)
 		}

@@ -120,9 +120,9 @@ func cachedImage(t *testing.T, dir string) *state.Store {
 	}
 
 	for _, path := range []string{
-		store.BaseDiskPath("ubuntu", "24.04"),
-		store.KernelPath("ubuntu", "24.04"),
-		store.InitrdPath("ubuntu", "24.04"),
+		store.BaseDiskPath("ubuntu", "26.04"),
+		store.KernelPath("ubuntu", "26.04"),
+		store.InitrdPath("ubuntu", "26.04"),
 	} {
 		if err := store.WriteFile(path, []byte("artifact\n"), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", path, err)
@@ -130,8 +130,8 @@ func cachedImage(t *testing.T, dir string) *state.Store {
 	}
 	err = store.SaveManifest(&state.Manifest{
 		Distro:        "ubuntu",
-		Tag:           "24.04",
-		SourceRef:     "docker.io/library/ubuntu:24.04",
+		Tag:           "26.04",
+		SourceRef:     "docker.io/library/ubuntu:26.04",
 		SourceDigest:  "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
 		KernelVersion: "6.8.0-31-generic",
 		KernelCmdline: "root=/dev/vda1 console=ttyS0 rw",
@@ -153,7 +153,7 @@ func TestImageList_ShowsACachedImage(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	for _, want := range []string{"ubuntu:24.04", "6.8.0-31-generic", "sha256:"} {
+	for _, want := range []string{"ubuntu:26.04", "6.8.0-31-generic", "sha256:"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not contain %q:\n%s", want, stdout)
 		}
@@ -214,7 +214,7 @@ func TestImageRm_RefusesWithoutConfirmationWhenThereIsNoTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image was removed without confirmation")
 	}
 }
@@ -229,7 +229,7 @@ func TestImageRm_RemovesWithYes(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want 0: %s", code, stderr)
 	}
-	if hasImage(t, store, "ubuntu", "24.04") {
+	if hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image is still cached after `image rm --yes`")
 	}
 }
@@ -254,7 +254,7 @@ func TestImageRm_DeclinedAtThePromptRemovesNothing(t *testing.T) {
 	if code != ExitOK {
 		t.Errorf("exit code = %d, want 0", code)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image was removed after the operator declined")
 	}
 }
@@ -265,7 +265,7 @@ func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
 	store := cachedImage(t, dir)
 
 	vm := store.NewVM("agent-01")
-	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "24.04"}
+	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "26.04"}
 	if err := store.SaveVM(vm); err != nil {
 		t.Fatalf("SaveVM: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestImageRm_RefusesWhileAVMDependsOnTheImage(t *testing.T) {
 	if !strings.Contains(stderr, "agent-01") {
 		t.Errorf("stderr does not name the dependent VM:\n%s", stderr)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("the image was removed despite the refusal")
 	}
 }
@@ -314,10 +314,10 @@ func TestImageRm_DryRunRemovesNothing(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "ubuntu/24.04") {
+	if !strings.Contains(stdout, "ubuntu/26.04") {
 		t.Errorf("plan does not say what it would remove:\n%s", stdout)
 	}
-	if !hasImage(t, store, "ubuntu", "24.04") {
+	if !hasImage(t, store, "ubuntu", "26.04") {
 		t.Error("--dry-run removed the image")
 	}
 }
@@ -399,7 +399,7 @@ func TestImageRm_AcceptsItsFlagsOnEitherSideOfTheDistro(t *testing.T) {
 			if code != ExitOK {
 				t.Fatalf("exit code = %d, want 0: %s", code, stderr)
 			}
-			if !strings.Contains(stdout, "ubuntu/24.04") {
+			if !strings.Contains(stdout, "ubuntu/26.04") {
 				t.Errorf("the plan does not say what it would remove:\n%s", stdout)
 			}
 		})

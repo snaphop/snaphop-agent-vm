@@ -100,9 +100,9 @@ consumes a few megabytes of host disk until the guest writes to it.
 
 | Distro | Source image | Notes |
 |---|---|---|
-| Ubuntu | `docker.io/library/ubuntu:24.04` | default; cloud-init from the archive |
-| Fedora | `registry.fedoraproject.org/fedora:42` | `kernel-core` + `dracut` initramfs |
-| Arch Linux | `docker.io/library/archlinux:base` | rolling; rebuild the base image to update |
+| Ubuntu | `docker.io/library/ubuntu:26.04` | default; `ubuntu:24.04` remains available; cloud-init from the archive |
+| Fedora | `registry.fedoraproject.org/fedora:44` | default for that family; `fedora:43` remains available; `kernel-core` + `dracut` initramfs |
+| Arch Linux | `docker.io/library/archlinux:base-20260927.0.600689` | default snapshot for that family; `arch:base` remains the rolling tag; a rebuild still upgrades packages from the mirrors |
 
 Each is pinned by digest in its base image manifest, so a rebuild is explicit
 rather than something that happens behind your back. Adding a new distro
@@ -181,7 +181,7 @@ the bridge setup section of [`docs/host-setup.md`](./docs/host-setup.md).
 ## How It Works
 
 ```text
-OCI image (ubuntu:24.04)                             base image cache
+OCI image (ubuntu:26.04)                             base image cache
    │  podman pull / build / export                        │
    ▼  virt-make-fs, virt-copy-out, virt-sysprep           │
 flattened rootfs + kernel packages ──────► base.qcow2 + vmlinuz + initrd

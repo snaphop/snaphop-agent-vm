@@ -9,6 +9,12 @@ Accepted. Extended by
 variant alongside each family's full and slim images, and by
 [ADR-0013](./0013-self-hosted-github-actions-runner-variant.md), which adds a
 self-hosted GitHub Actions runner variant of each family's slim image.
+The Ubuntu default tag moved from 24.04 to 26.04 on 2026-10-03. `ubuntu:24.04`
+remains a supported tag and a separate cached image. The Fedora default tag
+moved from 42 to 44 on 2026-10-03. `fedora:43` remains a supported tag and a
+separate cached image. The Arch default tag moved from `base` to
+`base-20260927.0.600689` on 2026-10-03. `arch:base` remains a supported tag
+and a separate cached image.
 
 ## Context
 
@@ -41,9 +47,9 @@ image manifest:
 
 | Distro | Default source image | Kernel / initramfs |
 |---|---|---|
-| `ubuntu` (default) | `docker.io/library/ubuntu:24.04` | `linux-image-virtual`, `initramfs-tools` |
-| `fedora` | `registry.fedoraproject.org/fedora:42` | `kernel-core`, `dracut` |
-| `arch` | `docker.io/library/archlinux:base` | `linux`, `mkinitcpio` |
+| `ubuntu` (default) | `docker.io/library/ubuntu:26.04` | `linux-image-virtual`, `initramfs-tools` |
+| `fedora` | `registry.fedoraproject.org/fedora:44` | `kernel-core`, `dracut` |
+| `arch` | `docker.io/library/archlinux:base-20260927.0.600689` | `linux`, `mkinitcpio` |
 
 Distro-specific build recipes live in `templates/distro/`, with definitions in
 `internal/image/distro/` for source references, artifact names, and behavior a

@@ -1,14 +1,14 @@
-podman pull --platform linux/amd64 docker.io/library/ubuntu:24.04
-podman image inspect --format json docker.io/library/ubuntu:24.04
-podman build --file $STATE_DIR/images/ubuntu/.build-24.04-PID/Containerfile --tag agent-vm/ubuntu:24.04 --build-arg BASE_IMAGE=docker.io/library/ubuntu@sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15 --platform linux/amd64 $STATE_DIR/images/ubuntu/.build-24.04-PID
-podman create agent-vm/ubuntu:24.04
-podman export --output $STATE_DIR/images/ubuntu/.build-24.04-PID/rootfs.tar 9b2c0a1d4e5f6a7b8c9d0e1f2a3b4c5d
+podman pull --platform linux/amd64 docker.io/library/ubuntu:26.04
+podman image inspect --format json docker.io/library/ubuntu:26.04
+podman build --file $STATE_DIR/images/ubuntu/.build-26.04-PID/Containerfile --tag agent-vm/ubuntu:26.04 --build-arg BASE_IMAGE=docker.io/library/ubuntu@sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15 --platform linux/amd64 $STATE_DIR/images/ubuntu/.build-26.04-PID
+podman create agent-vm/ubuntu:26.04
+podman export --output $STATE_DIR/images/ubuntu/.build-26.04-PID/rootfs.tar 9b2c0a1d4e5f6a7b8c9d0e1f2a3b4c5d
 podman rm --force 9b2c0a1d4e5f6a7b8c9d0e1f2a3b4c5d
-virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G $STATE_DIR/images/ubuntu/.build-24.04-PID/rootfs.tar $STATE_DIR/images/ubuntu/.build-24.04-PID/base.qcow2
-virt-ls -a $STATE_DIR/images/ubuntu/.build-24.04-PID/base.qcow2 /usr/lib/modules
-virt-ls -a $STATE_DIR/images/ubuntu/.build-24.04-PID/base.qcow2 /boot
-virt-copy-out -a $STATE_DIR/images/ubuntu/.build-24.04-PID/base.qcow2 /boot/vmlinuz-6.8.0-31-generic /boot/initrd.img-6.8.0-31-generic $STATE_DIR/images/ubuntu/.build-24.04-PID
-virt-sysprep -a $STATE_DIR/images/ubuntu/.build-24.04-PID/base.qcow2 --operations machine-id,ssh-hostkeys,logfiles,tmp-files,net-hostname,udev-persistent-net
+virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G $STATE_DIR/images/ubuntu/.build-26.04-PID/rootfs.tar $STATE_DIR/images/ubuntu/.build-26.04-PID/base.qcow2
+virt-ls -a $STATE_DIR/images/ubuntu/.build-26.04-PID/base.qcow2 /usr/lib/modules
+virt-ls -a $STATE_DIR/images/ubuntu/.build-26.04-PID/base.qcow2 /boot
+virt-copy-out -a $STATE_DIR/images/ubuntu/.build-26.04-PID/base.qcow2 /boot/vmlinuz-6.8.0-31-generic /boot/initrd.img-6.8.0-31-generic $STATE_DIR/images/ubuntu/.build-26.04-PID
+virt-sysprep -a $STATE_DIR/images/ubuntu/.build-26.04-PID/base.qcow2 --operations machine-id,ssh-hostkeys,logfiles,tmp-files,net-hostname,udev-persistent-net
 podman --version
 virt-make-fs --version
 virt-ls --version

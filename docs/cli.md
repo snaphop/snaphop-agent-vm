@@ -348,6 +348,14 @@ including the tool versions used.
 
 Use `--dry-run` to print the whole pipeline without running it.
 
+Omitting the tag uses the family's default: `26.04` for Ubuntu, `44` for
+Fedora, and `base-20260927.0.600689` for Arch. Another tag is its own cached
+image, so `ubuntu:24.04` — and `ubuntu-slim:24.04`, `ubuntu-nix:24.04`, and
+`ubuntu-runner:24.04` — stay available beside the default. The same holds
+for `fedora:43`, including `fedora-slim:43`, `fedora-nix:43`, and
+`fedora-runner:43`, and for the rolling Arch tag `arch:base`, including
+`arch-slim:base`, `arch-nix:base`, and `arch-runner:base`.
+
 A build is several minutes of other programs working silently, so it reports
 where it is. On a terminal that is one line, redrawn in place, showing a bar,
 the step number, the step, and the elapsed time:
@@ -385,7 +393,7 @@ followed by `image build` is the deliberate way to replace an image regardless.
 
 Every family also has a slim variant, named by appending `-slim` to the family:
 `agent-vm image build ubuntu-slim`, `agent-vm create work --distro
-fedora-slim:42`. It boots identically — same kernel command line, same
+fedora-slim`. It boots identically — same kernel command line, same
 cloud-init contract, same SSH and clock guarantees — and carries the same
 common Linux tooling described under “Guest tooling” below, but none of the
 agent tooling: no mise and no language toolchains, no coding agents, no
@@ -394,7 +402,7 @@ for a VM that only has to run a build, a shell, or a test suite; it is a much
 smaller image and a much shorter build.
 
 A slim image is a separate base image rather than a mode of the full one. It
-has its own cache directory (`images/ubuntu-slim/24.04/`), its own manifest,
+has its own cache directory (`images/ubuntu-slim/26.04/`), its own manifest,
 and its own name in `image list`, `image inspect`, `image rm`, and `vm.json` —
 so `ubuntu` and `ubuntu-slim` can both be cached at once, are built and removed
 independently, and neither one's rebuild disturbs VMs backed by the other.
@@ -464,7 +472,7 @@ tooling the image does not carry. It does not replace the runner in the base
 image.
 
 A runner image is its own base image: its own cache directory
-(`images/ubuntu-runner/24.04/`), its own manifest, and its own name in
+(`images/ubuntu-runner/26.04/`), its own manifest, and its own name in
 `image list`, `image inspect`, `image rm`, and `vm.json`, so it can be cached
 beside `ubuntu` and `ubuntu-slim` and is built and removed on its own. It is
 larger than the slim image it starts from, because the Actions runner ships
@@ -540,7 +548,7 @@ which the nixpkgs-provided packages use the same versions for the same
 architecture. This does not pin the other installers or distro packages.
 
 A nix image is a separate base image, like a slim one: its own cache directory
-(`images/ubuntu-nix/24.04/`), its own manifest, and its own name in `image
+(`images/ubuntu-nix/26.04/`), its own manifest, and its own name in `image
 list`, `image inspect`, `image rm`, and `vm.json`. Every variant of a
 family can be cached at once and is built and removed independently. A nix
 image is the largest: a nix store carrying four toolchains and a browser is
@@ -1040,7 +1048,7 @@ and must not already exist.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--distro <name>[:<tag>]` | `ubuntu` | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`), `-nix` (`ubuntu-nix`), or `-runner` (`ubuntu-runner`) to the family for that variant. |
+| `--distro <name>[:<tag>]` | `ubuntu` (tag `26.04`) | Base image to use; built automatically if not cached. Append `-slim` (`ubuntu-slim`), `-nix` (`ubuntu-nix`), or `-runner` (`ubuntu-runner`) to the family for that variant. `ubuntu:24.04` and `fedora:43` still select those releases, including on a variant. Fedora with no tag uses `44`. Arch with no tag uses `base-20260927.0.600689`; `arch:base` still selects the rolling tag, including on a variant. |
 | `--vcpus <n>` | `2` | Virtual CPUs, from 1 to 255. |
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
@@ -1480,7 +1488,7 @@ read-only commands such as `find`, `cat`, and `test`
 there; that is slower than a local read, but reading this machine instead would
 offer nothing. A flag written as `--output=j` completes its value, and the bash
 script rebuilds the words from `COMP_LINE` rather than bash's own word list,
-which splits at `:` and `=`, so image refs such as `ubuntu:24.04` complete
+which splits at `:` and `=`, so image refs such as `ubuntu:26.04` complete
 too. Its output format is not a stable contract; the shell scripts are
 generated from the same build, so the two cannot drift apart.
 
@@ -1583,6 +1591,10 @@ manifest, and `image list` emits an array of them. Fields are added compatibly;
 renaming or removing one,
 or changing what a value means, raises `schemaVersion`.
 
+`sourceDigest` and `kernelVersion` in the samples below are placeholders for
+the field shape. A built image records the digest of the image that was pulled
+and the kernel version read from that image.
+
 ### `vms/<name>/vm.json`
 
 The system of record for a VM's configuration and provenance. Runtime state is
@@ -1595,13 +1607,13 @@ answer that goes stale.
   "name": "agent-01",
   "createdAt": "2026-08-19T09:14:03Z",
   "libvirtUri": "qemu:///system",
-  "distro": "ubuntu:24.04",
+  "distro": "ubuntu:26.04",
   "baseImage": {
     "distro": "ubuntu",
-    "tag": "24.04",
-    "sourceRef": "docker.io/library/ubuntu:24.04",
-    "sourceDigest": "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
-    "path": "/home/you/.local/share/agent-vm/images/ubuntu/24.04/base.qcow2"
+    "tag": "26.04",
+    "sourceRef": "docker.io/library/ubuntu:26.04",
+    "sourceDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "path": "/home/you/.local/share/agent-vm/images/ubuntu/26.04/base.qcow2"
   },
   "resources": { "vcpus": 2, "memory": "4G", "disk": "50G" },
   "network": { "mode": "nat", "name": "agent-vm-nat", "mac": "52:54:00:1a:2b:3c" },
@@ -1649,12 +1661,12 @@ What a cached base image is and how it was produced.
 {
   "schemaVersion": 1,
   "distro": "ubuntu",
-  "tag": "24.04",
+  "tag": "26.04",
   "builtAt": "2026-08-19T09:14:03Z",
   "platform": "linux/amd64",
-  "sourceRef": "docker.io/library/ubuntu:24.04",
-  "sourceDigest": "sha256:3f85b7caad41a95462cf5b787d8a04604c8262cdcdf9a472b8c52ef83375fe15",
-  "kernelVersion": "6.8.0-31-generic",
+  "sourceRef": "docker.io/library/ubuntu:26.04",
+  "sourceDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "kernelVersion": "<kernel version>",
   "kernelCmdline": "root=/dev/vda1 console=ttyS0 console=ttyAMA0 rw memhp_default_state=online_movable",
   "baseDiskBytes": 1502576640,
   "toolVersions": {

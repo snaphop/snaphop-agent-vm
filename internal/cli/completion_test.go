@@ -121,8 +121,8 @@ func TestComplete_CompletesAnImageRefAfterItsColon(t *testing.T) {
 
 	for _, word := range []string{"ubuntu:", "ubuntu:2"} {
 		got := completeLines(t, dir, "image", "inspect", word)
-		if len(got) != 1 || got[0] != "ubuntu:24.04" {
-			t.Errorf("candidates for %q = %v, want [ubuntu:24.04]", word, got)
+		if len(got) != 1 || got[0] != "ubuntu:26.04" {
+			t.Errorf("candidates for %q = %v, want [ubuntu:26.04]", word, got)
 		}
 	}
 }

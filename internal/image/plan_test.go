@@ -102,7 +102,7 @@ func TestPlanNotes_DescribeTheFileOperationsAndTheCommitStep(t *testing.T) {
 	t.Parallel()
 	notes := strings.Join(PlanNotes(state.NewLayout("/state"), ubuntuRef(t)), "\n")
 
-	for _, want := range []string{"manifest.json", "Containerfile", "/state/images/ubuntu/24.04"} {
+	for _, want := range []string{"manifest.json", "Containerfile", "/state/images/ubuntu/26.04"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("plan notes do not mention %q:\n%s", want, notes)
 		}

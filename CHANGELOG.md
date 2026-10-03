@@ -33,6 +33,32 @@ migration or rebuild step a user has to take.
   libraries the runner needs and does not upgrade the rest of the system.
   The runner release pinned in the image is 2.337.0.
 
+### Changed
+
+- The default Ubuntu release is 26.04. `agent-vm create` and `agent-vm image
+  build ubuntu`, with no tag, use `docker.io/library/ubuntu:26.04`. Ubuntu
+  24.04 is still available as its own image: `agent-vm create work --distro
+  ubuntu:24.04`, and the same `:24.04` suffix on `ubuntu-slim`, `ubuntu-nix`,
+  and `ubuntu-runner`. An image already cached as 24.04, and VMs built from
+  it, stay as they are. A create that names no tag builds 26.04 into a
+  different cache directory.
+- The default Fedora release is 44. `agent-vm create --distro fedora` and
+  `agent-vm image build fedora`, with no tag, use
+  `registry.fedoraproject.org/fedora:44`. Fedora 43 is available as its own
+  image: `agent-vm create work --distro fedora:43`, and the same `:43`
+  suffix on `fedora-slim`, `fedora-nix`, and `fedora-runner`. An image
+  already cached as 42, and VMs built from it, stay as they are. A create
+  that names no tag builds 44 into a different cache directory.
+- The default Arch image tag is `base-20260927.0.600689`, the current
+  official snapshot on `docker.io/library/archlinux`. `agent-vm create
+  --distro arch` and `agent-vm image build arch`, with no tag, use that
+  tag. The rolling tag is still available: `agent-vm create work --distro
+  arch:base`, and the same `:base` suffix on `arch-slim`, `arch-nix`, and
+  `arch-runner`. An image already cached as `base`, and VMs built from it,
+  stay as they are. A create that names no tag builds this snapshot into a
+  different cache directory. Building still upgrades packages from the Arch
+  mirrors, so the tag names the starting image.
+
 ### Security
 
 - Vulnerability reports are accepted only at <security@snaphop.com>.
