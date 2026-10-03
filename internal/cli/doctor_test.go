@@ -384,6 +384,38 @@ func TestDoctor_AMissingGHIsReportedWithoutFailingTheHost(t *testing.T) {
 	}
 }
 
+// A gh that is installed but unusable is worth telling the operator about
+// before `--github-ssh-key` fails, but it still must not fail the host: the
+// check warns, which docs/cli.md describes.
+func TestDoctor_AnUnusableGHWarnsWithoutFailingTheHost(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name   string
+		stdout string
+	}{
+		{"too old", "gh version 1.14.0 (2021-08-04)\n"},
+		{"version unreadable", "a wrapper script that prints no version\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			fake := healthyHost()
+			fake.Respond("gh --version", hostexec.FakeResponse{Stdout: tt.stdout})
+
+			report, code := runDoctorWith(t, fake)
+			if code != ExitOK {
+				t.Fatalf("exit code = %d, want 0: an unusable gh must not fail doctor", code)
+			}
+			got := find(t, report, "gh")
+			if got.Status != statusWarn {
+				t.Errorf("gh status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
+			}
+			if !strings.Contains(got.Remedy, "--github-ssh-key") {
+				t.Errorf("remedy %q does not say what is affected", got.Remedy)
+			}
+		})
+	}
+}
+
 // aarch64Host is a host whose kernel doctor will actually look at: the
 // appliance symbols are ARM-only, so the check has nothing to say elsewhere.
 func aarch64Host(kernelConfig string) *hostexec.Fake {

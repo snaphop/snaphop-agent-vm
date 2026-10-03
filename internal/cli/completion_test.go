@@ -111,6 +111,68 @@ func TestComplete_OffersTheValuesOfAClosedFlag(t *testing.T) {
 	}
 }
 
+// TestComplete_CompletesAnImageRefAfterItsColon is the regression for bash
+// splitting at `:`: the script now passes `ubuntu:` as one word, and the
+// helper must answer with the whole ref for that word.
+func TestComplete_CompletesAnImageRefAfterItsColon(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cachedImage(t, dir)
+
+	for _, word := range []string{"ubuntu:", "ubuntu:2"} {
+		got := completeLines(t, dir, "image", "inspect", word)
+		if len(got) != 1 || got[0] != "ubuntu:24.04" {
+			t.Errorf("candidates for %q = %v, want [ubuntu:24.04]", word, got)
+		}
+	}
+}
+
+// TestComplete_CompletesTheValueOfAFlagWrittenWithEquals covers
+// `--output=j<Tab>`, which used to be read as a command name being typed.
+func TestComplete_CompletesTheValueOfAFlagWrittenWithEquals(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		words []string
+		want  []string
+	}{
+		{[]string{"--output="}, []string{"--output=json", "--output=text"}},
+		{[]string{"--output=j"}, []string{"--output=json"}},
+		{[]string{"create", "web", "--network=b"}, []string{"--network=bridge"}},
+		// A boolean flag has no value to complete.
+		{[]string{"--dry-run="}, nil},
+	}
+	for _, testCase := range cases {
+		got := completeLines(t, t.TempDir(), testCase.words...)
+		if strings.Join(got, " ") != strings.Join(testCase.want, " ") {
+			t.Errorf("candidates for %v = %v, want %v", testCase.words, got, testCase.want)
+		}
+	}
+}
+
+// TestCompletion_BashScriptRebuildsWordsFromTheLine pins the two halves of the
+// bash fix without running bash: the words are taken from COMP_LINE rather
+// than the COMP_WORDBREAKS-split COMP_WORDS, and candidates are trimmed of the
+// part before the last `:` or `=` that bash will not replace.
+func TestCompletion_BashScriptRebuildsWordsFromTheLine(t *testing.T) {
+	t.Parallel()
+	script := completionScripts["bash"]
+
+	for _, want := range []string{
+		"${COMP_LINE:0:COMP_POINT}",
+		"COMP_WORDBREAKS",
+		`"${candidate#"$prefix"}"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the bash script does not contain %q:\n%s", want, script)
+		}
+	}
+	for _, unwanted := range []string{"COMP_WORDS", "_get_comp_words_by_ref", "eval"} {
+		if strings.Contains(strings.ReplaceAll(script, "COMP_WORDBREAKS", ""), unwanted) {
+			t.Errorf("the bash script still uses %q:\n%s", unwanted, script)
+		}
+	}
+}
+
 func TestComplete_OffersImageSubcommands(t *testing.T) {
 	t.Parallel()
 	got := completeLines(t, t.TempDir(), "image", "")

@@ -293,6 +293,33 @@ func TestDestroy_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	}
 }
 
+// TestDestroy_UsageNamesEveryFlag is the regression for a usage line that
+// left out --timeout although the command accepts it and docs/cli.md lists it.
+func TestDestroy_UsageNamesEveryFlag(t *testing.T) {
+	t.Parallel()
+	_, stdout, stderr := cliRun(t, createHost(t), t.TempDir(), "destroy", "--help")
+	help := stdout + stderr
+
+	_, rest, ok := strings.Cut(help, "Usage:\n")
+	if !ok {
+		t.Fatalf("help has no usage line:\n%s", help)
+	}
+	usageLine, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+
+	flags := helpFlagPattern.FindAllStringSubmatch(help, -1)
+	if len(flags) == 0 {
+		t.Fatalf("help lists no flags:\n%s", help)
+	}
+	for _, match := range flags {
+		if !strings.Contains(usageLine, "[--"+match[1]) {
+			t.Errorf("usage %q does not mention --%s", usageLine, match[1])
+		}
+	}
+	if !strings.Contains(usageLine, "[--timeout <duration>]") {
+		t.Errorf("usage %q does not show --timeout's argument", usageLine)
+	}
+}
+
 func TestDestroy_RejectsAMissingName(t *testing.T) {
 	t.Parallel()
 	if code, _, _ := cliRun(t, createHost(t), t.TempDir(), "destroy"); code != ExitUsage {

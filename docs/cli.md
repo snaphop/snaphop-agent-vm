@@ -216,8 +216,10 @@ stops mattering and the check confirms instead that the configured directory
 holds the kernel and module tree supermin will be pointed at. See
 [`docs/host-setup.md`](./host-setup.md#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance).
 
-`gh` is checked too, but only ever reports `pass` or `skip`: it is needed solely
-by `--github-ssh-key`, so a host without it is still a ready host.
+`gh` is checked too, but never fails the report: it is needed solely by
+`--github-ssh-key`, so a host without it is still a ready host. It reports
+`skip` when `gh` is not installed, and `warn` when it is older than the minimum
+or its version cannot be read, since `--github-ssh-key` would then fail.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
@@ -264,7 +266,13 @@ neither ever changes a rule. They report `pass` when `ufw` is absent, disabled, 
 default on the hook in question, or carries rules covering it (naming the
 interfaces those rules cover, so you can confirm the right bridge is among
 them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
-them never match on an IPv4-only NAT network. They report
+them never match on an IPv4-only NAT network. A forwarding rule counts only if
+it accepts traffic arriving *from* the NAT network's bridge (`route allow in on
+<bridge>`) or names no interface at all; a rule for another interface, such as
+a VPN, or one limited to traffic going out toward the bridge does not let the
+guest out. Before the first `create` the bridge does not exist yet, so a rule
+on any input interface is accepted and the detail says it could not be matched
+to the bridge. They report
 `warn` — never `fail` — when `ufw` is enabled and dropping, because the live
 ruleset cannot be read without root and a false failure would exit non-zero on a
 working host. Both are skipped for a
@@ -1372,11 +1380,18 @@ and the cached images for `image inspect`, `image rm`, and `--distro`. Where
 The scripts call `agent-vm __complete <word>...`, a hidden command that takes
 the words typed so far — the last being the word under the cursor — and prints
 one candidate per line. It is an interface for shells, not for operators: it
-reads the state directory without creating it, never runs a host tool, and
+reads the state directory without creating it, never changes anything, and
 always exits `0`, because an error printed by a completion helper would land in
-the middle of what the operator is typing. Its output format is not a stable
-contract; the shell scripts are generated from the same build, so the two
-cannot drift apart.
+the middle of what the operator is typing. With a local libvirt URI it spawns
+no process. With a `qemu+ssh://` URI the state directory is on the hypervisor,
+so each Tab that completes a VM name or cached image runs `ssh` and
+read-only commands such as `find`, `cat`, and `test`
+there; that is slower than a local read, but reading this machine instead would
+offer nothing. A flag written as `--output=j` completes its value, and the bash
+script rebuilds the words from `COMP_LINE` rather than bash's own word list,
+which splits at `:` and `=`, so image refs such as `ubuntu:24.04` complete
+too. Its output format is not a stable contract; the shell scripts are
+generated from the same build, so the two cannot drift apart.
 
 ## Underlying Commands
 
@@ -1399,10 +1414,10 @@ table below is the summary.
 | `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
-| `completion` / `__complete` | none — completion reads the state directory and spawns no process |
+| `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge in the guest-services remedy), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes
@@ -1420,7 +1435,7 @@ staying stable.
 | `2` | Usage error: unknown flag, bad argument, invalid name or size. |
 | `3` | Host not ready: no KVM, no libvirt connection, missing helper binary. |
 | `4` | Not found: unknown VM or base image. |
-| `5` | Conflict: VM already exists or is locked, wrong state for the operation. Image builds wait for their image lock. |
+| `5` | Conflict: VM already exists, wrong state for the operation, or a base image is in use. A held lock is never itself a conflict: `create` and `destroy` wait for the VM's lock, and `image build` and `image rm` wait for the image's lock (see [State Layout](#state-layout)). |
 | `6` | Timeout: guest did not boot, become reachable, or shut down in time. |
 | `7` | Cleanup incomplete: an operation or its rollback left host state behind that needs attention. |
 
@@ -1451,9 +1466,12 @@ $STATE_DIR/
 └── locks/                      # advisory file locks, one per VM and per base image
 ```
 
-`networks/` and `locks/` hold the tool's own bookkeeping. Locks are released by
-the kernel when the process holding one exits, so a crashed run never leaves a
-lock that has to be cleared by hand.
+`networks/` and `locks/` hold the tool's own bookkeeping. `create` and
+`destroy` take the VM's lock, and `image build` and `image rm` take the base
+image's lock; each waits for a lock another process holds rather than failing,
+until that process finishes or the command is interrupted. Other commands take
+no lock. Locks are released by the kernel when the process holding one exits,
+so a crashed run never leaves a lock that has to be cleared by hand.
 
 Both `manifest.json` and `vm.json` carry a `schemaVersion`. The tool refuses to
 operate on a version it does not understand and says what to rebuild instead of

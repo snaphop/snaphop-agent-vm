@@ -10,17 +10,21 @@ import (
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
 )
 
+// destroyUsage is shared by the command table and the flag set, so the summary
+// in `agent-vm --help` and the one `destroy --help` prints cannot disagree.
+const destroyUsage = "agent-vm destroy <name> [--keep-disk] [--force] [--timeout <duration>] [--github-ssh-key]"
+
 func destroyCommand() *command {
 	return &command{
 		name:    "destroy",
 		summary: "power off a VM, undefine it, and delete its state",
-		usage:   "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]",
+		usage:   destroyUsage,
 		run:     runDestroy,
 	}
 }
 
 func runDestroy(ctx context.Context, app *App, args []string) (err error) {
-	flags := newFlagSet("destroy", "agent-vm destroy <name> [--keep-disk] [--force] [--github-ssh-key]", app.Stderr)
+	flags := newFlagSet("destroy", destroyUsage, app.Stderr)
 	keepDisk := flags.Bool("keep-disk", false, "keep the overlay and state directory; only remove the libvirt domain")
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")

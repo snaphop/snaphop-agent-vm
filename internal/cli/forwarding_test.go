@@ -239,8 +239,8 @@ func TestReadUFWRules_TreatsAnInterfacelessRuleAsAny(t *testing.T) {
 	if !readable {
 		t.Fatal("readUFWRules reported the file as unreadable")
 	}
-	if len(forward) != 1 || forward[0] != anyInterface {
-		t.Errorf("forward = %v, want [any]", forward)
+	if len(forward) != 1 || !forward[0].coversAll() {
+		t.Errorf("forward = %+v, want one rule naming no interface", forward)
 	}
 }
 
@@ -276,5 +276,113 @@ func forwardingCheckWithRules(t *testing.T, conf, defaults, rules string, cfg *c
 	rulesPath := write(t, dir, "user.rules", rules)
 
 	state := readUFWState(confPath, defaultsPath, rulesPath)
-	return forwardingCheck(cfg, state)
+	return forwardingCheck(cfg, state, "")
+}
+
+// forwardingCheckOnBridge stages a dropping ufw with the given rules and runs
+// the check as doctor does once libvirt has allocated bridge for the NAT
+// network.
+func forwardingCheckOnBridge(t *testing.T, rules, bridge string) check {
+	t.Helper()
+	dir := t.TempDir()
+	state := readUFWState(
+		write(t, dir, "ufw.conf", "ENABLED=yes\n"),
+		write(t, dir, "ufw", "DEFAULT_FORWARD_POLICY=\"DROP\"\n"),
+		write(t, dir, "user.rules", rules),
+	)
+	return forwardingCheck(&config.Config{LibvirtURI: "qemu:///system", NATNetwork: "agent-vm-nat"}, state, bridge)
+}
+
+// TestCheckForwarding_WarnsWhenTheOnlyRuleIsForAnotherInterface is the
+// regression: a route rule for a VPN interface was taken as permission to
+// forward, so doctor passed while every guest connection past the host hung.
+func TestCheckForwarding_WarnsWhenTheOnlyRuleIsForAnotherInterface(t *testing.T) {
+	t.Parallel()
+	got := forwardingCheckOnBridge(t, "-A ufw-user-forward -i wg0 -j ACCEPT\n", "virbr1")
+	if got.Status != statusWarn {
+		t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
+	}
+	for _, want := range []string{"in on wg0", "virbr1"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q does not mention %q", got.Detail, want)
+		}
+	}
+	if !strings.Contains(got.Remedy, "ufw route allow") {
+		t.Errorf("remedy does not say which rule to add: %s", got.Remedy)
+	}
+}
+
+// TestCheckForwarding_WarnsWhenTheRuleOnlyAllowsTrafficTowardTheGuest covers
+// `ufw route allow out on virbr1`: it accepts traffic leaving by the bridge,
+// not the guest's own traffic arriving on it, and it used to be read as a rule
+// covering every interface.
+func TestCheckForwarding_WarnsWhenTheRuleOnlyAllowsTrafficTowardTheGuest(t *testing.T) {
+	t.Parallel()
+	for _, bridge := range []string{"virbr1", ""} {
+		t.Run("bridge="+bridge, func(t *testing.T) {
+			t.Parallel()
+			got := forwardingCheckOnBridge(t, "-A ufw-user-forward -o virbr1 -j ACCEPT\n", bridge)
+			if got.Status != statusWarn {
+				t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusWarn, got.Detail)
+			}
+			if !strings.Contains(got.Detail, "out on virbr1") {
+				t.Errorf("detail %q does not name the rule that was found", got.Detail)
+			}
+		})
+	}
+}
+
+func TestCheckForwarding_PassesForARuleOnTheNATBridgeOrEveryInterface(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name  string
+		rules string
+		want  string
+	}{
+		{"rule on the bridge", "-A ufw-user-forward -i wg0 -j ACCEPT\n-A ufw-user-forward -i virbr1 -j ACCEPT\n", "in on virbr1"},
+		{"rule on the bridge toward one output", "-A ufw-user-forward -i virbr1 -o eth0 -j ACCEPT\n", "in on virbr1 out on eth0"},
+		{"rule naming no interface", "-A ufw-user-forward -j ACCEPT\n", "any"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := forwardingCheckOnBridge(t, tt.rules, "virbr1")
+			if got.Status != statusPass {
+				t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusPass, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tt.want) || strings.Contains(got.Detail, "wg0") {
+				t.Errorf("detail %q should name only the matching rule %q", got.Detail, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckForwarding_SaysWhenTheBridgeIsNotKnownYet keeps the behaviour on a
+// fresh host, where the NAT network is defined only on the first create: a
+// rule on any input interface is accepted, and the detail says it could not be
+// tied to the bridge.
+func TestCheckForwarding_SaysWhenTheBridgeIsNotKnownYet(t *testing.T) {
+	t.Parallel()
+	got := forwardingCheckOnBridge(t, "-A ufw-user-forward -i virbr1 -j ACCEPT\n", "")
+	if got.Status != statusPass {
+		t.Fatalf("status = %q, want %q (detail: %s)", got.Status, statusPass, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not known yet") {
+		t.Errorf("detail %q does not say the bridge is unknown", got.Detail)
+	}
+}
+
+// A rule limited to an output interface is recorded with it, rather than as a
+// rule covering every interface.
+func TestReadUFWRules_RecordsTheOutputInterface(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := write(t, dir, "user.rules", "-A ufw-user-forward -o virbr1 -j ACCEPT\n")
+
+	forward, _, readable := readUFWRules(path)
+	if !readable {
+		t.Fatal("readUFWRules reported the file as unreadable")
+	}
+	if want := []forwardRule{{Out: "virbr1"}}; !reflect.DeepEqual(forward, want) {
+		t.Errorf("forward = %+v, want %+v", forward, want)
+	}
 }

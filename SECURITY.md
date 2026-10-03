@@ -365,9 +365,11 @@ section named here.
   ADR where `AGENTS.md` requires one.
 - CI runs on GitHub-hosted runners. The pull-request and `master` workflow has
   `contents: read` and MUST NOT receive secrets that untrusted pull-request
-  code could read. The release workflow has `contents: write` only so it can
-  attach a release. This repository does not use a persistent self-hosted
-  runner.
+  code could read. In the release workflow only the publish job has
+  `contents: write`, so it can attach a release; it runs no repository code,
+  and the build job that does runs with `contents: read`. Third-party actions
+  are pinned to a commit SHA. This repository does not use a persistent
+  self-hosted runner.
 - Release artifacts MUST be built from a tagged commit through
   `.github/workflows/release.yml`. Merging MUST NOT publish anything. Pushing a
   `vX.Y.Z` tag builds the static binaries and attaches them, with `LICENSE` and

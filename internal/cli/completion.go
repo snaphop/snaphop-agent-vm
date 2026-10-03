@@ -203,6 +203,23 @@ func (a *App) completionCandidates(words []string) []string {
 		return nil
 	}
 
+	// A flag written as `--output=j` carries its value in the word being
+	// completed. Candidates keep the `--output=` part, because that is the
+	// word the shell asked about; the bash script trims what bash will not
+	// replace.
+	if flag, partial, ok := strings.Cut(current, "="); ok && strings.HasPrefix(flag, "-") {
+		name, isFlag := flagName(flag)
+		if !isFlag || valuelessFlags[name] {
+			return nil
+		}
+		values := withPrefix(a.flagValueCandidates(name), partial)
+		candidates := make([]string, 0, len(values))
+		for _, value := range values {
+			candidates = append(candidates, flag+"="+value)
+		}
+		return candidates
+	}
+
 	if strings.HasPrefix(current, "-") {
 		return withPrefix(dashed(spec.flags), current)
 	}
@@ -336,9 +353,35 @@ var completionScripts = map[string]string{
 # or, for one user:
 #   agent-vm completion bash > ~/.local/share/bash-completion/completions/agent-vm
 _agent_vm_complete() {
-    local candidates
-    mapfile -t candidates < <(agent-vm __complete "${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null)
-    COMPREPLY=("${candidates[@]}")
+    # bash's own word array is split at every COMP_WORDBREAKS character, so
+    # an image ref (ubuntu:24.04) or a --flag=value would reach agent-vm in
+    # pieces. The words are rebuilt from the line up to the cursor instead,
+    # split on whitespace only, without the optional bash-completion package.
+    # Quoting is not interpreted; nothing agent-vm completes needs it.
+    local line=${COMP_LINE:0:COMP_POINT}
+    local -a words
+    read -r -a words <<< "$line"
+    if [[ -z $line || $line == *[[:space:]] ]]; then
+        words+=("")
+    fi
+    local cur=${words[${#words[@]}-1]}
+
+    # bash replaces only the text after the last word-break character in the
+    # current word, so that part of each candidate is all it may be given;
+    # otherwise ubuntu:<Tab> would become ubuntu:ubuntu:24.04.
+    local breaks="" prefix=""
+    [[ $COMP_WORDBREAKS == *:* ]] && breaks+=":"
+    [[ $COMP_WORDBREAKS == *=* ]] && breaks+="="
+    if [[ -n $breaks && $cur == *["$breaks"]* ]]; then
+        prefix=${cur%"${cur##*["$breaks"]}"}
+    fi
+
+    local candidates candidate
+    mapfile -t candidates < <(agent-vm __complete "${words[@]:1}" 2>/dev/null)
+    COMPREPLY=()
+    for candidate in "${candidates[@]}"; do
+        COMPREPLY+=("${candidate#"$prefix"}")
+    done
 }
 # -o default falls back to filenames where agent-vm offers nothing, which is
 # what --config, --ssh-key, and --cloud-init want.
