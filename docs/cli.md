@@ -958,6 +958,10 @@ prints the same `vm.json` record the tool stored.
 `create` is transactional. If a step through recording `vm.json` fails, the tool
 removes the domain, the overlay, the generated seed, and the state directory
 it created, and reports both the original failure and any cleanup problem.
+This includes a `virt-install` that fails, times out, or is interrupted after it
+has already defined the domain, and a create interrupted with Ctrl-C or
+`SIGTERM`: the cleanup still runs. Whenever the cleanup leaves anything behind,
+`create` exits `7` and lists it, whatever the original failure was.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
 files after verifying they are inside the state directory.
 
@@ -1150,7 +1154,11 @@ Flags for `stop` and `restart`:
 
 Execs `ssh` to the VM as the guest user, or runs a command non-interactively and
 forwards its exit status. Resolves the address with
-`virsh domifaddr --source agent` (falling back to `--source lease`). This is a
+`virsh domifaddr --source lease` for a NAT VM — the address libvirt's own DHCP
+server handed out — and `virsh domifaddr --source agent` for a bridged VM, whose
+DHCP server is the LAN's. Either way only the interface libvirt defined, by the
+MAC recorded in `vm.json`, is used. The guest is untrusted and is never asked
+where it is on NAT. This is a
 convenience wrapper around `ssh`, not an SSH implementation — `--dry-run` prints
 the `ssh` command so you can use it directly.
 
@@ -1275,6 +1283,9 @@ deleted implicitly.
 It refuses to remove a path that does not resolve inside the state directory,
 and it refuses to undefine a libvirt domain it did not create — a domain whose
 disk is not the overlay recorded here exits `5` and names the disks it found.
+The record is read again once the VM's lock is held. A VM that another command
+destroyed while this one waited exits `4`. One that was destroyed and created
+again under the same name exits `5` with nothing changed.
 
 A guest that ignores the shutdown request exits `6` with the VM intact and
 nothing removed; `destroy` never escalates to a force-off on its own, because

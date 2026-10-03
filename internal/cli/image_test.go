@@ -26,6 +26,13 @@ func imageHost() *hostexec.Fake {
 // returns the exit code with what was written.
 func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) (int, string, string) {
 	t.Helper()
+	return cliRunContext(context.Background(), t, fake, stateDir, args...)
+}
+
+// cliRunContext is cliRun under a context the test controls, for the paths that
+// begin with an interrupted command.
+func cliRunContext(ctx context.Context, t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) (int, string, string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
 
 	app := &App{
@@ -37,7 +44,7 @@ func cliRun(t *testing.T, fake *hostexec.Fake, stateDir string, args ...string) 
 	}
 	full := append([]string{"--state-dir", stateDir, "--config", t.TempDir() + "/absent.toml"}, args...)
 
-	code := app.Main(context.Background(), full)
+	code := app.Main(ctx, full)
 	return code, stdout.String(), stderr.String()
 }
 

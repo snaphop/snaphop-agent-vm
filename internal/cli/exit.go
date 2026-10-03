@@ -84,6 +84,14 @@ func exitCodeFor(err error) int {
 		return ExitOK
 	}
 
+	// A CleanupError wraps the failure that started the cleanup, and that
+	// cause's own code must not hide what matters more: host state was left
+	// behind.
+	var cleanup *CleanupError
+	if errors.As(err, &cleanup) {
+		return ExitCleanup
+	}
+
 	var explicit *ExitError
 	if errors.As(err, &explicit) {
 		return explicit.Code
@@ -101,7 +109,6 @@ func exitCodeFor(err error) int {
 		timeout    *hostexec.TimeoutError
 		waitedOut  *domain.TimeoutError
 		bridge     *network.BridgeError
-		cleanup    *CleanupError
 	)
 	switch {
 	case errors.As(err, &validation), errors.As(err, &schema):
@@ -114,8 +121,6 @@ func exitCodeFor(err error) int {
 		return ExitConflict
 	case errors.As(err, &timeout), errors.As(err, &waitedOut):
 		return ExitTimeout
-	case errors.As(err, &cleanup):
-		return ExitCleanup
 	case errors.As(err, &contained):
 		// A path escaping the state directory is a bug or an attack, never a
 		// routine failure; it gets the generic code and a loud message.

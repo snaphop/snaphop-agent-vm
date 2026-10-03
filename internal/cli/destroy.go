@@ -33,7 +33,7 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	// Loading the record first is what makes destroy safe: a VM this state
 	// directory has no record of is a not-found error, and no libvirt domain or
 	// path is ever touched on its behalf.
-	vm, manager, err := app.vmTarget(name)
+	vm, _, err := app.vmTarget(name)
 	if err != nil {
 		return err
 	}
@@ -53,6 +53,21 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 			err = releaseErr
 		}
 	}()
+
+	// The record is read again under the lock. While this destroy waited,
+	// another may have removed the VM, and a create may then have made a new
+	// one under the same name — whose overlay path, and so whose ownership
+	// check, is the same as the old one's.
+	current, manager, err := app.vmTarget(name)
+	if err != nil {
+		return err
+	}
+	if !current.CreatedAt.Equal(vm.CreatedAt) {
+		return exitf(ExitConflict,
+			"VM %q was destroyed and created again while this destroy waited for its lock, so nothing was changed.\n"+
+				"  Run destroy again if the new VM is the one to remove.", name)
+	}
+	vm = current
 
 	confirmed, err := app.confirm(destroyPrompt(vm, *keepDisk, *force, *githubSSHKey))
 	if err != nil {

@@ -75,12 +75,17 @@ func (f *Fake) RespondPrefix(prefix string, r FakeResponse) *Fake {
 	return f
 }
 
-// Run records the invocation and returns the matching canned response.
-func (f *Fake) Run(_ context.Context, c Command) (*Result, error) {
+// Run records the invocation and returns the matching canned response. Like
+// the real runner, it refuses to run anything once ctx is done, so a caller
+// that keeps using a canceled context fails here as it would on a host.
+func (f *Fake) Run(ctx context.Context, c Command) (*Result, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, c)
 	f.mu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("running %s: %w", c.Name, err)
+	}
 	if f.Missing[c.Name] {
 		return nil, &NotFoundError{Tool: c.Name}
 	}

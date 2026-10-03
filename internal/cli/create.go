@@ -546,6 +546,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 	}
 
 	a.out.Progress("Defining and starting domain %s\n", name)
+	rollback.domainAttempted = true
 	argv, err := req.manager.Create(ctx, domain.CreateOptions{
 		Name:           name,
 		LibvirtURI:     req.manager.LibvirtURI(),
@@ -643,7 +644,7 @@ func (a *App) waitForGuest(ctx context.Context, req createRequest, vm *state.VM)
 	deadline := time.Now().Add(req.waitForSSH)
 	a.out.Progress("Waiting for the guest to boot (up to %s)\n", req.waitForSSH)
 
-	address, err := req.manager.WaitForAddress(ctx, req.name, req.waitForSSH)
+	address, err := req.manager.WaitForAddress(ctx, req.name, guestNIC(vm), req.waitForSSH)
 	if err != nil {
 		return "", err
 	}
@@ -709,14 +710,31 @@ type createRollback struct {
 	manager *domain.Manager
 	name    string
 
-	domainDefined bool
-	directory     string
+	// domainAttempted is set before virt-install runs and domainDefined once it
+	// succeeds. virt-install defines the domain before it boots it, so a run
+	// that failed or was killed in between can still have left one behind.
+	domainAttempted bool
+	domainDefined   bool
+	directory       string
 }
 
+// rollbackTimeout bounds the whole rollback once it no longer follows the
+// caller's context.
+const rollbackTimeout = 2 * time.Minute
+
 func (r *createRollback) undo(ctx context.Context, cause error) error {
+	// A create interrupted by Ctrl-C or SIGTERM still has to clean up after
+	// itself, and with the caller's context canceled every virsh call would
+	// fail without running.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+
 	remaining := []string{}
 
-	if r.domainDefined {
+	switch {
+	case r.domainAttempted && !r.domainDefined:
+		remaining = append(remaining, r.undoUnconfirmedDomain(ctx)...)
+	case r.domainDefined:
 		// The domain is running: virt-install started it. Powering it off
 		// first is what makes undefine succeed on a live domain.
 		if err := r.manager.ForceOff(ctx, r.name); err != nil {
@@ -742,6 +760,29 @@ func (r *createRollback) undo(ctx context.Context, cause error) error {
 		Cause:     cause,
 		Remaining: remaining,
 	}
+}
+
+// undoUnconfirmedDomain removes a domain a failed virt-install may have left.
+// The name was checked free under the VM lock before virt-install ran, so a
+// domain by this name now is this create's own and is safe to remove.
+func (r *createRollback) undoUnconfirmedDomain(ctx context.Context) []string {
+	current, err := r.manager.State(ctx, r.name)
+	if err != nil {
+		return []string{fmt.Sprintf("libvirt domain %s may have been defined, and its state could not be read: %v", r.name, err)}
+	}
+	if current == domain.StateMissing {
+		return nil
+	}
+	var remaining []string
+	if current != domain.StateShutOff {
+		if err := r.manager.ForceOff(ctx, r.name); err != nil {
+			remaining = append(remaining, fmt.Sprintf("domain %s could not be powered off: %v", r.name, err))
+		}
+	}
+	if err := r.manager.Undefine(ctx, r.name); err != nil {
+		remaining = append(remaining, fmt.Sprintf("libvirt domain %s: %v", r.name, err))
+	}
+	return remaining
 }
 
 // printCreatePlan prints what a create would run and write. Like the image

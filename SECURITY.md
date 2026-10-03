@@ -247,6 +247,11 @@ section named here.
   which is host-local. On a bridge the guest shares the operator's LAN, and
   the missing host-key check is a weaker guarantee. The guest address is still
   validated as a bare IP before it is placed in the ssh argument vector.
+- Because the host key is not checked, the ssh destination MUST NOT be chosen
+  by the guest. On NAT it comes from libvirt's DHCP leases, never from the
+  guest agent. On a bridge, where the guest agent is the only source, only the
+  interface whose MAC is recorded in `vm.json` is used. A guest that lies about
+  that interface's address can still misdirect the connection on a bridge.
 - The ssh connection to a guest runs on the client and uses the operator's
   keys. It is not a channel from the guest back to the host.
 

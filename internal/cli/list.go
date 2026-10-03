@@ -107,7 +107,7 @@ func (a *App) statusesOf(ctx context.Context, vms []*state.VM) ([]vmStatus, erro
 				// A running guest may still have no address: it is booting, or
 				// its network never came up. That is reported as no address,
 				// not as a failure to list.
-				address, err := manager.IPv4Address(ctx, vm.Name)
+				address, err := manager.IPv4Address(ctx, vm.Name, guestNIC(vm))
 				if err != nil {
 					a.logger.Debug("could not read guest address", "vm", vm.Name, "error", err)
 				}

@@ -16,6 +16,35 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Security
+
+- `agent-vm ssh`, `create`'s boot wait, `list`, and `info` no longer let a guest
+  choose the address they connect to. The address used to come from the QEMU
+  guest agent, which runs as root inside the untrusted guest, and anything it
+  reported was accepted. Because ssh into a guest skips host-key checking, a
+  malicious guest could redirect the operator's session — and the keys it
+  offers — to the hypervisor, another VM, or a LAN host. NAT VMs now use only
+  the address libvirt's own DHCP server leased. Bridged VMs still ask the guest
+  agent, but only the interface libvirt defined, by the MAC recorded in
+  `vm.json`, is used.
+
+### Fixed
+
+- A `create` that is interrupted with Ctrl-C or `SIGTERM` now cleans up after
+  itself. The cleanup used to run on the already-cancelled command, so it could
+  not power off or undefine anything. It could leave a running domain with its
+  state directory already deleted, which `agent-vm destroy` could no longer
+  remove.
+- A `create` whose `virt-install` fails, times out, or is interrupted after it
+  has already defined the domain no longer leaves that domain behind, untracked
+  and blocking the name.
+- A `create` whose cleanup leaves host state behind now always exits `7`. It
+  used to exit with the code of the original failure when that was a timeout,
+  invalid input, or a missing tool.
+- `destroy` no longer removes a VM that was destroyed and re-created under the
+  same name while it waited for the VM's lock. It now reads the record again
+  once it holds the lock, and leaves such a VM alone (exit `5`).
+
 ## [0.1.0] - 2026-10-02
 
 Entries record changes during development, including intermediate designs later

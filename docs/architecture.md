@@ -123,7 +123,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Domain lifecycle | `virsh start` / `shutdown` / `destroy` / `undefine` |
 | Domain inspection | `virsh list --all --name`, `domstate`, `dumpxml`, `domblklist`, `domiflist` |
 | Hypervisor architecture | `virsh capabilities` |
-| Guest address | `virsh domifaddr --source agent`, fallback `--source lease` |
+| Guest address | `virsh domifaddr --source lease` (NAT) or `--source agent` (bridged), filtered to the recorded MAC |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -d -json link show type bridge` |
@@ -408,8 +408,9 @@ background worker. Long waits include image builds, the guest boot wait during `
    `domain.xml`, and write `vm.json` (including the `virt-install` version and
    argv). Recording happens *before* the wait, so that a VM left in place by a
    boot timeout is still one `agent-vm destroy` knows how to remove.
-10. **Wait for the guest.** Poll `virsh domifaddr --source agent` (falling back to
-    `--source lease`) for an address, then wait for SSH, bounded by
+10. **Wait for the guest.** Poll `virsh domifaddr` for an address — `--source
+    lease` on NAT, `--source agent` on a bridge, on the recorded MAC only —
+    then wait for SSH, bounded by
     `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence. Then print the result.

@@ -173,6 +173,9 @@ func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
 		{"lock held", &state.BusyError{Resource: "VM agent-01"}, ExitConflict},
 		{"tool timed out", &hostexec.TimeoutError{Tool: "virt-install"}, ExitTimeout},
 		{"cleanup incomplete", &CleanupError{Operation: "create", Cause: errors.New("undefine failed")}, ExitCleanup},
+		{"cleanup after a timeout", &CleanupError{Operation: "create", Cause: &hostexec.TimeoutError{Tool: "virsh"}}, ExitCleanup},
+		{"cleanup after bad input", &CleanupError{Operation: "create", Cause: &config.ValidationError{Field: "cloud-init", Value: "x", Err: errors.New("bad")}}, ExitCleanup},
+		{"cleanup after a missing tool", &CleanupError{Operation: "create", Cause: &hostexec.NotFoundError{Tool: "virt-make-fs"}}, ExitCleanup},
 		{"explicit code", &ExitError{Code: ExitTimeout, Err: errors.New("guest never came up")}, ExitTimeout},
 	}
 	for _, tt := range tests {

@@ -229,39 +229,62 @@ type Interface struct {
 	Prefix int
 }
 
-// addressSources are tried in order. The guest agent answers as soon as the
-// guest is up, and is the only source that works in bridged mode, where the
-// DHCP server belongs to the operator's LAN rather than to libvirt. The lease
-// source is the fallback for a guest whose agent is not running yet.
-var addressSources = []string{"agent", "lease"}
+// NIC is what the host knows about a guest's network interface. An address is
+// looked up from it rather than from whatever the guest volunteers: the guest
+// is untrusted, and an address it chose would decide where ssh connects with
+// the operator's keys (SECURITY.md).
+type NIC struct {
+	// Bridged is true for a guest on a host bridge. A NAT guest's address
+	// comes from libvirt's own DHCP server; a bridged guest's DHCP server
+	// belongs to the operator's LAN, so the guest agent is the only source.
+	Bridged bool
+	// MAC is the interface libvirt defined, as recorded in vm.json. Addresses
+	// on any other interface — docker0, a nested libvirt bridge — are ignored.
+	// Empty means the record predates the MAC being captured.
+	MAC string
+}
 
-// Addresses returns the guest's addresses, trying each source in turn. An empty
-// result is not an error: early in boot the guest genuinely has no address yet,
-// which is what WaitForAddress polls on.
-func (m *Manager) Addresses(ctx context.Context, name string) ([]Interface, error) {
-	var lastErr error
-	for _, source := range addressSources {
-		res, err := m.run(ctx, hostexec.Read, "domifaddr", name, "--source", source)
-		if err != nil {
-			// A source that is unavailable — no guest agent channel, no lease
-			// file — is reported by virsh as a failure of that query, not of
-			// the domain, so the next source still gets a turn.
-			lastErr = err
-			continue
-		}
-		found, err := parseDomifaddr(res.Stdout)
-		if err != nil {
-			return nil, fmt.Errorf("reading the addresses of the %s domain: %w", name, err)
-		}
-		if len(found) > 0 {
-			return found, nil
-		}
-		lastErr = nil
+// source is the `virsh domifaddr --source` the NIC's address is read from.
+func (n NIC) source() string {
+	if n.Bridged {
+		return "agent"
 	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("reading the addresses of the %s domain: %w", name, lastErr)
+	return "lease"
+}
+
+// Addresses returns the guest's addresses on its NIC. An empty result is not an
+// error: early in boot the guest genuinely has no address yet, which is what
+// WaitForAddress polls on.
+func (m *Manager) Addresses(ctx context.Context, name string, nic NIC) ([]Interface, error) {
+	res, err := m.run(ctx, hostexec.Read, "domifaddr", name, "--source", nic.source())
+	if err != nil {
+		return nil, fmt.Errorf("reading the addresses of the %s domain: %w", name, err)
 	}
-	return nil, nil
+	found, err := parseDomifaddr(res.Stdout)
+	if err != nil {
+		return nil, fmt.Errorf("reading the addresses of the %s domain: %w", name, err)
+	}
+	return onInterface(found, nic.MAC), nil
+}
+
+// onInterface keeps the rows belonging to the interface with this MAC. virsh
+// names an interface and its MAC on the interface's first row only, and prints
+// "-" on the rows for its further addresses.
+func onInterface(interfaces []Interface, mac string) []Interface {
+	if mac == "" {
+		return interfaces
+	}
+	kept := make([]Interface, 0, len(interfaces))
+	current := ""
+	for _, iface := range interfaces {
+		if iface.MAC != "-" {
+			current = iface.MAC
+		}
+		if strings.EqualFold(current, mac) {
+			kept = append(kept, iface)
+		}
+	}
+	return kept
 }
 
 // IPv4Address returns the first IPv4 address the guest is reachable at, or ""
@@ -270,11 +293,10 @@ func (m *Manager) Addresses(ctx context.Context, name string) ([]Interface, erro
 //
 // Loopback is skipped. `virsh domifaddr --source agent` reports every interface
 // the guest agent can see, and lists `lo` with 127.0.0.1 first; taking it
-// literally points ssh back at the host's own sshd instead of the guest.
-// `--source lease` never shows loopback, so this only bites once the guest
-// agent is answering.
-func (m *Manager) IPv4Address(ctx context.Context, name string) (string, error) {
-	interfaces, err := m.Addresses(ctx, name)
+// literally points ssh back at the host's own sshd instead of the guest. A NIC
+// with no recorded MAC is the case that still sees it.
+func (m *Manager) IPv4Address(ctx context.Context, name string, nic NIC) (string, error) {
+	interfaces, err := m.Addresses(ctx, name, nic)
 	if err != nil {
 		return "", err
 	}
@@ -359,10 +381,10 @@ func (e *TimeoutError) Error() string {
 func (e *TimeoutError) Unwrap() error { return e.LastErr }
 
 // WaitForAddress polls until the guest has an IPv4 address or timeout expires.
-func (m *Manager) WaitForAddress(ctx context.Context, name string, timeout time.Duration) (string, error) {
+func (m *Manager) WaitForAddress(ctx context.Context, name string, nic NIC, timeout time.Duration) (string, error) {
 	var lastErr error
 	address, err := poll(ctx, timeout, func() (string, bool, error) {
-		address, err := m.IPv4Address(ctx, name)
+		address, err := m.IPv4Address(ctx, name, nic)
 		if err != nil {
 			// Address lookups fail transiently while a guest is booting — the
 			// agent channel is not up, the lease file does not exist yet — so
