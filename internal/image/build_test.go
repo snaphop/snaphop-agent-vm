@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/golden"
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
@@ -445,6 +446,105 @@ func TestRemove_RefusesWhileAVMStillUsesTheImage(t *testing.T) {
 	}
 	if store.HasImage("ubuntu", "24.04") {
 		t.Error("--force did not remove the image")
+	}
+}
+
+// createInProgress stands in for a create that has made its VM directory and
+// holds its lock, but has not written its record yet.
+func createInProgress(t *testing.T, store *state.Store, name string) {
+	t.Helper()
+	if err := store.MkdirAll(store.VMDir(name)); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	lock, err := store.TryLockVM(name, "create")
+	if err != nil {
+		t.Fatalf("TryLockVM: %v", err)
+	}
+	t.Cleanup(func() { _ = lock.Release() })
+}
+
+func TestRemove_RefusesEvenWithForceWhileACreateIsInProgress(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ref := ubuntuRef(t)
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ref}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	createInProgress(t, store, "agent-01")
+
+	err := builder.Remove(ctx, ref, true)
+	var busy *state.BusyError
+	if !errors.As(err, &busy) || !strings.Contains(err.Error(), "agent-01") {
+		t.Fatalf("Remove = %v, want a BusyError naming the create in progress", err)
+	}
+	if !store.HasImage("ubuntu", "24.04") {
+		t.Error("the image was removed from under a create in progress")
+	}
+}
+
+func TestBuild_ForceRefusesToReplaceAnImageAVMDependsOn(t *testing.T) {
+	t.Parallel()
+	fake := ubuntuHost(t)
+	builder, store := newBuilder(t, fake)
+	ref := ubuntuRef(t)
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ref}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	vm := store.NewVM("agent-01")
+	vm.BaseImage = state.BaseImageRef{Distro: "ubuntu", Tag: "24.04"}
+	if err := store.SaveVM(vm); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+	callsBefore := len(fake.Calls())
+
+	_, err := builder.Build(ctx, BuildOptions{Ref: ref, Force: true})
+	if err == nil || !strings.Contains(err.Error(), "agent-01") {
+		t.Fatalf("Build --force = %v, want a refusal naming the dependent VM", err)
+	}
+	if len(fake.Calls()) != callsBefore {
+		t.Errorf("the refused rebuild still ran %d tool invocations", len(fake.Calls())-callsBefore)
+	}
+}
+
+func TestBuild_ForceRefusesWhileACreateIsInProgress(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ref := ubuntuRef(t)
+	ctx := context.Background()
+	if _, err := builder.Build(ctx, BuildOptions{Ref: ref}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	createInProgress(t, store, "agent-01")
+
+	_, err := builder.Build(ctx, BuildOptions{Ref: ref, Force: true})
+	var busy *state.BusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("Build --force = %v, want a BusyError", err)
+	}
+}
+
+func TestEnsureImage_WaitsForTheImageLock(t *testing.T) {
+	t.Parallel()
+	builder, store := newBuilder(t, ubuntuHost(t))
+	ref := ubuntuRef(t)
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ref}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// An image rm holds the lock. A cache hit must not read past it, or the
+	// create would go on to use an image that is being removed.
+	held, err := store.LockImage(context.Background(), "ubuntu", "24.04", "image rm")
+	if err != nil {
+		t.Fatalf("LockImage: %v", err)
+	}
+	defer func() { _ = held.Release() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	var busy *state.BusyError
+	if _, err := builder.EnsureImage(ctx, ref); !errors.As(err, &busy) {
+		t.Fatalf("EnsureImage = %v, want it to wait on the held image lock", err)
 	}
 }
 

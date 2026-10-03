@@ -3,7 +3,9 @@ package state
 import (
 	"errors"
 	"io/fs"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
@@ -15,8 +17,12 @@ func remoteStore(t *testing.T, fake *hostexec.Fake) *Store {
 	// Containment resolves the state directory and the path through the
 	// hypervisor's readlink, so a fake has to answer for both.
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
-		if c.Name == "readlink" {
+		switch c.Name {
+		case "readlink":
 			return hostexec.FakeResponse{Stdout: c.Args[len(c.Args)-1] + "\n"}, true
+		case "mktemp":
+			// -p <dir> <template>: mktemp fills in the X's.
+			return hostexec.FakeResponse{Stdout: filepath.Join(c.Args[1], strings.Replace(c.Args[2], "XXXXXX", "q3ZtLk", 1)) + "\n"}, true
 		}
 		return hostexec.FakeResponse{}, false
 	}
@@ -39,15 +45,63 @@ func TestRemoteFS_WriteFileIsAtomic(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	argvs := strings.Join(fake.Argvs(), "\n")
-	for _, want := range []string{
+	// mktemp creates the temporary file 0600 under a unique name before
+	// anything is written to it; only the finished file gets its final mode.
+	want := []string{
 		"mkdir -p -- /srv/agent-vm/vms/web",
-		"dd status=none of=/srv/agent-vm/vms/web/.vm.json.tmp",
-		"chmod 644 -- /srv/agent-vm/vms/web/.vm.json.tmp",
-		"mv -fT -- /srv/agent-vm/vms/web/.vm.json.tmp /srv/agent-vm/vms/web/vm.json",
-	} {
-		if !strings.Contains(argvs, want) {
-			t.Errorf("missing %q in:\n%s", want, argvs)
+		"mktemp -p /srv/agent-vm/vms/web .vm.json.XXXXXX",
+		"dd status=none of=/srv/agent-vm/vms/web/.vm.json.q3ZtLk",
+		"chmod 644 -- /srv/agent-vm/vms/web/.vm.json.q3ZtLk",
+		"mv -fT -- /srv/agent-vm/vms/web/.vm.json.q3ZtLk /srv/agent-vm/vms/web/vm.json",
+	}
+	var writes []string
+	for _, argv := range fake.Argvs() {
+		for _, w := range want {
+			if argv == w {
+				writes = append(writes, argv)
+			}
+		}
+	}
+	if strings.Join(writes, "\n") != strings.Join(want, "\n") {
+		t.Errorf("writes = \n%s\nwant, in order:\n%s", strings.Join(writes, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestRemoteFS_WriteFileRemovesItsTemporaryFileOnFailure(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	store := remoteStore(t, fake)
+	fake.RespondPrefix("dd status=none", hostexec.FakeResponse{ExitCode: 1, Stderr: "dd: error writing: No space left on device"})
+
+	if err := store.WriteFile("/srv/agent-vm/vms/web/vm.json", []byte("{}\n"), 0o644); err == nil {
+		t.Fatal("WriteFile reported success after dd failed")
+	}
+	if !fake.Ran("rm -f -- /srv/agent-vm/vms/web/.vm.json.q3ZtLk") {
+		t.Errorf("the temporary file was left behind:\n%s", fake)
+	}
+	if fake.Ran("mv -fT -- /srv/agent-vm/vms/web/.vm.json.q3ZtLk /srv/agent-vm/vms/web/vm.json") {
+		t.Error("a partly written file was moved onto the record")
+	}
+}
+
+func TestRemoteFS_WriteFileRefusesATemporaryFileOutsideItsDirectory(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	store := remoteStore(t, fake)
+	base := fake.MatchFunc
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "mktemp" {
+			return hostexec.FakeResponse{Stdout: "/tmp/.vm.json.q3ZtLk\n"}, true
+		}
+		return base(c)
+	}
+
+	if err := store.WriteFile("/srv/agent-vm/vms/web/vm.json", []byte("{}\n"), 0o644); err == nil {
+		t.Fatal("WriteFile wrote through a temporary file outside the destination's directory")
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "dd ") {
+			t.Errorf("wrote to an unexpected temporary file: %s", argv)
 		}
 	}
 }
@@ -251,6 +305,67 @@ func TestRemoteFS_TryLockReportsTheHolderWhenBusy(t *testing.T) {
 	}
 	if !strings.Contains(busy.Error(), "VM web") {
 		t.Errorf("BusyError does not name the resource: %s", busy)
+	}
+}
+
+func TestRemoteFS_TryLockRetriesALockReleasedWhileItAskedWhy(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	store := remoteStore(t, fake)
+	base := fake.MatchFunc
+	var attempts atomic.Int32
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if r, ok := base(c); ok {
+			return r, true
+		}
+		if c.Name != "flock" {
+			return hostexec.FakeResponse{}, false
+		}
+		if c.Args[len(c.Args)-1] == "true" {
+			// The probe finds the lock free: its holder has just let go.
+			return hostexec.FakeResponse{}, true
+		}
+		if attempts.Add(1) == 1 {
+			// The first attempt met the holder, so flock exited at once.
+			return hostexec.FakeResponse{}, true
+		}
+		return hostexec.FakeResponse{Stdout: lockReadyToken}, true
+	}
+
+	lock, err := store.TryLockVM("web", "create")
+	if err != nil {
+		t.Fatalf("TryLockVM = %v, want the lock its holder released", err)
+	}
+	_ = lock.Release()
+	if attempts.Load() != 2 {
+		t.Errorf("flock was attempted %d times, want 2", attempts.Load())
+	}
+}
+
+func TestRemoteFS_TryLockReportsALockThatKeepsFailingWhileFree(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	store := remoteStore(t, fake)
+	base := fake.MatchFunc
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if r, ok := base(c); ok {
+			return r, true
+		}
+		if c.Name == "flock" {
+			// Every attempt fails, and the lock is free each time: this is
+			// not contention, and must not be retried as if it were.
+			return hostexec.FakeResponse{}, true
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	_, err := store.TryLockVM("web", "create")
+	var busy *BusyError
+	if err == nil || errors.As(err, &busy) {
+		t.Fatalf("TryLockVM = %v, want the failure reported", err)
+	}
+	if n := len(fake.Started()); n != 2 {
+		t.Errorf("started %d lock processes, want 2", n)
 	}
 }
 

@@ -109,6 +109,7 @@ func exitCodeFor(err error) int {
 		timeout    *hostexec.TimeoutError
 		waitedOut  *domain.TimeoutError
 		bridge     *network.BridgeError
+		netMode    *network.ModeError
 	)
 	switch {
 	case errors.As(err, &validation), errors.As(err, &schema):
@@ -117,7 +118,7 @@ func exitCodeFor(err error) int {
 		return ExitHostNotReady
 	case errors.As(err, &notFound):
 		return ExitNotFound
-	case errors.As(err, &exists), errors.As(err, &busy):
+	case errors.As(err, &exists), errors.As(err, &busy), errors.As(err, &netMode):
 		return ExitConflict
 	case errors.As(err, &timeout), errors.As(err, &waitedOut):
 		return ExitTimeout

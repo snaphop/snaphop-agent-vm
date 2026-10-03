@@ -233,3 +233,34 @@ func (s *Store) ListVMs() ([]*VM, error) {
 	sort.Slice(vms, func(i, j int) bool { return vms[i].Name < vms[j].Name })
 	return vms, nil
 }
+
+// CreatesInProgress names the VMs a create is still making: a VM directory with
+// no record yet, whose lock is held. Until its record is written such a VM is
+// invisible to VMsUsingImage, though its overlay may already sit on a base
+// image. A directory whose lock is free is what an interrupted create left, not
+// a create in progress.
+func (s *Store) CreatesInProgress() ([]string, error) {
+	entries, err := s.fsys.Subdirectories(filepath.Join(s.root, "vms"))
+	if err != nil {
+		return nil, fmt.Errorf("listing VMs: %w", err)
+	}
+	var creating []string
+	for _, entry := range entries {
+		if config.ValidateVMName(entry) != nil || s.HasVM(entry) {
+			continue
+		}
+		lock, err := s.TryLockVM(entry, "checking for a create in progress")
+		var busy *BusyError
+		switch {
+		case errors.As(err, &busy):
+			creating = append(creating, entry)
+		case err != nil:
+			return nil, err
+		default:
+			if err := lock.Release(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return creating, nil
+}

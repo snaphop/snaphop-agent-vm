@@ -76,11 +76,36 @@ func (r *RemoteFS) WriteFile(path string, data []byte, perm fs.FileMode) error {
 
 	// Written beside the destination and moved onto it, so a connection that
 	// drops mid-write leaves a temporary file rather than a truncated record.
-	// The name is fixed per destination rather than random: this process holds
-	// the lock for whatever it is writing, and a predictable leftover is one an
-	// operator can recognize.
-	tmp := filepath.Join(dir, "."+filepath.Base(path)+".tmp")
+	// mktemp makes the temporary file the way os.CreateTemp does locally: a new
+	// file with a unique name, created mode 0600, so contents meant to be
+	// private — cloud-init user-data — are never readable by another user on
+	// the hypervisor, and two writers of the same destination never share it.
+	template := "." + filepath.Base(path) + ".XXXXXX"
+	res, err := r.runner.Run(context.Background(), hostexec.Command{
+		Name:         "mktemp",
+		Args:         []string{"-p", dir, template},
+		Effect:       hostexec.Mutate,
+		DryRunStdout: filepath.Join(dir, template) + "\n",
+	})
+	if err != nil {
+		return fmt.Errorf("creating a temporary file for %s on %s: %w", path, r.Describe(), err)
+	}
+	tmp := strings.TrimSpace(string(res.Stdout))
+	if filepath.Dir(tmp) != dir || !strings.HasPrefix(filepath.Base(tmp), "."+filepath.Base(path)+".") {
+		return &hostexec.ParseError{Tool: "mktemp", What: "the temporary file it created", Output: string(res.Stdout)}
+	}
 
+	if err := r.replaceWith(tmp, path, data, perm); err != nil {
+		if _, rmErr := r.run(hostexec.Mutate, nil, "rm", "-f", "--", tmp); rmErr != nil {
+			return fmt.Errorf("%w (and the temporary file %s remains: %v)", err, tmp, rmErr)
+		}
+		return err
+	}
+	return nil
+}
+
+// replaceWith fills tmp, gives it its final mode, and moves it onto path.
+func (r *RemoteFS) replaceWith(tmp, path string, data []byte, perm fs.FileMode) error {
 	if _, err := r.run(hostexec.Mutate, bytes.NewReader(data), "dd", "status=none", "of="+tmp); err != nil {
 		return fmt.Errorf("writing %s on %s: %w", path, r.Describe(), err)
 	}
@@ -261,6 +286,19 @@ func (r *RemoteFS) TryLock(path, holder string) (io.Closer, error) {
 		return nil, err
 	}
 
+	// A holder that lets go between flock failing and the probe that asks why
+	// leaves a lock that failed to take yet is free. One more attempt settles
+	// it: that one takes the lock, or meets the next holder and is busy. A
+	// second "failed but free" is a real failure, and is reported.
+	lock, err := r.tryLockOnce(path, holder)
+	var free *freeLockError
+	if errors.As(err, &free) {
+		lock, err = r.tryLockOnce(path, holder)
+	}
+	return lock, err
+}
+
+func (r *RemoteFS) tryLockOnce(path, holder string) (io.Closer, error) {
 	// cat is the process that holds the descriptor: it exits when its standard
 	// input closes, which is how Close releases the lock.
 	process, err := r.runner.Start(context.Background(), hostexec.Command{
@@ -316,10 +354,24 @@ func (r *RemoteFS) classifyLockFailure(path string, cause error) error {
 		}
 		return fmt.Errorf("locking %s on %s: %w", path, r.Describe(), err)
 	}
-	// The lock is free now, so the handshake failed for another reason and the
-	// original error is the one worth reporting.
-	return fmt.Errorf("locking %s on %s: %w", path, r.Describe(), cause)
+	// The lock is free now: either its holder let go after flock tried, or the
+	// handshake failed for another reason, in which case the original error is
+	// the one worth reporting.
+	return &freeLockError{path: path, host: r.Describe(), cause: cause}
 }
+
+// freeLockError is a lock that could not be taken although it is free when
+// asked afterwards.
+type freeLockError struct {
+	path, host string
+	cause      error
+}
+
+func (e *freeLockError) Error() string {
+	return fmt.Sprintf("locking %s on %s: %v", e.path, e.host, e.cause)
+}
+
+func (e *freeLockError) Unwrap() error { return e.cause }
 
 // readHolder reads the description the holding process wrote. It is advisory —
 // it comes from another process and only ever appears in a message — so a

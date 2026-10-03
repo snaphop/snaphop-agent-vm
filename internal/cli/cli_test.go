@@ -171,6 +171,7 @@ func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
 		{"unknown VM", &state.NotFoundError{Kind: "VM", Name: "agent-01"}, ExitNotFound},
 		{"already exists", &state.ExistsError{Kind: "VM", Name: "agent-01"}, ExitConflict},
 		{"lock held", &state.BusyError{Resource: "VM agent-01"}, ExitConflict},
+		{"NAT network that is not NAT", &network.ModeError{Network: "agent-vm-nat", Mode: "bridge"}, ExitConflict},
 		{"tool timed out", &hostexec.TimeoutError{Tool: "virt-install"}, ExitTimeout},
 		{"cleanup incomplete", &CleanupError{Operation: "create", Cause: errors.New("undefine failed")}, ExitCleanup},
 		{"cleanup after a timeout", &CleanupError{Operation: "create", Cause: &hostexec.TimeoutError{Tool: "virsh"}}, ExitCleanup},

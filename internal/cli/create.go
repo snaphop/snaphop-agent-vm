@@ -204,9 +204,23 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	// The VM directory exists before the base image is looked up, so that
+	// `image rm` and `image build --force` see this create in progress and
+	// refuse, rather than removing the image its overlay is about to use.
+	vmDir := store.VMDir(name)
+	if err := store.MkdirAll(vmDir); err != nil {
+		return err
+	}
 	app.out.Progress("Using base image %s\n", cfg.Distro)
 	manifest, err := builder.EnsureImage(ctx, cfg.Distro)
 	if err != nil {
+		if rmErr := store.Remove(vmDir); rmErr != nil {
+			return &CleanupError{
+				Operation: fmt.Sprintf("creating VM %s failed and cleaning up after it", name),
+				Cause:     err,
+				Remaining: []string{fmt.Sprintf("state directory %s: %v", vmDir, rmErr)},
+			}
+		}
 		return err
 	}
 

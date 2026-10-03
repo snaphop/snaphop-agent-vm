@@ -27,6 +27,20 @@ migration or rebuild step a user has to take.
   the address libvirt's own DHCP server leased. Bridged VMs still ask the guest
   agent, but only the interface libvirt defined, by the MAC recorded in
   `vm.json`, is used.
+- `create` no longer uses an existing libvirt network that has the NAT
+  network's name but does not forward by NAT. A bridged or routed network by
+  that name would have put the guest on the LAN while `vm.json`, `list`, and
+  `info` reported it as NAT; `create` now refuses it (exit `5`). It also no
+  longer turns on autostart for a network it did not define.
+- `update` no longer holds everything a guest prints in memory. A compromised
+  guest could stream output for the whole of a step's timeout and exhaust the
+  host's memory; only the last 64 KiB of each stream is now kept for error
+  reports, while the full output still reaches the terminal.
+- On a remote hypervisor, files in the state directory are now written through
+  a temporary file that `mktemp` creates readable only by its owner, under a
+  unique name. Cloud-init user-data used to be briefly readable by other users
+  on the hypervisor while it was written, and two creates could collide on the
+  same temporary file for the network definition.
 
 ### Fixed
 
@@ -41,6 +55,25 @@ migration or rebuild step a user has to take.
 - A `create` whose cleanup leaves host state behind now always exits `7`. It
   used to exit with the code of the original failure when that was a timeout,
   invalid input, or a missing tool.
+- `image rm` and `image build --force` no longer remove or replace a base image
+  that a `create` is still using. The image used to be removable between the
+  moment `create` found it and the moment the VM was recorded, leaving that VM
+  on a backing file that was gone. Both now refuse while a create is in
+  progress (exit `5`).
+- `image build --force` now refuses to rebuild an image that a recorded VM
+  still uses, naming the VMs. Rebuilding in place left their disks on a
+  different base, which corrupts them. Destroy them first, or replace the image
+  deliberately with `image rm --force` followed by `image build`.
+- `destroy --github-ssh-key` checks that `gh`'s token can manage SSH keys
+  before deleting one. Without that scope GitHub answers with the same "not
+  found" as a key that is already gone, so the destroy went ahead and deleted
+  the only record of a key that was still on the account. When a key really is
+  not there, the message now names the account `gh` is logged in to, since a
+  key added from another account looks the same, along with the command that
+  removes it.
+- On a remote hypervisor, a `create`, `destroy`, or `image build` waiting for a
+  lock no longer fails when the other process releases it at just the wrong
+  moment.
 - `destroy` no longer removes a VM that was destroyed and re-created under the
   same name while it waited for the VM's lock. It now reads the record again
   once it holds the lock, and leaves such a VM alone (exit `5`).

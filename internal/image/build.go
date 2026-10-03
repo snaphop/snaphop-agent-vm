@@ -11,7 +11,6 @@ package image
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -131,6 +130,13 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 
 	if !opts.Force && b.Store.HasImage(name, tag) {
 		return b.Store.LoadManifest(name, tag)
+	}
+	if opts.Force && b.Store.HasImage(name, tag) {
+		// A rebuild replaces the backing file in place, and an overlay on top
+		// of a different base disk is a corrupt filesystem (ADR-0004).
+		if err := b.refuseWhileInUse(opts.Ref, "rebuild", false); err != nil {
+			return nil, err
+		}
 	}
 
 	sourceRef := opts.Ref.SourceRef()
@@ -580,33 +586,56 @@ func (b *Builder) Remove(ctx context.Context, ref distro.Ref, force bool) (err e
 		return &state.NotFoundError{Kind: "base image", Name: ref.String()}
 	}
 
-	users, err := b.Store.VMsUsingImage(ref.ImageName(), ref.Tag)
-	if err != nil {
+	if err := b.refuseWhileInUse(ref, "remove", force); err != nil {
 		return err
-	}
-	if len(users) > 0 && !force {
-		names := make([]string, 0, len(users))
-		for _, vm := range users {
-			names = append(names, vm.Name)
-		}
-		return fmt.Errorf("base image %s is still the backing file for %d VM(s): %s\n"+
-			"  Destroy them first, or pass --force to remove it anyway and make their disks unreadable",
-			ref, len(users), strings.Join(names, ", "))
 	}
 	return b.Store.Remove(b.Store.ImageDir(ref.ImageName(), ref.Tag))
 }
 
-// EnsureImage returns the cached base image for a reference, building it if the
-// cache misses. It is what `create` calls.
-func (b *Builder) EnsureImage(ctx context.Context, ref distro.Ref) (*state.Manifest, error) {
-	manifest, err := b.Store.LoadManifest(ref.ImageName(), ref.Tag)
-	if err == nil && b.Store.HasImage(ref.ImageName(), ref.Tag) {
-		return manifest, nil
+// refuseWhileInUse refuses to remove or replace a base image that an overlay
+// depends on. It runs under the image's lock. A create in progress is refused
+// even with force: its overlay may already be on the image, and its record —
+// the only thing that would show the dependency — is not written yet. Such a
+// create cannot be missed, because create makes its VM directory before it
+// looks the image up, and that lookup waits for this lock (EnsureImage).
+func (b *Builder) refuseWhileInUse(ref distro.Ref, action string, force bool) error {
+	creating, err := b.Store.CreatesInProgress()
+	if err != nil {
+		return err
+	}
+	if len(creating) > 0 {
+		return &state.BusyError{
+			Resource: "base image " + ref.String(),
+			Holder:   "a create is in progress for " + strings.Join(creating, ", ") + "; try again once it finishes",
+		}
 	}
 
-	var notFound *state.NotFoundError
-	if err != nil && !errors.As(err, &notFound) {
-		return nil, err
+	users, err := b.Store.VMsUsingImage(ref.ImageName(), ref.Tag)
+	if err != nil {
+		return err
 	}
+	if len(users) == 0 || force {
+		return nil
+	}
+	names := make([]string, 0, len(users))
+	for _, vm := range users {
+		names = append(names, vm.Name)
+	}
+	remedy := "Destroy them first, or pass --force to remove it anyway and make their disks unreadable"
+	if action == "rebuild" {
+		remedy = "Destroy them first: rebuilding it in place would leave their disks on a different base, which corrupts them"
+	}
+	return fmt.Errorf("cannot %s base image %s: it is still the backing file for %d VM(s): %s\n  %s",
+		action, ref, len(users), strings.Join(names, ", "), remedy)
+}
+
+// EnsureImage returns the cached base image for a reference, building it if the
+// cache misses. It is what `create` calls.
+//
+// A cache hit still takes the image's lock, through Build. That orders the
+// lookup against `image rm` and `image build --force`: one of them either
+// finishes before the lookup, or finds the create's VM directory and refuses
+// (refuseWhileInUse).
+func (b *Builder) EnsureImage(ctx context.Context, ref distro.Ref) (*state.Manifest, error) {
 	return b.Build(ctx, BuildOptions{Ref: ref})
 }

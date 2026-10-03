@@ -185,3 +185,46 @@ func TestListVMs_EmptyStateDirectoryIsNotAnError(t *testing.T) {
 		t.Errorf("ListVMs returned %d VMs, want 0", len(vms))
 	}
 }
+
+func TestCreatesInProgress_NamesOnlyAnUnrecordedVMWhoseLockIsHeld(t *testing.T) {
+	t.Parallel()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// agent-01 is being created: its directory exists and its lock is held.
+	// agent-02 is a create that was interrupted, agent-03 is recorded, and
+	// lost+found is not a VM at all.
+	for _, dir := range []string{"agent-01", "agent-02", "lost+found"} {
+		if err := store.MkdirAll(filepath.Join(store.Root(), "vms", dir)); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+	if err := store.SaveVM(sampleVM(store, "agent-03")); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+	creating, err := store.TryLockVM("agent-01", "create")
+	if err != nil {
+		t.Fatalf("TryLockVM: %v", err)
+	}
+	defer func() { _ = creating.Release() }()
+	recorded, err := store.TryLockVM("agent-03", "destroy")
+	if err != nil {
+		t.Fatalf("TryLockVM: %v", err)
+	}
+	defer func() { _ = recorded.Release() }()
+
+	got, err := store.CreatesInProgress()
+	if err != nil {
+		t.Fatalf("CreatesInProgress: %v", err)
+	}
+	if strings.Join(got, ",") != "agent-01" {
+		t.Errorf("CreatesInProgress = %v, want [agent-01]", got)
+	}
+	// Checking must not leave the interrupted create's lock held.
+	again, err := store.TryLockVM("agent-02", "create")
+	if err != nil {
+		t.Fatalf("the check kept agent-02's lock: %v", err)
+	}
+	_ = again.Release()
+}

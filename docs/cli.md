@@ -128,7 +128,7 @@ disk    = "50G"
 network = "nat"
 
 [network.nat]
-name = "agent-vm-nat"
+name = "agent-vm-nat"   # an existing network by this name must forward by NAT
 
 [network.bridge]
 interface = "br0"
@@ -356,9 +356,12 @@ safe to run concurrently for different distros, and a second build of the same
 one waits for the first to finish rather than racing it.
 
 Before `image build --force`, destroy VMs backed by that image name and tag.
-A rebuild replaces the backing disk and host-side kernel at the same paths; it
-does not preserve the old artifacts for existing overlays or refuse an in-use
-image. Create replacement VMs after the rebuild.
+A rebuild replaces the backing disk and host-side kernel at the same paths, and
+an existing overlay on a different base disk is corrupt. So `image build
+--force` refuses an image that a recorded VM still uses, naming the VMs, and
+refuses while any `create` is in progress (exit `5`). Destroy the dependent VMs,
+rebuild, and create replacement VMs after the rebuild. `image rm --force`
+followed by `image build` is the deliberate way to replace an image regardless.
 
 #### Slim images
 
@@ -929,6 +932,10 @@ backing file. Prompts for confirmation unless `--yes` is given.
 |---|---|---|
 | `--force` | off | Remove even while VMs still use it as a backing file. Destructive: those VMs' disks become unreadable. |
 
+It also refuses, even with `--force`, while any `create` is in progress (exit
+`5`): until that create records its VM, the record that would show it depends on
+the image does not exist yet. Run it again once the create finishes.
+
 ### `agent-vm create <name>`
 
 Creates and starts a VM. `<name>` must match `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`
@@ -1274,7 +1281,11 @@ overlay, and generated seed. Prompts for confirmation unless `--yes` is given.
 `--github-ssh-key` removes the key `create --github-ssh-key` added, by the id
 recorded in `vm.json`. It runs **first**, while the VM is still intact: if `gh`
 fails, nothing is destroyed and the record that names the key is still there to
-retry with. A key someone already deleted on github.com is not an error, and a
+retry with. `gh auth status` is checked first, because GitHub answers a token
+without the `admin:public_key` scope with the same 404 as a key that does not
+exist. A key someone already deleted on github.com is not an error; the message
+names the account `gh` is logged in to, since a key added from another account
+looks the same, along with the command that removes it. A
 VM with no recorded key exits `4`. Without the flag, a destroy of a VM that has
 one says so and prints the `gh` command that removes it — the key is never
 deleted implicitly.
@@ -1366,9 +1377,9 @@ table below is the summary.
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
-| `destroy --github-ssh-key` | the `destroy` tools, plus `gh api --method DELETE user/keys/<id>` |
+| `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart`, `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |

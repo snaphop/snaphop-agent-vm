@@ -37,6 +37,9 @@ func createHost(t *testing.T) *hostexec.Fake {
 	fake.Respond("virsh --connect qemu:///system capabilities", hostexec.FakeResponse{
 		Stdout: readToolout(t, "virsh-capabilities.txt"),
 	})
+	fake.Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat", hostexec.FakeResponse{
+		Stdout: readToolout(t, "virsh-net-dumpxml.xml"),
+	})
 	return fake
 }
 
@@ -553,6 +556,26 @@ func TestCreate_ACleanupFailureExitsSevenWhateverStartedIt(t *testing.T) {
 	}
 }
 
+func TestCreate_AFailedBaseImageBuildLeavesNoVMDirectory(t *testing.T) {
+	t.Parallel()
+	// No cached image, and podman is missing, so the build fails at once.
+	stateDir := t.TempDir()
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519.pub")
+	if err := os.WriteFile(keyPath, []byte(publicKey), 0o600); err != nil {
+		t.Fatalf("writing the key file: %v", err)
+	}
+	fake := createHost(t)
+	fake.Missing["podman"] = true
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code == ExitOK {
+		t.Fatalf("create succeeded without a base image:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the failed create left its VM directory behind: %v", err)
+	}
+}
+
 func TestCreate_ReportsHostStateItCouldNotCleanUp(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
@@ -725,6 +748,30 @@ func TestCreate_NATModeRecordsTheNetworkAndNoBridge(t *testing.T) {
 	}
 	if vm.Network.Name == "" {
 		t.Errorf("vm.json records no libvirt network for a NAT VM: %+v", vm.Network)
+	}
+}
+
+func TestCreate_RefusesANATNetworkThatForwardsByBridge(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	// Someone else's network has the configured name, and it bridges onto the
+	// LAN: using it would expose the guest while recording it as NAT.
+	fake.Respond("virsh --connect qemu:///system net-dumpxml agent-vm-nat", hostexec.FakeResponse{
+		Stdout: "<network>\n  <name>agent-vm-nat</name>\n  <forward mode='bridge'/>\n  <bridge name='br0'/>\n</network>\n",
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitConflict {
+		t.Errorf("exit code = %d, want %d\n%s", code, ExitConflict, stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "net-autostart") || strings.HasPrefix(argv, "virt-install --connect") {
+			t.Errorf("create went ahead on a network it refused: %s", argv)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("the refused create left its state directory: %v", err)
 	}
 }
 
