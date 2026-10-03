@@ -142,6 +142,7 @@ func TestGitHubRunnerConfigure_CarriesNoCredentialMaterial(t *testing.T) {
 		"--runnergroup",
 		"remove --local",
 		"removal token",
+		"prefix=${AGENT_VM_RUNNER_PREFIX:-/opt/actions-runner}",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("github-runner-configure.sh does not contain %q", want)
@@ -300,6 +301,18 @@ shift 3
 exec "$@"
 `
 
+// stubID answers the configure script's root check. GitHub-hosted runners
+// refuse unprivileged user namespaces, so the test cannot reach this check
+// by becoming root.
+const stubID = `#!/bin/sh
+if [ "$1" = "-u" ]; then
+  printf '%s\n' 0
+  exit 0
+fi
+printf '%s\n' "id stub: unexpected invocation" >&2
+exit 99
+`
+
 func writeStub(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
@@ -341,28 +354,27 @@ func parseArgvLog(log []byte) [][]string {
 	return got
 }
 
-// runConfigureAgainstFakeRunner runs the configure script as root in a user
-// and mount namespace. The fake runner directory is mounted on
-// /opt/actions-runner, and runuser on PATH is a stub, so config.sh and svc.sh
-// from that directory record the argument vector the guest command builds.
-func runConfigureAgainstFakeRunner(t *testing.T, runnerDir, script string, args ...string) (stdout, stderr string, code int, invocations [][]string) {
+// runConfigureAgainstFakeRunner runs the configure script with id and runuser
+// stubbed on PATH. prefix is the runner directory the script should use; an
+// empty prefix leaves the default, /opt/actions-runner.
+func runConfigureAgainstFakeRunner(t *testing.T, prefix, script string, args ...string) (stdout, stderr string, code int, invocations [][]string) {
 	t.Helper()
 	bin := t.TempDir()
+	writeStub(t, bin, "id", stubID)
 	writeStub(t, bin, "runuser", stubRunuser)
-	const inner = `set -eu
-mount -t tmpfs tmpfs /opt
-mkdir -p /opt/actions-runner
-mount --bind "$1" /opt/actions-runner
-script=$2
-shift 2
-exec sh "$script" "$@"
-`
-	cmd := exec.Command("unshare", append([]string{
-		"--user", "--map-root-user", "--mount",
-		"sh", "-c", inner, "unshare",
-		runnerDir, script,
-	}, args...)...)
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd := exec.Command("sh", append([]string{script}, args...)...)
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "PATH=") || strings.HasPrefix(entry, "AGENT_VM_RUNNER_PREFIX=") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if prefix != "" {
+		env = append(env, "AGENT_VM_RUNNER_PREFIX="+prefix)
+	}
+	cmd.Env = env
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -370,11 +382,15 @@ exec sh "$script" "$@"
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
-			t.Fatalf("unshare: %v\n%s", err, errb.String())
+			t.Fatalf("running configure script: %v\n%s", err, errb.String())
 		}
 		code = exit.ExitCode()
 	}
-	log, readErr := os.ReadFile(filepath.Join(runnerDir, "argv.log"))
+	logPath := "/opt/actions-runner/argv.log"
+	if prefix != "" {
+		logPath = filepath.Join(prefix, "argv.log")
+	}
+	log, readErr := os.ReadFile(logPath)
 	if readErr != nil && !os.IsNotExist(readErr) {
 		t.Fatal(readErr)
 	}
@@ -383,13 +399,28 @@ exec sh "$script" "$@"
 
 func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("unshare"); err != nil {
-		t.Fatal("unshare is required to run the configure script against a fake runner")
-	}
 	script := writeEmbeddedScript(t, "github-runner-configure.sh")
 	const registration = "registration-value"
 	const removal = "removal-value"
 	configure := []string{"configure", "--url", "https://github.com/org/repo", "--token", registration, "--name", "runner1"}
+
+	t.Run("default prefix", func(t *testing.T) {
+		t.Parallel()
+		if _, err := os.Stat("/opt/actions-runner/config.sh"); err == nil {
+			t.Fatal("/opt/actions-runner/config.sh is installed on this host; refusing to run the configure script against it")
+		}
+		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, "", script, configure...)
+		if code == 0 {
+			t.Fatal("configure exited 0 with no runner install")
+		}
+		if !strings.Contains(stderr, "/opt/actions-runner/config.sh is missing") {
+			t.Errorf("stderr does not name the default install path:\n%s", stderr)
+		}
+		assertRegistrationHidden(t, stdout, stderr)
+		if len(got) != 0 {
+			t.Errorf("config.sh was invoked without an install: %q", got)
+		}
+	})
 
 	t.Run("replace", func(t *testing.T) {
 		t.Parallel()

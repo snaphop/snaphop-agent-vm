@@ -7,7 +7,10 @@
 # account; svc.sh is GitHub's own service installer and runs as root.
 set -eu
 
-prefix=/opt/actions-runner
+# Tests point this at a fake tree. It is not a configuration setting: sudo
+# clears the environment, so `sudo agent-vm-github-runner` keeps the install
+# path below.
+prefix=${AGENT_VM_RUNNER_PREFIX:-/opt/actions-runner}
 
 usage() {
     cat <<'EOF'
