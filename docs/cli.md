@@ -138,7 +138,17 @@ user     = "agent"
 ssh_keys = ["~/.ssh/id_ed25519.pub"]
 ```
 
-Local default paths honor `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when set.
+A key the file does not support — including a misspelled key or table name —
+is a usage error (exit `2`) naming the key, never silently ignored. A key that
+is present is used as written: `vcpus = 0` is rejected, not treated as unset.
+
+Local default paths honor `XDG_CONFIG_HOME` and `XDG_DATA_HOME` when they are
+set to absolute paths; a relative value is ignored, as the XDG Base Directory
+specification requires, and the default falls back to `$HOME`. When a default
+path is needed and neither an absolute XDG directory nor an absolute `HOME` is
+available, `agent-vm` exits `2` and asks for an explicit path (`--state-dir`,
+`--config`, or their environment variables) rather than resolving against the
+current directory.
 For a remote hypervisor, an unset state directory uses that account's
 `~/.local/share/agent-vm`. Explicit paths beginning with `~` expand against
 the **client** home directory, so use absolute remote paths.
@@ -1146,6 +1156,13 @@ are not listed; domains in state that have vanished from libvirt are reported as
 `missing`. With `--output json`, emits an array of stored VM records augmented
 with live `state` and an optional `address`.
 
+A VM whose `vm.json` cannot be read — another `schemaVersion`, a parse error,
+or a record that does not match its directory — is left out and named in a
+warning on stderr, and the other VMs are still listed. Subdirectories of `vms/`
+whose names are not valid VM names (`lost+found`, for example) are not VMs and
+are ignored. `image rm`, by contrast, refuses to proceed past a record it
+cannot read, because that VM may depend on the image.
+
 ### `agent-vm info <name>`
 
 Prints one VM's full record, including the base image digest it was created from,
@@ -1476,6 +1493,12 @@ so a crashed run never leaves a lock that has to be cleared by hand.
 Both `manifest.json` and `vm.json` carry a `schemaVersion`. The tool refuses to
 operate on a version it does not understand and says what to rebuild instead of
 guessing. Both are at version `1`.
+
+A `vm.json` is also refused (exit `1`) when its `name` differs from the
+directory it is in, when `paths.dir` is not exactly that directory, or when any
+other recorded path lies outside it: commands act on those paths, and
+`destroy` deletes `paths.dir`, so a corrupted or hand-edited record is never
+trusted to point elsewhere.
 
 ## Stored Records
 

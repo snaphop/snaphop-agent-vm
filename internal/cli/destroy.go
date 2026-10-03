@@ -168,9 +168,11 @@ func (a *App) destroyVM(ctx context.Context, req destroyRequest) error {
 		return nil
 	}
 
-	// Store.Remove refuses any path that does not resolve inside the state
-	// directory, so this cannot delete anything else even if vm.json were
-	// tampered with.
+	// The directory comes from vm.json, which LoadVM accepted only because it
+	// names exactly this VM's own directory; Store.Remove then refuses anything
+	// resolving outside the state directory, or the state directory itself.
+	// Neither makes a tampered record harmless — a deleted VM is deleted — but
+	// together they keep one record from reaching any other VM or image.
 	if err := a.removeVMState(vm); err != nil {
 		return &CleanupError{
 			Operation: fmt.Sprintf("destroying VM %s", vm.Name),

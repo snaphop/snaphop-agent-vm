@@ -114,7 +114,8 @@ func vmNames(app *App) []string {
 	if err != nil {
 		return nil
 	}
-	vms, err := store.ListVMs()
+	// An unreadable record is skipped rather than costing every other name.
+	vms, _, err := store.ScanVMs()
 	if err != nil {
 		return nil
 	}

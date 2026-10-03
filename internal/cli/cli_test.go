@@ -172,6 +172,7 @@ func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
 		{"already exists", &state.ExistsError{Kind: "VM", Name: "agent-01"}, ExitConflict},
 		{"lock held", &state.BusyError{Resource: "VM agent-01"}, ExitConflict},
 		{"NAT network that is not NAT", &network.ModeError{Network: "agent-vm-nat", Mode: "bridge"}, ExitConflict},
+		{"record naming another directory", &state.RecordError{File: "vm.json", Field: "paths.dir", Found: "/var/lib/agent-vm"}, ExitFailure},
 		{"tool timed out", &hostexec.TimeoutError{Tool: "virt-install"}, ExitTimeout},
 		{"cleanup incomplete", &CleanupError{Operation: "create", Cause: errors.New("undefine failed")}, ExitCleanup},
 		{"cleanup after a timeout", &CleanupError{Operation: "create", Cause: &hostexec.TimeoutError{Tool: "virsh"}}, ExitCleanup},
@@ -213,7 +214,13 @@ func TestCleanupError_ListsWhatRemainsOnTheHost(t *testing.T) {
 // ignored: the VM was created, and at the default size whatever was asked for.
 func TestConfigWith_ResolvesAgainAfterConfigHasAlreadyCachedOne(t *testing.T) {
 	t.Parallel()
-	app := &App{Env: func(string) string { return "" }}
+	home := t.TempDir()
+	app := &App{Env: func(key string) string {
+		if key == "HOME" {
+			return home
+		}
+		return ""
+	}}
 
 	if _, err := app.Config(); err != nil {
 		t.Fatalf("Config: %v", err)

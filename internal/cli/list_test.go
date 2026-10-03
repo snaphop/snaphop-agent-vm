@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -210,5 +212,45 @@ func TestResourceRendering_NamesTheCeilingOnlyWhenThereIsOne(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
 		}
+	}
+}
+
+func TestList_ReportsAnUnreadableRecordAndListsTheOtherVMs(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	// agent-02 was written by a newer agent-vm, and lost+found is not a VM.
+	old := filepath.Join(stateDir, "vms", "agent-02")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(old, state.VMRecordFile), []byte(`{"schemaVersion": 99, "name": "agent-02"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "vms", "lost+found"), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			code, stdout, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir, "--output", format, "list")
+			if code != ExitOK {
+				t.Fatalf("exit code = %d: %s", code, stderr)
+			}
+			if !strings.Contains(stdout, "agent-01") {
+				t.Errorf("the readable VM is missing from the listing:\n%s", stdout)
+			}
+			if !strings.Contains(stderr, "agent-02") || !strings.Contains(stderr, "schemaVersion 99") {
+				t.Errorf("the unreadable record was not reported on stderr:\n%s", stderr)
+			}
+			if strings.Contains(stdout+stderr, "lost+found") {
+				t.Errorf("a directory that is not a VM was reported:\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+			if format == "json" {
+				var listed []map[string]any
+				if err := json.Unmarshal([]byte(stdout), &listed); err != nil || len(listed) != 1 {
+					t.Errorf("stdout is not a one-element JSON array (%v):\n%s", err, stdout)
+				}
+			}
+		})
 	}
 }

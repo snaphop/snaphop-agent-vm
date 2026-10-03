@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -20,19 +21,32 @@ const (
 	TiB Size = 1 << 40
 )
 
-// ParseSize reads "512M", "4G", "50GiB", or a bare byte count. Suffixes are
-// binary (1G is 1024 MiB), which is what the tools we hand these values to use.
+// sizeNumber is the number part of a size: plain decimal digits with an
+// optional fraction. It is checked before strconv.ParseFloat sees it, because
+// that function also accepts "NaN", "Inf", hexadecimal, and exponents, none of
+// which is a size anyone writes, and NaN converts to an arbitrary integer.
+var sizeNumber = regexp.MustCompile(`^([0-9]+(\.[0-9]*)?|\.[0-9]+)$`)
+
+// ParseSize reads "512M", "4G", "4 G", "50GiB", or a bare byte count. Suffixes
+// are binary (1G is 1024 MiB), which is what the tools we hand these values to
+// use.
 func ParseSize(s string) (Size, error) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
 		return 0, fmt.Errorf("empty size")
 	}
 
-	digits := strings.TrimRight(trimmed, "kKmMgGtTiIbB")
-	suffix := strings.ToLower(strings.TrimPrefix(trimmed[len(digits):], " "))
+	number := strings.TrimRight(trimmed, "kKmMgGtTiIbB")
+	suffix := strings.ToLower(trimmed[len(number):])
+	// One space may separate the number from its unit ("4 G"); it belongs to
+	// neither.
+	digits := strings.TrimSuffix(number, " ")
 
+	if !sizeNumber.MatchString(digits) {
+		return 0, fmt.Errorf("invalid size %q: expected a number with an optional K, M, G, or T suffix", s)
+	}
 	value, err := strconv.ParseFloat(digits, 64)
-	if err != nil || value < 0 {
+	if err != nil {
 		return 0, fmt.Errorf("invalid size %q: expected a number with an optional K, M, G, or T suffix", s)
 	}
 

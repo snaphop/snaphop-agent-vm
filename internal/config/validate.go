@@ -80,7 +80,10 @@ func (c *Config) validateMaxMemory() error {
 }
 
 func (c *Config) validate() error {
-	if c.StateDir == "" {
+	// The one state directory that may still be empty here is a remote
+	// hypervisor's default, which only that machine can name (ADR-0010).
+	remoteDefault := c.StateDirIsDefault && c.RemoteHypervisor()
+	if c.StateDir == "" && !remoteDefault {
 		return &ValidationError{Field: "state_dir", Value: "", Err: fmt.Errorf("must not be empty")}
 	}
 	// The URI is parsed here rather than at the point of use, so an

@@ -4,14 +4,24 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// noEnv is an environment in which nothing is set: no AGENT_VM_* variable, and
-// no HOME or XDG_* directory either. Configuration resolution reads the
-// environment only through an Environ, so a test using this cannot pick up the
-// configuration file of whoever is running it.
-func noEnv(string) string { return "" }
+// noEnv is an environment in which nothing is set but a home directory that
+// holds nothing: no AGENT_VM_* variable and no XDG_* directory. Configuration
+// resolution reads the environment only through an Environ, so a test using
+// this cannot pick up the configuration file of whoever is running it.
+func noEnv(key string) string {
+	if key == "HOME" {
+		return emptyHome
+	}
+	return ""
+}
+
+// emptyHome is an absolute home directory that does not exist, so the default
+// configuration file under it is simply absent.
+const emptyHome = "/nonexistent/agent-vm-test-home"
 
 // envMap turns a map into an Environ, so tests never mutate the real
 // environment.
@@ -76,6 +86,7 @@ disk   = "100G"
 
 	cfg, err := Load(
 		envMap(map[string]string{
+			"HOME":            emptyHome,
 			"AGENT_VM_VCPUS":  "4",
 			"AGENT_VM_MEMORY": "8G",
 		}),
@@ -331,6 +342,7 @@ func TestLoad_ExpandsTildeInPaths(t *testing.T) {
 func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 	t.Parallel()
 	cfg, err := Load(envMap(map[string]string{
+		"HOME":                 emptyHome,
 		"AGENT_VM_STATE_DIR":   "/srv/agent-vm",
 		"AGENT_VM_LIBVIRT_URI": SessionURI,
 		"AGENT_VM_DISTRO":      "arch",
@@ -367,7 +379,7 @@ func TestLoad_ApplianceKernelFromTheConfigFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(func(string) string { return "" }, Overrides{ConfigFile: path})
+	cfg, err := Load(noEnv, Overrides{ConfigFile: path})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -402,11 +414,171 @@ func TestLoad_ApplianceKernelFromTheEnvironmentExpandsHome(t *testing.T) {
 // every general-purpose distribution kernel.
 func TestLoad_ApplianceKernelIsUnsetByDefault(t *testing.T) {
 	t.Parallel()
-	cfg, err := Load(func(string) string { return "" }, Overrides{})
+	cfg, err := Load(noEnv, Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.ApplianceKernel != "" {
 		t.Errorf("ApplianceKernel = %q, want it empty by default", cfg.ApplianceKernel)
+	}
+}
+
+func TestLoad_RejectsUnknownConfigFileKeys(t *testing.T) {
+	t.Parallel()
+	// A misspelled key, and a misspelled table, would otherwise leave the
+	// operator on settings they believe they changed.
+	path := writeConfig(t, `
+libvirt_url = "qemu:///session"
+
+[defaults]
+vcpus = 4
+netwrok = "bridge"
+
+[defualts]
+memory = "8G"
+`)
+
+	_, err := Load(noEnv, Overrides{ConfigFile: path})
+
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Load = %v, want *ValidationError", err)
+	}
+	for _, want := range []string{path, "libvirt_url", "defaults.netwrok", "defualts.memory"} {
+		if !strings.Contains(verr.Error(), want) {
+			t.Errorf("error does not name %q:\n%v", want, verr)
+		}
+	}
+}
+
+func TestLoad_RejectsAnExplicitZeroOrNegativeVCPUsInTheConfigFile(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"0", "-2"} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+			path := writeConfig(t, "[defaults]\nvcpus = "+value+"\n")
+
+			_, fileErr := Load(noEnv, Overrides{ConfigFile: path})
+			_, flagErr := Load(noEnv, Overrides{ConfigFile: filepath.Join(t.TempDir(), "absent.toml"), VCPUs: value})
+
+			var verr *ValidationError
+			if !errors.As(fileErr, &verr) || verr.Field != "vcpus" {
+				t.Fatalf("Load with vcpus = %s in the file = %v, want a vcpus *ValidationError", value, fileErr)
+			}
+			if flagErr == nil || fileErr.Error() != flagErr.Error() {
+				t.Errorf("file error %q differs from the flag's %q", fileErr, flagErr)
+			}
+		})
+	}
+}
+
+func TestLoad_DefaultPathsIgnoreARelativeXDGDirectory(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".config", "agent-vm")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[defaults]\nvcpus = 6\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(envMap(map[string]string{
+		"HOME":            home,
+		"XDG_DATA_HOME":   "relative/data",
+		"XDG_CONFIG_HOME": "relative/config",
+	}), Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := filepath.Join(home, ".local", "share", "agent-vm"); cfg.StateDir != want {
+		t.Errorf("StateDir = %s, want %s", cfg.StateDir, want)
+	}
+	if cfg.VCPUs != 6 {
+		t.Errorf("VCPUs = %d, want 6 from %s", cfg.VCPUs, filepath.Join(dir, "config.toml"))
+	}
+}
+
+func TestLoad_DefaultPathsHonorAnAbsoluteXDGDirectory(t *testing.T) {
+	t.Parallel()
+	data := t.TempDir()
+
+	cfg, err := Load(envMap(map[string]string{"XDG_DATA_HOME": data, "XDG_CONFIG_HOME": t.TempDir()}), Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := filepath.Join(data, "agent-vm"); cfg.StateDir != want {
+		t.Errorf("StateDir = %s, want %s", cfg.StateDir, want)
+	}
+}
+
+func TestLoad_WithoutAUsableHomeTheDefaultsAreAnError(t *testing.T) {
+	t.Parallel()
+	absent := filepath.Join(t.TempDir(), "absent.toml")
+	tests := []struct {
+		name  string
+		env   map[string]string
+		flags Overrides
+		want  string
+	}{
+		{"no HOME, default state directory", map[string]string{}, Overrides{ConfigFile: absent}, "state directory"},
+		{"relative HOME, default state directory", map[string]string{"HOME": "home/me"}, Overrides{ConfigFile: absent}, "state directory"},
+		{"relative XDG_DATA_HOME and no HOME", map[string]string{"XDG_DATA_HOME": "data"}, Overrides{ConfigFile: absent}, "state directory"},
+		{"no HOME, default config file", map[string]string{}, Overrides{StateDir: "/srv/agent-vm"}, "configuration file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := Load(envMap(tt.env), tt.flags)
+
+			var verr *ValidationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("Load = %+v, %v; want *ValidationError", cfg, err)
+			}
+			if !strings.Contains(verr.Error(), tt.want) {
+				t.Errorf("error does not say which default it could not locate (%s):\n%v", tt.want, verr)
+			}
+		})
+	}
+}
+
+func TestLoad_WithoutAHomeExplicitPathsStillWork(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(envMap(map[string]string{}), Overrides{
+		StateDir: "/srv/agent-vm", ConfigFile: filepath.Join(t.TempDir(), "absent.toml"),
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StateDir != "/srv/agent-vm" {
+		t.Errorf("StateDir = %s, want /srv/agent-vm", cfg.StateDir)
+	}
+}
+
+func TestLoad_ARemoteHypervisorNeedsNoLocalHomeForItsDefaultStateDir(t *testing.T) {
+	t.Parallel()
+	// The default is under the remote account's home, which the CLI asks the
+	// hypervisor for; this machine's home has nothing to do with it.
+	cfg, err := Load(envMap(map[string]string{}), Overrides{
+		ConfigFile: filepath.Join(t.TempDir(), "absent.toml"),
+		LibvirtURI: "qemu+ssh://kvm@hypervisor.lan/system",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.StateDirIsDefault {
+		t.Error("StateDirIsDefault = false, want true")
+	}
+}
+
+func TestLoad_TildeWithARelativeHomeIsAnError(t *testing.T) {
+	t.Parallel()
+	_, err := Load(envMap(map[string]string{"HOME": "home/me"}), Overrides{
+		StateDir: "~/agent-vm", ConfigFile: filepath.Join(t.TempDir(), "absent.toml"),
+	})
+
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Load = %v, want *ValidationError", err)
 	}
 }

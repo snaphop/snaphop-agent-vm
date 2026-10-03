@@ -111,8 +111,7 @@ func TestSessionMode(t *testing.T) {
 // is what makes it a usage error before anything on either host changes.
 func TestLoad_RejectsUnsupportedTransport(t *testing.T) {
 	t.Parallel()
-	env := func(string) string { return "" }
-	if _, err := Load(env, Overrides{StateDir: "/srv/agent-vm", LibvirtURI: "qemu+tls://hv/system"}); err == nil {
+	if _, err := Load(noEnv, Overrides{StateDir: "/srv/agent-vm", LibvirtURI: "qemu+tls://hv/system"}); err == nil {
 		t.Fatal("Load = nil error, want a validation failure")
 	}
 }

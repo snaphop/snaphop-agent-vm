@@ -104,6 +104,7 @@ func exitCodeFor(err error) int {
 		busy       *state.BusyError
 		schema     *state.SchemaError
 		contained  *state.ContainmentError
+		record     *state.RecordError
 		missing    *hostexec.NotFoundError
 		tooOld     *hostexec.VersionError
 		timeout    *hostexec.TimeoutError
@@ -122,9 +123,10 @@ func exitCodeFor(err error) int {
 		return ExitConflict
 	case errors.As(err, &timeout), errors.As(err, &waitedOut):
 		return ExitTimeout
-	case errors.As(err, &contained):
-		// A path escaping the state directory is a bug or an attack, never a
-		// routine failure; it gets the generic code and a loud message.
+	case errors.As(err, &contained), errors.As(err, &record):
+		// A path escaping the state directory, or a record naming paths that
+		// are not its own, is a bug, corruption, or an attack, never a routine
+		// failure; it gets the generic code and a loud message.
 		return ExitFailure
 	default:
 		return ExitFailure

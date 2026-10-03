@@ -228,3 +228,149 @@ func TestCreatesInProgress_NamesOnlyAnUnrecordedVMWhoseLockIsHeld(t *testing.T) 
 	}
 	_ = again.Release()
 }
+
+// tamperVM saves a valid record for name and then rewrites it through edit, the
+// way a corrupted or hand-edited vm.json would arrive.
+func tamperVM(t *testing.T, store *Store, name string, edit func(vm *VM)) {
+	t.Helper()
+	vm := sampleVM(store, name)
+	edit(vm)
+	data, err := json.Marshal(vm)
+	if err != nil {
+		t.Fatalf("encoding vm.json: %v", err)
+	}
+	if err := store.WriteFile(filepath.Join(store.VMDir(name), VMRecordFile), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestLoadVM_RefusesARecordThatDoesNotMatchItsDirectory(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		field string
+		edit  func(store *Store, vm *VM)
+	}{
+		{"directory is the state root", "paths.dir", func(store *Store, vm *VM) { vm.Paths.Dir = store.Root() }},
+		{"directory is the vms directory", "paths.dir", func(store *Store, vm *VM) { vm.Paths.Dir = filepath.Join(store.Root(), "vms") }},
+		{"directory is another VM's", "paths.dir", func(store *Store, vm *VM) { vm.Paths.Dir = store.VMDir("agent-02") }},
+		{"directory is outside the state directory", "paths.dir", func(_ *Store, vm *VM) { vm.Paths.Dir = "/home/operator" }},
+		{"name is another VM's", "name", func(_ *Store, vm *VM) { vm.Name = "agent-02" }},
+		{"overlay is a base image", "paths.overlay", func(store *Store, vm *VM) { vm.Paths.Overlay = store.BaseDiskPath("ubuntu", "24.04") }},
+		{"overlay climbs out", "paths.overlay", func(store *Store, vm *VM) {
+			vm.Paths.Overlay = filepath.Join(store.VMDir("agent-01"), "..", "agent-02", OverlayFile)
+		}},
+		{"console log is elsewhere", "paths.consoleLog", func(_ *Store, vm *VM) { vm.Paths.ConsoleLog = "/etc/shadow" }},
+		{"user-data is the directory itself", "paths.userData", func(store *Store, vm *VM) { vm.Paths.UserData = store.VMDir("agent-01") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := newStore(t)
+			tamperVM(t, store, "agent-01", func(vm *VM) { tt.edit(store, vm) })
+
+			_, err := store.LoadVM("agent-01")
+
+			var rerr *RecordError
+			if !errors.As(err, &rerr) {
+				t.Fatalf("LoadVM = %v, want *RecordError", err)
+			}
+			if rerr.Field != tt.field {
+				t.Errorf("RecordError.Field = %s, want %s", rerr.Field, tt.field)
+			}
+		})
+	}
+}
+
+func TestLoadVM_AcceptsARecordWithoutPathsItNeverHad(t *testing.T) {
+	t.Parallel()
+	// A record from before a path was recorded simply lacks it.
+	store := newStore(t)
+	tamperVM(t, store, "agent-01", func(vm *VM) {
+		vm.Paths.SeedDir = ""
+		vm.Paths.MetaData = ""
+	})
+
+	if _, err := store.LoadVM("agent-01"); err != nil {
+		t.Fatalf("LoadVM = %v, want nil", err)
+	}
+}
+
+func TestListVMs_SkipsDirectoriesThatAreNotVMNames(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	if err := store.SaveVM(sampleVM(store, "agent-01")); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+	for _, dir := range []string{"lost+found", "old_vm", ".snap"} {
+		path := filepath.Join(store.Root(), "vms", dir)
+		if err := store.WriteFile(filepath.Join(path, VMRecordFile), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	vms, err := store.ListVMs()
+	if err != nil {
+		t.Fatalf("ListVMs: %v", err)
+	}
+	if len(vms) != 1 || vms[0].Name != "agent-01" {
+		t.Fatalf("ListVMs returned %d VMs, want only agent-01", len(vms))
+	}
+	_, unreadable, err := store.ScanVMs()
+	if err != nil {
+		t.Fatalf("ScanVMs: %v", err)
+	}
+	if len(unreadable) != 0 {
+		t.Errorf("ScanVMs reported %v as unreadable; they are not VMs", unreadable)
+	}
+}
+
+func TestScanVMs_ReportsAnUnreadableRecordAndKeepsTheRest(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	for _, name := range []string{"agent-01", "agent-03"} {
+		if err := store.SaveVM(sampleVM(store, name)); err != nil {
+			t.Fatalf("SaveVM: %v", err)
+		}
+	}
+	record := `{"schemaVersion": 99, "name": "agent-02"}`
+	if err := store.WriteFile(filepath.Join(store.VMDir("agent-02"), VMRecordFile), []byte(record), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	vms, unreadable, err := store.ScanVMs()
+	if err != nil {
+		t.Fatalf("ScanVMs: %v", err)
+	}
+	if len(vms) != 2 || vms[0].Name != "agent-01" || vms[1].Name != "agent-03" {
+		t.Errorf("ScanVMs returned %d readable VMs, want agent-01 and agent-03", len(vms))
+	}
+	if len(unreadable) != 1 || unreadable[0].Name != "agent-02" {
+		t.Fatalf("unreadable = %v, want agent-02", unreadable)
+	}
+	var serr *SchemaError
+	if !errors.As(unreadable[0].Err, &serr) {
+		t.Errorf("unreadable error = %v, want *SchemaError", unreadable[0].Err)
+	}
+}
+
+func TestVMsUsingImage_FailsClosedOnAnUnreadableRecord(t *testing.T) {
+	t.Parallel()
+	// The unreadable VM may well be backed by this image; removing it past a
+	// record nobody could read would break that VM's disk.
+	store := newStore(t)
+	if err := store.SaveVM(sampleVM(store, "agent-01")); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+	record := `{"schemaVersion": 99, "name": "agent-02"}`
+	if err := store.WriteFile(filepath.Join(store.VMDir("agent-02"), VMRecordFile), []byte(record), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := store.VMsUsingImage("ubuntu", "24.04")
+
+	var serr *SchemaError
+	if !errors.As(err, &serr) {
+		t.Fatalf("VMsUsingImage = %v, want *SchemaError", err)
+	}
+}

@@ -413,3 +413,47 @@ func TestDestroy_ReportsAVMDestroyedWhileItWaitedForTheLock(t *testing.T) {
 	}
 	assertNothingDestroyed(t, fake)
 }
+
+func TestDestroy_RefusesARecordNamingTheStateDirectory(t *testing.T) {
+	t.Parallel()
+	stateDir, _ := createdVM(t, "agent-01")
+	// A corrupted or hand-edited vm.json that names the state directory as
+	// the VM's own would otherwise have destroy delete every VM and image.
+	recordPath := filepath.Join(stateDir, "vms", "agent-01", state.VMRecordFile)
+	raw, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decoding vm.json: %v", err)
+	}
+	record["paths"].(map[string]any)["dir"] = stateDir
+	tampered, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("encoding vm.json: %v", err)
+	}
+	if err := os.WriteFile(recordPath, tampered, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fake := ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01")
+
+	code, _, stderr := cliRunStdin(t, fake, stateDir, "", "--yes", "destroy", "agent-01", "--force")
+
+	if code != ExitFailure {
+		t.Errorf("exit code = %d, want %d: %s", code, ExitFailure, stderr)
+	}
+	if !strings.Contains(stderr, "paths.dir") {
+		t.Errorf("the error does not name the field at fault:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "undefine") || strings.Contains(argv, " destroy ") {
+			t.Errorf("a VM with an untrustworthy record must not be touched: %v", argv)
+		}
+	}
+	for _, dir := range []string{"images", "vms", filepath.Join("vms", "agent-01")} {
+		if _, err := os.Stat(filepath.Join(stateDir, dir)); err != nil {
+			t.Errorf("%s was removed: %v", dir, err)
+		}
+	}
+}
