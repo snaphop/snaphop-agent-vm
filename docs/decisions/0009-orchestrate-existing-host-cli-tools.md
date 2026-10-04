@@ -18,6 +18,11 @@ Narrowed in one place by
 so we build the seed filesystem with `virt-make-fs` and attach it ourselves. The
 rest of this record stands.
 
+The guest-address row below is the original decision. The current rule,
+required by SECURITY.md, asks libvirt's DHCP leases (`virsh domifaddr
+--source lease`) for a NAT VM and the guest agent (`--source agent`) for a
+bridged VM, and only for the MAC recorded in `vm.json`.
+
 ## Context
 
 The virtualization ecosystem already ships mature, well-documented, widely

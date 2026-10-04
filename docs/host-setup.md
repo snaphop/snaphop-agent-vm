@@ -47,25 +47,38 @@ does not fall back to it.
 
 ## 2. Packages
 
-Debian/Ubuntu:
+Debian and Ubuntu on x86_64:
 
 ```bash
 sudo apt install qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-                 virtinst podman libguestfs-tools
+                 virtinst podman libguestfs-tools iproute2 openssh-client
+```
+
+Debian and Ubuntu on aarch64. The package that provides `qemu-system-aarch64`
+is `qemu-system-arm`:
+
+```bash
+sudo apt install qemu-system-arm qemu-utils libvirt-daemon-system libvirt-clients \
+                 virtinst podman libguestfs-tools iproute2 openssh-client
 ```
 
 Fedora:
 
 ```bash
 sudo dnf install qemu-kvm qemu-img libvirt libvirt-client virt-install podman \
-                 guestfs-tools
+                 guestfs-tools iproute openssh-clients
 ```
 
 Arch Linux:
 
 ```bash
-sudo pacman -S qemu-full libvirt virt-install podman libguestfs
+sudo pacman -S qemu-full libvirt virt-install podman libguestfs iproute2 openssh
 ```
+
+The package names `doctor` prints when a tool is missing are the Debian and
+Ubuntu names (`libvirt-clients`, `virtinst`, `qemu-utils`, `libguestfs-tools`,
+`iproute2`, `openssh-client`). On Fedora and Arch, install the packages in the
+commands above.
 
 Optional, and only for `--github-ssh-key` on `create` and `destroy`: the GitHub
 CLI, `gh` (`apt install gh`, `dnf install gh`, `pacman -S github-cli`), logged in

@@ -82,11 +82,10 @@ present.
 
 ## Missing captures
 
-There is no `skopeo --version` capture, and none is needed yet: `internal/hostexec`
-defines a `skopeo` tool but nothing invokes skopeo and `doctor` does not check
-for it. Capture it — with a matching table row — if the skopeo path in
-[ADR-0009](../../docs/decisions/0009-orchestrate-existing-host-cli-tools.md) is
-ever implemented.
+There is no `skopeo --version` capture, and none is needed: nothing in this
+repository invokes skopeo, and `doctor` does not check for it. ADR-0009 names
+it as a possible alternative to podman for copying images. Capture a fixture,
+with a matching table row, if that path is ever implemented.
 
 Every other fixture here is read by a test. Keep it that way: a capture nothing
 asserts on is a file that goes stale without anything noticing.

@@ -58,6 +58,29 @@ migration or rebuild step a user has to take.
   stay as they are. A create that names no tag builds this snapshot into a
   different cache directory. Building still upgrades packages from the Arch
   mirrors, so the tag names the starting image.
+- Misspelled or unknown settings in `config.toml`, and `vcpus = 0`, are now
+  reported as errors instead of being silently ignored.
+- A state directory whose path contains a quote or a backslash, such as
+  `/home/o'brien`, is now refused with an explanation. Before, VM creation
+  could fail with a confusing error or use the wrong file.
+- Temporary build directories now sit inside each image's own folder
+  (`images/<image>/.build-<tag>-<pid>`), and a rebuild keeps the image it
+  replaces as `images/<image>/.<tag>.previous` until the new one is in place.
+  Leftovers under the old names (`images/.build-*`) from earlier versions are
+  not removed automatically; delete them by hand when no build is running.
+- The CLI documentation now says that, on a remote hypervisor, Tab completion
+  connects to that host; that `doctor` can warn about an outdated `gh`; and
+  that `create` and `destroy` wait for another operation on the same VM to
+  finish instead of failing.
+- Documentation now matches the implementation on a few points operators
+  follow. `gh` runs on the client when the hypervisor is remote. An aarch64
+  Debian or Ubuntu host uses the `qemu-system-arm` package, and the install
+  lists include `ip` and `ssh`. The base-disk `virt-make-fs` invocation includes
+  `--partition`. Exit code `3` covers a helper that is present but too old.
+  `doctor` warns when `gh` is older than 2.0. Helper invocations are logged
+  at debug level, which `--verbose` shows; a failure still names the tool,
+  its arguments, and its exit status. The `virtio-mem` reference points at
+  the current user guide.
 
 ### Security
 
@@ -178,23 +201,6 @@ migration or rebuild step a user has to take.
   `destroy --dry-run` no longer takes the VM's lock.
 - `scripts/check.sh` no longer says "all checks passed" when golangci-lint was
   not installed and lint was skipped.
-
-### Changed
-
-- Misspelled or unknown settings in `config.toml`, and `vcpus = 0`, are now
-  reported as errors instead of being silently ignored.
-- A state directory whose path contains a quote or a backslash, such as
-  `/home/o'brien`, is now refused with an explanation. Before, VM creation
-  could fail with a confusing error or use the wrong file.
-- Temporary build directories now sit inside each image's own folder
-  (`images/<image>/.build-<tag>-<pid>`), and a rebuild keeps the image it
-  replaces as `images/<image>/.<tag>.previous` until the new one is in place.
-  Leftovers under the old names (`images/.build-*`) from earlier versions are
-  not removed automatically; delete them by hand when no build is running.
-- The CLI documentation now says that, on a remote hypervisor, Tab completion
-  connects to that host; that `doctor` can warn about an outdated `gh`; and
-  that `create` and `destroy` wait for another operation on the same VM to
-  finish instead of failing.
 
 ## [0.1.0] - 2026-10-02
 
