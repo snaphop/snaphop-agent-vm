@@ -27,7 +27,7 @@ import (
 )
 
 // Version is the agent-vm version, set at build time by scripts/build-release.sh.
-var Version = "0.1.1-dev"
+var Version = "0.2.0"
 
 // App is one invocation of the CLI.
 type App struct {
