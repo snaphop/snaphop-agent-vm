@@ -32,8 +32,24 @@ type VM struct {
 	Resources VMResources  `json:"resources"`
 	Network   VMNetwork    `json:"network"`
 	Guest     VMGuest      `json:"guest"`
+	// Tailscale is set when create joined this guest to a Tailscale network.
+	// It is omitted otherwise, so a record written before the field existed
+	// stays valid without a schema bump. The auth key is not stored.
+	Tailscale *VMTailscale `json:"tailscale,omitempty"`
 	Paths     VMPaths      `json:"paths"`
 	CreatedBy VMProvenance `json:"createdBy"`
+}
+
+// VMTailscale is the non-secret record of a Tailscale join. IPv4 is whatever
+// the guest reported after `tailscale up`; it is display only and is never
+// used as an SSH destination.
+type VMTailscale struct {
+	Hostname      string   `json:"hostname"`
+	LoginServer   string   `json:"loginServer,omitempty"`
+	AdvertiseTags []string `json:"advertiseTags,omitempty"`
+	Ephemeral     bool     `json:"ephemeral,omitempty"`
+	SSH           bool     `json:"ssh,omitempty"`
+	IPv4          string   `json:"ipv4,omitempty"`
 }
 
 // BaseImageRef identifies the base image a VM was created from, by digest as

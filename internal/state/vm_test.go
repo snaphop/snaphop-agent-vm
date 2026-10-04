@@ -61,6 +61,39 @@ func TestSaveAndLoadVM_RoundTrips(t *testing.T) {
 	if got.SchemaVersion != VMSchemaVersion {
 		t.Errorf("SchemaVersion = %d, want %d", got.SchemaVersion, VMSchemaVersion)
 	}
+	if got.Tailscale != nil {
+		t.Errorf("Tailscale = %+v, want none on a VM that did not join", got.Tailscale)
+	}
+}
+
+func TestSaveAndLoadVM_RoundTripsATailscaleJoinWithoutTheAuthKey(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	want := sampleVM(store, "agent-01")
+	want.Tailscale = &VMTailscale{
+		Hostname:      "agent-01",
+		LoginServer:   "https://headscale.example.com",
+		AdvertiseTags: []string{"tag:ci"},
+		Ephemeral:     true,
+		IPv4:          "100.64.0.2",
+	}
+	if err := store.SaveVM(want); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+	raw, err := store.ReadFile(filepath.Join(store.VMDir("agent-01"), VMRecordFile))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(raw), "tskey-") {
+		t.Fatalf("vm.json contains an auth key:\n%s", raw)
+	}
+	got, err := store.LoadVM("agent-01")
+	if err != nil {
+		t.Fatalf("LoadVM: %v", err)
+	}
+	if got.Tailscale == nil || got.Tailscale.IPv4 != "100.64.0.2" || got.Tailscale.Hostname != "agent-01" || !got.Tailscale.Ephemeral {
+		t.Fatalf("Tailscale = %+v, want the join that was stored", got.Tailscale)
+	}
 }
 
 func TestSaveVM_WritesSizesInTheFormOperatorsRead(t *testing.T) {

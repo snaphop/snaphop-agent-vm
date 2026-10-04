@@ -188,10 +188,17 @@ func describeResources(r state.VMResources) string {
 // networkSummary names the mode and, in bridged mode, the bridge — because
 // "which LAN is this guest on?" is the question that matters there.
 func networkSummary(vm *state.VM) string {
+	summary := string(vm.Network.Mode)
 	if vm.Network.Bridge != "" {
-		return string(vm.Network.Mode) + ":" + vm.Network.Bridge
+		summary = string(vm.Network.Mode) + ":" + vm.Network.Bridge
 	}
-	return string(vm.Network.Mode)
+	// Tailscale is an overlay inside the guest, on top of the libvirt
+	// attachment. list has to show it: it is a second way the guest can be
+	// reached (SECURITY.md).
+	if vm.Tailscale != nil {
+		summary += "+tailscale"
+	}
+	return summary
 }
 
 func addressOrDash(address string) string {

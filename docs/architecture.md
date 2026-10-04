@@ -51,7 +51,8 @@ single-host tool with no daemon of its own.
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -d -json link bridge validation      │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
-│  internal/github     gh api calls for --github-ssh-key, on the host only           │
+│  internal/github     gh api calls for --github-ssh-key, on the client              │
+│  internal/tailscale  guest Tailscale join; auth key on stdin only                  │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
 │  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status,   │
 │                      and the ssh transport for a hypervisor on another machine     │
@@ -128,7 +129,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -d -json link show type bridge` |
 | OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` |
-| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2` |
+| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2 --partition` |
 | Kernel/initrd extraction | `virt-ls`, `virt-copy-out` |
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
@@ -215,7 +216,7 @@ background worker. Long waits include image builds, the guest boot wait during `
 - **Public interface:** the on-disk image layout, the `manifest.json` schema, and
   the per-distro `Containerfile`s — which are the readable, reviewable form of all
   distro-specific knowledge in the project.
-- **Key dependencies:** `podman`, `qemu-img`, libguestfs
+- **Key dependencies:** `podman`, libguestfs
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), each behind an
   interface so tests substitute a fake at the process boundary. Network access to a
   registry, distro package mirrors, and tool download services.
@@ -268,7 +269,7 @@ background worker. Long waits include image builds, the guest boot wait during `
   own), `--graphics none`, serial console with a log file, `--rng`,
   `--memballoon virtio`, and the guest agent channel. This is what golden tests
   pin.
-- **Key dependencies:** `virt-install` (4.0+), `virsh`, libvirt (9.0+), QEMU (8.0+).
+- **Key dependencies:** `virt-install` (4.0+), `virsh`, `qemu-img` (overlays and disk facts), libvirt (9.0+), QEMU (8.0+).
   Architecture differences (machine type, firmware) are `virt-install`'s job, not
   ours — a significant reason for ADR-0009.
 - **Failure behavior:** one `virt-install` invocation defines and starts the
@@ -328,9 +329,29 @@ background worker. Long waits include image builds, the guest boot wait during `
   an expired login costs nothing. A `gh` failure after the VM exists leaves the
   VM in place and names the command to rerun; a key already deleted on
   github.com is not an error.
-- **Compatibility constraints:** it runs on the **host**, with the operator's
+- **Compatibility constraints:** it runs on the **client**, with the operator's
   existing login. No GitHub credential ever enters a guest, and the guest's
   private key never leaves it (SECURITY.md).
+
+### `internal/tailscale`
+
+- **Responsibility:** Join one guest to a Tailscale network after SSH accepts
+  a login, when `create --tailscale-auth-key-file` names a file (ADR-0014).
+  The auth key is read from that file and passed on the stdin of the guest's
+  `up` command. Install runs first, with no key, and fetches Tailscale's
+  installer only when `tailscale` is not already on `PATH`.
+- **Public interface:** the optional `tailscale` object in `vm.json`, and the
+  `+tailscale` suffix `list` and `info` add to the network. The guest command
+  vector is built here; `internal/cli` only decides when to run it.
+- **Failure behavior:** the file is checked before anything is created, and a
+  bad file is a usage error that names the path and not the contents. A
+  failure after the VM exists leaves the VM in place and does not record a
+  join. The key is not retried from disk, because it was not stored.
+- **Compatibility constraints:** the key is not a flag value, not an
+  environment variable, and not written into a base image, a cloud-init seed,
+  `vm.json`, a log, or an argument vector. `schemaVersion` stays 1. `destroy`
+  does not remove the tailnet node. SSH continues to use the address libvirt
+  reported; the tailnet address is display only.
 
 ### `internal/progress`
 
@@ -346,11 +367,24 @@ background worker. Long waits include image builds, the guest boot wait during `
   A captured stream (a pipe, a log, a `--verbose` run sharing stderr with slog)
   gets one plain line per step and no terminal control characters.
 
+### `internal/notices`
+
+- **Responsibility:** Embed `LICENSE` and `NOTICE` in the binary so a single
+  static build carries the MIT grant and the third-party notices.
+  `agent-vm licenses` prints those texts. A release copies the same two files
+  from the repository root beside the binaries, and a test fails if the
+  embedded copies drift from those files.
+- **Public interface:** the `licenses` command and the files attached to a
+  release.
+- **Compatibility constraints:** the embedded texts are part of what a binary
+  distributes. Refresh them when the upstream notices they copy change.
+
 ### `internal/hostexec`
 
 - **Responsibility:** The single place where a process is spawned. Builds argument
   vectors (never shell strings), applies timeouts and cancellation, captures stdout
-  and stderr, logs each invocation with its exit status, and detects tool presence
+  and stderr, logs each invocation at debug level with its argument vector,
+  duration, and exit status, and detects tool presence
   and version. Every other package asks it to run something. It also owns *where*
   a command runs: each command carries a location, and a remote hypervisor's
   commands are wrapped in ssh here rather than at each call site (ADR-0010). That
@@ -418,11 +452,18 @@ background worker. Long waits include image builds, the guest boot wait during `
     then wait for SSH, bounded by
     `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
-    the same evidence. Then print the result.
+    the same evidence.
+11. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
+    copy the join script over SSH, install Tailscale when the guest does not
+    already have it, then run `tailscale up` with the auth key on stdin.
+    Save the non-secret result into `vm.json`. A failure here leaves the VM
+    in place and does not store the key. `--github-ssh-key`, when also given,
+    runs after the join. Then print the result.
 
 Rollback: steps 5–9 are undone in reverse on failure — `virsh destroy`, `virsh
-undefine`, then delete the overlay, the seed, and the state directory. Step 10 is the
-deliberate exception noted above: a boot-wait timeout preserves the VM and its
+undefine`, then delete the overlay, the seed, and the state directory. Steps 10
+and 11 are the deliberate exceptions: a boot-wait timeout, a failed Tailscale
+join, and a failed GitHub registration preserve the VM and its
 console log rather than destroying the evidence. `undefine` is
 never given `--remove-all-storage`; the tool deletes its own files after the
 containment check, so libvirt is never asked to remove storage it might interpret
@@ -514,7 +555,7 @@ configuration; the only key material referenced is an SSH public key path.
 | `qemu-img` | 8.0 | Overlay creation, disk facts | `create` fails before defining a domain | Retry after fixing the host; upstream QEMU |
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause, and a host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel` | Exit `3` with the libguestfs diagnostic; upstream |
-| `iproute2` (`ip -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
+| `iproute2` (`ip -d -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | Guest SSH, boot readiness, updates, and all remote-hypervisor operations | Guest connections and remote operations fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |
 | Container registries | — | Source images | `image build` fails; unaffected once cached | Retry; pin digests to avoid surprise drift |
@@ -558,9 +599,10 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
 - Tool versions are resolved once per run, reported by `doctor`, and recorded in
   `vm.json`/`manifest.json` — so a "worked last month" regression can be traced to a
   host tool upgrade.
-- Redaction: cloud-init user-data contents and the contents of any file passed by
-  the operator are never logged; only paths and sizes are. Argv is logged, so no
-  secret is ever passed as a command-line argument.
+- Redaction: cloud-init user-data contents, the contents of any file passed by
+  the operator, and a Tailscale auth key are never logged; only paths and sizes are. Argv is logged, so no
+  secret is ever passed as a command-line argument. The auth key travels on
+  the guest command's stdin, which is not logged.
 - The guest serial console is captured to `vms/<name>/console.log`, which is the
   primary artifact for diagnosing a VM that never became reachable.
 - `agent-vm doctor` is the health check, machine-readable with
@@ -582,9 +624,12 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   networking is opt-in per VM and documented as a trust-boundary change. Host
   path sharing is not implemented; adding it would require an ADR and the
   per-VM, explicit, default-read-only handling `SECURITY.md` mandates.
-- Credentials enter in exactly one place: an SSH **public** key path, injected
-  into the cloud-init seed. No private key ever enters an image, a seed, or this
-  repository.
+- Credentials this tool places in a guest are an SSH **public** key path,
+  injected into the cloud-init seed, and — only when the operator names a file
+  on `create` — a Tailscale auth key passed on that guest's stdin after boot
+  (ADR-0014). The auth key is not written into an image, a seed, or `vm.json`,
+  and it is not a command-line argument. No private key ever enters an image,
+  a seed, or this repository.
 - Authorization decisions belong to the host: libvirt/QEMU enforce guest
   isolation, and the operator's own privileges determine what the tool may do.
   The tool adds its own guard rails on destructive operations — name validation,
@@ -592,6 +637,8 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   did not create.
 - Data that must never cross into a guest: host SSH private keys, cloud
   credentials, the operator's home directory, and the state directory itself.
+  A Tailscale auth key is not one of those. It crosses only on stdin, and only
+  for the guest whose `create` named the file.
 
 ## Constraints And Risks
 

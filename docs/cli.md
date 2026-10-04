@@ -228,7 +228,7 @@ holds the kernel and module tree supermin will be pointed at. See
 
 `gh` is checked too, but never fails the report: it is needed solely by
 `--github-ssh-key`, so a host without it is still a ready host. It reports
-`skip` when `gh` is not installed, and `warn` when it is older than the minimum
+`skip` when `gh` is not installed, and `warn` when it is older than 2.0
 or its version cannot be read, since `--github-ssh-key` would then fail.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
@@ -1063,14 +1063,22 @@ and must not already exist.
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
 | `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
+| `--tailscale-auth-key-file <path>` | none | Join the guest to a Tailscale network after it boots. The file holds one auth key. No flag takes the key itself, and no config key or environment variable turns this on. Requires a wait. |
+| `--tailscale-hostname <name>` | the VM name | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. |
+| `--tailscale-login-server <url>` | Tailscale's coordination server | `https` URL of another coordination server. No user, password, query, or fragment. |
+| `--tailscale-advertise-tag <tag>` | none | ACL tag to advertise, such as `tag:ci`. Repeatable. |
+| `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. |
+| `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. |
 
 On success, prints the VM name, address, and SSH command; with `--output json`,
 prints the same `vm.json` record the tool stored.
 
 Inputs are checked before anything on the host is touched. The SSH keys, the
-`--cloud-init` file (it must begin with a header cloud-init recognizes), and the
-`--opencode-config` file (it must be valid JSON) are read and validated first,
-and a bad one exits `2` — under `--dry-run` too. Next, the minimum versions of
+`--cloud-init` file (it must begin with a header cloud-init recognizes), the
+`--opencode-config` file (it must be valid JSON), and — when a join was
+requested — the Tailscale auth key file (one key, and nothing else) are read
+and validated first, and a bad one exits `2` — under `--dry-run` too. An error
+from the auth key file names the path and does not print the file. Next, the minimum versions of
 `virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` with
 `--github-ssh-key`) are checked, and a missing or too-old tool exits `3`. Only
 then is the VM locked and its base image looked up or built.
@@ -1089,7 +1097,7 @@ files after verifying they are inside the state directory.
 
 `--memory` is what the guest boots with; `--max-memory` is how large it may
 become without a reboot. Giving both attaches a
-[`virtio-mem`](https://www.qemu.org/docs/master/system/devices/virtio-mem.html)
+[`virtio-mem`](https://virtio-mem.gitlab.io/user-guide)
 device sized to the difference, which starts with nothing plugged in — a VM
 created with `--memory 4G --max-memory 16G` boots with exactly 4 GiB and can be
 grown to 16 GiB later.
@@ -1124,7 +1132,8 @@ Constraints, all of which are checked before anything on the host changes:
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.
 
-After the VM is recorded, boot-wait and GitHub registration failures retain
+After the VM is recorded, boot-wait, Tailscale join, and GitHub registration
+failures retain
 it for inspection. A `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
@@ -1206,7 +1215,7 @@ and adds it to your GitHub account as an authentication key titled `agent-vm
 <name> on <host>`, so an agent in the VM can push without a key being pasted
 in by hand.
 
-`gh` runs on the host, with your existing login; no GitHub credential ever
+`gh` runs on the client, with your existing login; no GitHub credential ever
 enters the guest, and the private key never leaves it. `gh auth status` is
 checked before anything is created, so an expired login costs nothing. The key's
 numeric id is recorded in `vm.json` under `guest.githubKey`, which is what
@@ -1230,10 +1239,85 @@ would leave the operator with a `known_hosts` file full of conflicts for reused
 addresses. In the default NAT mode the network is host-local; with
 `--network bridge` the guest is on the LAN and this is a weaker guarantee.
 
+#### Tailscale
+
+`--tailscale-auth-key-file` joins that guest to a Tailscale network after SSH
+accepts a login ([ADR-0014](./decisions/0014-join-a-tailscale-network-from-the-guest.md)).
+It does not change `--network`. NAT stays the default libvirt attachment, and
+`--network bridge` is unchanged. The join is an overlay the guest brings up
+for itself, using whichever of those attachments can reach the coordination
+server. Nothing is installed on the host, and the host's routes and firewall
+are left alone.
+
+```console
+$ agent-vm create build-01 --tailscale-auth-key-file ~/keys/tskey
+$ agent-vm create build-01 --tailscale-auth-key-file ~/keys/tskey \
+    --tailscale-hostname build-01 --tailscale-ephemeral --tailscale-ssh \
+    --tailscale-advertise-tag tag:ci \
+    --tailscale-login-server https://headscale.example.com
+```
+
+The file holds one auth key and nothing else: no quotes, no second line. The
+key is not a flag value. There is no config key and no `AGENT_VM_*` variable
+for it, so a join cannot be inherited from the environment. Any other
+`--tailscale-*` flag without the file exits `2`. The file is read before
+anything is created, including under `--dry-run`, which prints the path and
+the guest commands and does not print the key.
+
+The flag needs a boot wait. `--wait-for-ssh 0` exits `2`, because there is no
+SSH session to join through.
+
+Once the guest accepts SSH, `create` copies a small script to
+`/usr/local/sbin/agent-vm-tailscale-join` and runs it as root. `install`
+fetches `https://tailscale.com/install.sh` only when `tailscale` is not
+already on `PATH`, then starts `tailscaled`. `up` reads the auth key on
+stdin, passes it to `tailscale up --auth-key=file:… --reset`, and removes
+that file before it exits, including when `up` fails. `--reset` makes this
+join the whole Tailscale configuration on that guest. The key is sent only to `up`,
+after install has returned. It is not written into the base image, the
+cloud-init seed, or `vm.json`, and it is not placed in an argument vector.
+`--dry-run` shows the four `ssh` lines and says where the key will be read
+from.
+
+The guest can read the key while `tailscale up` runs. Use a one-time key,
+and an ephemeral one when the node should disappear with the VM.
+`--tailscale-ephemeral` asks Tailscale to remove the node when the guest
+stops; an auth key that is itself ephemeral does the same. `destroy` does
+not log the node out. A node that was not ephemeral stays on the tailnet
+until it is removed in the admin console.
+
+`--tailscale-hostname` defaults to the VM name. `--tailscale-login-server`
+is an `https` URL with a host and no user, password, query, or fragment, for
+a coordination server other than Tailscale's. `--tailscale-advertise-tag`
+may be repeated; each value looks like `tag:ci`, and a duplicate is sent
+once. `--tailscale-ssh` turns on Tailscale SSH. It is off unless the flag is
+given. The login user (`[guest] user` in the config file, default `agent`)
+is passed as `--operator`, so that account can run `tailscale` in the guest
+afterwards.
+
+On success the join is recorded in `vm.json` under `tailscale`: the
+hostname, and, when they were set, the login server, the tags, whether the
+node is ephemeral, whether Tailscale SSH is on, and the IPv4 address the
+guest reported. That address is display only. `agent-vm ssh` still connects
+to the address libvirt reported. `list` appends `+tailscale` to the network
+column (`nat+tailscale`, or `bridge:<iface>+tailscale`).
+
+A join that fails after the VM exists leaves the VM in place — the VM is
+not what failed — and the error says so. The auth key is not stored, so a
+retry is another `create` after `destroy`, or a join performed by hand
+inside the guest. The key is not printed in the error.
+
+The first join downloads Tailscale's installer into that guest. A guest
+that already has `tailscale` on `PATH` skips the download. Cached base
+images do not contain Tailscale and do not need a rebuild for this to work.
+
 ### `agent-vm list`
 
 Lists VMs known to this state directory with state, distro, resources, network
-mode, address, and creation time. Domains that exist in libvirt but not in state
+mode, address, and creation time. The network column is `nat` or
+`bridge:<iface>`. A guest that joined a tailnet has `+tailscale` appended
+(`nat+tailscale`, `bridge:br0+tailscale`), because that overlay is another way
+to reach it. Domains that exist in libvirt but not in state
 are not listed; domains in state that have vanished from libvirt are reported as
 `missing`. With `--output json`, emits an array of stored VM records augmented
 with live `state` and an optional `address`.
@@ -1249,7 +1333,11 @@ cannot read, because that VM may depend on the image.
 
 Prints one VM's full record, including the base image digest it was created from,
 the overlay path, the MAC address, the captured domain XML path, and the
-`virt-install` version and argument vector that defined it.
+`virt-install` version and argument vector that defined it. A guest that joined
+a tailnet also shows a `tailscale` row: the address it reported, the hostname,
+and any login server, tags, ephemeral node, or Tailscale SSH that was requested.
+That address is display only; `agent-vm ssh` still uses the address libvirt
+reported.
 
 With `--output json`, the stored VM fields are augmented with live `state`, an
 optional `address`, and an optional `disk` object containing `virtualSize`,
@@ -1473,7 +1561,8 @@ global flags, the values of flags whose set of values is closed (`--output`,
 `info`, `start`, `stop`, `restart`, `ssh`, `update`, `console`, and `destroy`,
 and the cached images for `image inspect`, `image rm`, and `--distro`. Where
 `agent-vm` offers nothing, the shell falls back to filenames, which is what
-`--config`, `--ssh-key`, and `--cloud-init` want. Nothing is offered after
+`--config`, `--ssh-key`, `--cloud-init`, and `--tailscale-auth-key-file` want.
+Nothing is offered after
 `--` in `agent-vm ssh <name> --`, because what follows runs in the guest.
 
 The scripts call `agent-vm __complete <word>...`, a hidden command that takes
@@ -1504,6 +1593,7 @@ table below is the summary.
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
+| `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
 | `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
@@ -1532,7 +1622,7 @@ staying stable.
 | `0` | Success. |
 | `1` | Generic failure. |
 | `2` | Usage error: unknown flag, bad argument, invalid name or size. |
-| `3` | Host not ready: no KVM, no libvirt connection, missing helper binary. |
+| `3` | Host not ready: no KVM, no libvirt connection, missing or too-old helper. |
 | `4` | Not found: unknown VM or base image. |
 | `5` | Conflict: VM already exists, wrong state for the operation, or a base image is in use. A held lock is never itself a conflict: `create` and `destroy` wait for the VM's lock, and `image build` and `image rm` wait for the image's lock (see [State Layout](#state-layout)). |
 | `6` | Timeout: guest did not boot, become reachable, or shut down in time. |
@@ -1650,6 +1740,7 @@ answer that goes stale.
 | `guest.user` | The account to SSH in as. |
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
+| `tailscale` | Present only for a VM created with `--tailscale-auth-key-file`: `hostname`, and, when set, `loginServer`, `advertiseTags`, `ephemeral`, `ssh`, and `ipv4`. The auth key and the path of its file are not stored. `ipv4` is the address the guest reported and is not an SSH destination. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
 | `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |
 | `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |
 

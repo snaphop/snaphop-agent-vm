@@ -106,7 +106,12 @@ The same boundaries are drawn in
 
 These values MUST NOT enter source control, normal logs, argument vectors,
 base-image layers, cloud-init seeds (except an SSH **public** key), metric
-labels, or routine issue reports. This tool has no metrics or traces. Guest
+labels, or routine issue reports. A Tailscale auth key is a credential of
+that kind. The one path that carries it into a guest is the stdin of
+`tailscale up` after the guest has booted, and only when the operator names
+a file with `create --tailscale-auth-key-file` (ADR-0014). That path does
+not put the key in a base image, a cloud-init seed, `vm.json`, a log, or an
+argument vector. This tool has no metrics or traces. Guest
 content belongs to that VM and is destroyed with it; it MUST NOT be copied into
 a base image, the repository, or a log. Synthetic development material must be
 clearly non-production and must not contain real credentials or customer data.
@@ -164,11 +169,20 @@ section named here.
 
 - MUST NOT commit real credentials, access or refresh tokens, private keys,
   customer data, production data, or PII.
-- Only SSH **public** keys are injected into a guest. A private key MUST NEVER
+- SSH keys injected into a guest are **public** keys only. A private key MUST NEVER
   be written into a base image, a cloud-init seed, a disk image, the state
   directory, or this repository. The tool may locate a private key that sits
   beside a recorded public key and pass that path to `ssh`. It MUST NOT read
   the key, copy it, or log it.
+- A Tailscale auth key may cross into a guest in exactly one way: the operator
+  names a file with `create --tailscale-auth-key-file`, and after SSH is up
+  the tool passes that file's contents on the stdin of the guest's `up`
+  command. The key MUST NOT be a flag value, an environment variable, an
+  argument vector, a base-image layer, generated cloud-init user-data, or a
+  field in `vm.json`. The guest script MUST remove its copy when `tailscale
+  up` returns, including on failure. The guest can read the key while that
+  command runs, so the key SHOULD be one-time and ephemeral. Do not put the
+  key in cloud-init, the base image, or an argument to avoid that window.
 - A guest generating a key pair for its own accounts at first boot is a
   different thing and is allowed: that key is created inside the VM, never
   leaves it except as the public half described below, and is destroyed with
@@ -243,6 +257,12 @@ section named here.
   NAT setup failed.
 - The tool MUST NOT create host port forwards, publish guest services on host
   interfaces, or expose a guest beyond the selected network mode.
+- Joining a Tailscale network is not a libvirt network mode and MUST NOT
+  change the host's routes, interfaces, or firewall. It MUST be requested
+  explicitly on `create` with `--tailscale-auth-key-file`, and MUST NOT be
+  selected by a config key or an environment variable. `list` and `info` MUST
+  show that the guest joined, because the tailnet is another way to reach it.
+  `destroy` does not remove the tailnet node.
 - The libvirt NAT network the tool defines MUST NOT be given host-wide routing,
   additional host interfaces, or forwarding rules beyond libvirt's standard NAT
   behavior.
@@ -321,15 +341,17 @@ section named here.
 
 ## Logging
 
-- Logs are structured (`log/slog`) on stderr. `--verbose` raises the level.
-  Every helper invocation is logged with its argument vector, duration, and
-  exit status, so an operator can rerun the failing command. That is safe only
-  because secrets are never placed in an argument vector.
+- Logs are structured (`log/slog`) on stderr. Helper invocations are logged
+  at debug level, with the argument vector, duration, and exit status, and
+  `--verbose` is what shows that log. A failure also names the tool, its
+  argument vector, and its exit status in the error the operator sees. That
+  is safe only because secrets are never placed in an argument vector.
 - Safe fields include the tool name, the validated argument vector, exit
   status, duration, paths, sizes, digests, the VM name, and the network mode.
 - MUST NOT log or otherwise retain the classes in **Sensitive Data Classes**.
   In particular, MUST NOT log cloud-init contents, operator-supplied file
-  contents, authorization headers, private keys, or GitHub tokens.
+  contents, authorization headers, private keys, GitHub tokens, or Tailscale
+  auth keys.
 - The guest serial console is captured to `console.log` inside that VM's state
   directory and removed when the VM is destroyed. It is a guest diagnostic, not
   a host-secret store. Host credentials MUST NOT be written there.
@@ -349,10 +371,10 @@ section named here.
   image builds. Libvirt remains the source of truth for whether a domain is
   running.
 - On a failed `create`, roll back the domain and the per-VM directory. A
-  boot-wait or GitHub-registration failure may retain the recorded VM for
-  inspection; that retention MUST be visible in the error, not reported as a
-  clean create. Built base images and the shared NAT network stay in place
-  because other VMs reuse them.
+  boot-wait, Tailscale-join, or GitHub-registration failure may retain the
+  recorded VM for inspection; that retention MUST be visible in the error,
+  not reported as a clean create. Built base images and the shared NAT
+  network stay in place because other VMs reuse them.
 - Integration tests MUST run only against a disposable host, MUST use a
   dedicated state directory and the `agent-vm-test-` name prefix, and MUST NOT
   touch domains or volumes they did not create. A mutating live test on a host
@@ -401,6 +423,11 @@ section named here.
   [host firewall policy](./docs/host-setup.md#host-firewalls-and-the-virbrn-bridge)
   your workloads require before running untrusted guests; NAT alone does not
   satisfy host-service or LAN isolation requirements.
+- Prefer a one-time, ephemeral Tailscale auth key, tagged when the tailnet
+  uses tags. The guest can read the key while `tailscale up` runs. A node
+  that is not ephemeral stays on the tailnet after `destroy` until it is
+  removed in the tailnet's admin console. Joining a tailnet puts the guest
+  on that network; it is a separate choice from NAT or bridge.
 - A `qemu+ssh://` URI grants command execution as that account on that host.
   Use it only against a hypervisor the operator is willing to administer.
 - Destroy the VM when the task is done. The overlay, the seed, and
@@ -416,8 +443,8 @@ section named here.
 - Security regression tests SHOULD assert both the intended success path and
   the prohibited behavior: a path outside the state directory is refused, an
   unknown domain is not undefined, bridged mode is never implicit, a digest
-  mismatch is fatal, and a secret marker does not appear in a log, an error, a
-  base image, or a seed.
+  mismatch is fatal, and a secret marker does not appear in a log, an error, an
+  argument vector, `vm.json`, a base image, or a seed.
 - Test the remote-shell exception against a real shell: every argument is
   quoted, and the exception is not a place to compose a script.
 - Test that guest-influenced values (addresses, leases, console text) are
@@ -458,5 +485,6 @@ Out of scope: vulnerabilities in libvirt, QEMU/KVM, the Linux kernel,
 upstream — though if our invocation of one of them is what creates the
 exposure, that is in scope); guest-to-host escapes attributable to the
 hypervisor rather than to our configuration; the documented consequences of
-opt-in features such as bridged networking; social engineering; and purely
+opt-in features such as bridged networking and joining a Tailscale network;
+social engineering; and purely
 volumetric denial-of-service reports.

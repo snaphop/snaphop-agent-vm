@@ -64,7 +64,7 @@ describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
 `Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
-`internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
+`internal/tailscale`, `internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
 `start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `licenses`,
 `completion`, `--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
 documented contract. What remains is hardening: the integration
@@ -121,16 +121,18 @@ Ordinary focused work continues to follow this file directly.
 │   ├── config/             # config file, env vars, defaults, validation
 │   ├── image/              # base image cache: podman + libguestfs pipeline
 │   ├── domain/             # virt-install argv, virsh lifecycle and queries
-│   ├── network/            # virsh net-* for NAT, ip -json bridge validation
+│   ├── network/            # virsh net-* for NAT, ip -d -json bridge validation
 │   ├── guestinit/          # cloud-init user-data and meta-data generation
 │   ├── state/              # state directory, vm.json, locking
-│   ├── github/             # gh api calls for --github-ssh-key, host-side only
+│   ├── github/             # gh api calls for --github-ssh-key, on the client
+│   ├── tailscale/          # guest Tailscale join; the auth key travels on stdin
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── notices/            # LICENSE and NOTICE, embedded in the release binary
 │   ├── golden/             # golden-file comparison helper, used only by tests
 │   └── hostexec/           # the only place processes spawn: argv, logs, versions
 ├── templates/              # embedded: per-distro Containerfiles, cloud-init
-│                           # user-data and meta-data, NAT network XML
+│                           # user-data and meta-data, NAT network XML,
+│                           # and the Tailscale join script (sent over SSH, not baked into an image)
 ├── test/
 │   ├── golden/             # golden tool argv and cloud-init user-data fixtures
 │   ├── toolout/            # output captured from real tools, for parser tests
@@ -321,7 +323,7 @@ Major modules and responsibilities:
 - `internal/domain` — builds the `virt-install` argument vector and drives
   `virsh` for lifecycle and inspection.
 - `internal/network` — ensures the NAT network exists via `virsh net-*`, or
-  validates an existing host bridge with `ip -json link`.
+  validates an existing host bridge with `ip -d -json link show type bridge`.
 - `internal/state` — owns the state directory, per-VM `vm.json`, and the file
   locks that keep concurrent `create`/`destroy` calls from racing. The state
   directory is on the machine the hypervisor is on, so its file operations go
@@ -329,8 +331,15 @@ Major modules and responsibilities:
   the ssh transport for a remote hypervisor.
 - `internal/github` — adds and removes SSH **public** keys on the operator's
   GitHub account through `gh api`, for `--github-ssh-key` on `create` and
-  `destroy`. It runs on the host with the operator's existing login; no GitHub
+  `destroy`. It runs on the client with the operator's existing login; no GitHub
   credential ever enters a guest.
+- `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
+  when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth
+  key is read from that file and passed on the guest's stdin. It is not a
+  flag value, not an environment variable, and not written into the image,
+  the seed, or `vm.json`. The guest command's argument vector lives in this
+  package; `internal/cli` only decides when to run it. Do not put the key in
+  cloud-init to simplify the join.
 - `internal/progress` — renders the progress of a long, multi-step operation: a
   bar redrawn in place on a terminal, one plain line per step anywhere else.
   Presentation only; the package doing the work reports which step it reached.
@@ -352,8 +361,10 @@ file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
 → poll `virsh domifaddr` and wait for SSH (unless waiting is disabled)
-→ optionally register the guest public key with GitHub. Failures through recording
-roll back the domain and per-VM directory; a boot-wait or GitHub registration
+→ optionally install Tailscale in the guest and join the tailnet (the auth
+key goes on stdin, not into the seed) → optionally register the guest public
+key with GitHub. Failures through recording
+roll back the domain and per-VM directory; a boot-wait, Tailscale join, or GitHub registration
 failure retains the recorded VM for inspection. Built base images and the shared
 NAT network remain reusable. Cleanup failures must report what remains.
 
@@ -367,6 +378,8 @@ no database or queue; the base image cache and VM records live on the
 hypervisor. Image builds contact container registries, distro package mirrors,
 and, for full images, tool and vendor download services. Runner images also
 download the pinned GitHub Actions runner release during the image build.
+The first Tailscale join downloads Tailscale's installer inside that guest;
+a guest that already has `tailscale` on `PATH` skips the download.
 `--github-ssh-key` contacts GitHub from the client; `update` downloads
 packages and tools from inside guests.
 
@@ -399,7 +412,8 @@ boundary — specifically the virtualization stack, the boot method, the image
 cache format, guest-to-host sharing, network modes, where host tools run
 (ADR-0010), the default resource profile,
 adding a supported distro family, adding a base image variant or changing where
-guest tooling comes from (ADR-0012, ADR-0013), or **implementing something a standard host
+guest tooling comes from (ADR-0012, ADR-0013), joining a guest to an overlay
+network (ADR-0014), or **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
 Document observable or operational effects in `CHANGELOG.md` under
@@ -521,14 +535,20 @@ The essentials, which `SECURITY.md` states precisely:
   default.
 - Never commit real credentials, tokens, private keys, or PII. SSH **public**
   keys are injected at first boot via cloud-init; private keys never enter an
-  image, a seed, or the repository.
+  image, a seed, or the repository. A Tailscale auth key is passed on the
+  guest's stdin after boot when `create --tailscale-auth-key-file` names a
+  file (ADR-0014). It is not written into the image, the seed, `vm.json`, a
+  log, or an argument vector. Do not put that key in cloud-init to simplify
+  the join.
 - Never bake secrets into a base image or a cloud-init seed that outlives the
   VM, and never log the contents of user-supplied cloud-init data.
 - Treat everything crossing a boundary as untrusted: CLI arguments, config
   files, environment variables, registry metadata, guest agent responses, DHCP
   leases, and the stdout of every helper process.
 - Bridged networking puts the guest directly on the operator's LAN. It is never
-  the default and always requires an explicit flag.
+  the default and always requires an explicit flag. Joining a tailnet is also
+  explicit, on `create`, and is not a third `--network` value. It does not
+  install Tailscale on the host or change host routes or firewalls.
 - Report vulnerabilities through the private process in `SECURITY.md`; do not
   open a public issue.
 

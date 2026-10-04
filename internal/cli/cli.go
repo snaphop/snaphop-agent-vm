@@ -2,6 +2,7 @@
 // resolves configuration, calls the packages that own each concern, decides
 // what the operator sees, and maps failures to the documented exit codes. It
 // does not render XML, build argument vectors, or spawn processes itself.
+// The Tailscale join's argument vector is built in internal/tailscale.
 //
 // docs/cli.md is the specification this package must satisfy. When the two
 // disagree, one of them is a bug and they are fixed together.

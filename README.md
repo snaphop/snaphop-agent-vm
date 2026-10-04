@@ -178,6 +178,18 @@ agent-vm create agent-04 --network bridge --bridge br0
 See [ADR-0005](./docs/decisions/0005-support-nat-and-bridged-networking.md) and
 the bridge setup section of [`docs/host-setup.md`](./docs/host-setup.md).
 
+- **Tailscale.** This does not change the libvirt network. After the VM
+  boots, `create` can install Tailscale in that guest and join a tailnet.
+  Name a file that holds one auth key. The key is not stored with the VM:
+
+```bash
+agent-vm create agent-05 --tailscale-auth-key-file ~/keys/tskey
+```
+
+Use a one-time ephemeral key: the guest can read it while it logs in, and
+`destroy` does not remove a node that was not ephemeral. See
+[ADR-0014](./docs/decisions/0014-join-a-tailscale-network-from-the-guest.md).
+
 ## How It Works
 
 ```text

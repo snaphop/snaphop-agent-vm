@@ -103,6 +103,7 @@ var valuelessFlags = map[string]bool{
 	"verbose": true, "quiet": true, "yes": true, "dry-run": true,
 	"version": true, "help": true, "force": true, "keep-disk": true,
 	"no-start": true, "all": true,
+	"tailscale-ephemeral": true, "tailscale-ssh": true,
 }
 
 func distroCandidates(*App) []string { return distro.ImageNames() }
@@ -159,8 +160,14 @@ func completionSpecs() map[string]*completionSpec {
 	vmName := []argSource{vmNames}
 
 	return map[string]*completionSpec{
-		"doctor":     {},
-		"create":     {flags: []string{"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge", "cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key", "host-authorized-keys", "virt-install-arg", "github-ssh-key"}},
+		"doctor": {},
+		"create": {flags: []string{
+			"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge",
+			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key",
+			"host-authorized-keys", "virt-install-arg", "github-ssh-key",
+			"tailscale-auth-key-file", "tailscale-hostname", "tailscale-login-server",
+			"tailscale-advertise-tag", "tailscale-ephemeral", "tailscale-ssh",
+		}},
 		"list":       {},
 		"info":       {args: vmName},
 		"start":      {args: vmName},

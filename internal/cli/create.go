@@ -63,6 +63,13 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
+	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "file containing a Tailscale auth key; the guest joins that network after it boots")
+	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: the VM name)")
+	tailscaleLoginServer := flags.String("tailscale-login-server", "", "https URL of a coordination server other than Tailscale's")
+	tailscaleEphemeral := flags.Bool("tailscale-ephemeral", false, "remove the tailnet node when the VM stops")
+	tailscaleSSH := flags.Bool("tailscale-ssh", false, "enable Tailscale SSH on the guest")
+	var tailscaleTags repeatedFlag
+	flags.Var(&tailscaleTags, "tailscale-advertise-tag", "tailnet `tag` to advertise, such as tag:ci; repeatable")
 	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
 	flags.Var(&sshKeys, "ssh-key", "SSH public `key` to authorize; repeatable (default: this account's ~/.ssh identities)")
@@ -158,9 +165,20 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err := userData.Validate(); err != nil {
 		return err
 	}
+	join, err := resolveTailscale(name, cfg.GuestUser, *tailscaleAuthKeyFile, *tailscaleHostname, *tailscaleLoginServer, *tailscaleEphemeral, *tailscaleSSH, tailscaleTags)
+	if err != nil {
+		return err
+	}
+	// The guest is joined over SSH, so there has to be a boot wait to join
+	// through. Asking for both would create a VM and then have no way to log
+	// it in.
+	if join != nil && *waitForSSH <= 0 {
+		return exitf(ExitUsage,
+			"--tailscale-auth-key-file needs --wait-for-ssh: the guest is joined over SSH after it boots.")
+	}
 
 	if app.dryRun {
-		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey)
+		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join)
 	}
 
 	// virt-make-fs writes the cloud-init seed, so its floor is checked here with
@@ -258,6 +276,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
+		tailscale:       join,
 	})
 }
 
@@ -447,6 +466,7 @@ type createRequest struct {
 	virtInstallArgs []string
 	waitForSSH      time.Duration
 	githubSSHKey    bool
+	tailscale       *tailscaleJoin
 }
 
 // createVM performs the steps that change host state. Every one of them is
@@ -469,8 +489,15 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 		return err
 	}
 
-	// The key is added after the VM is usable and recorded, and a failure here
-	// is reported without undoing the VM: the VM is not the thing that failed.
+	// Tailscale and the GitHub key are added after the VM is usable and
+	// recorded. A failure here is reported without undoing the VM: the VM is
+	// not the thing that failed. The join goes first so a later GitHub
+	// failure does not leave a guest that was asked to join a tailnet off it.
+	if req.tailscale != nil {
+		if err := a.joinTailscale(ctx, req, vm, address); err != nil {
+			return err
+		}
+	}
 	if req.githubSSHKey {
 		if err := a.addGitHubKey(ctx, req, vm, address); err != nil {
 			return err
@@ -710,6 +737,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if key := vm.Guest.GitHubKey; key != nil {
 		rows = append(rows, []string{"  github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
 	}
+	if detail := tailscaleDetail(vm.Tailscale); detail != "" {
+		rows = append(rows, []string{"  tailscale", detail})
+	}
 	rows = append(rows, []string{"  state dir", vm.Paths.Dir})
 	a.out.Table(rows)
 
@@ -810,7 +840,7 @@ func (r *createRollback) undoUnconfirmedDomain(ctx context.Context) []string {
 // printCreatePlan prints what a create would run and write. Like the image
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
-func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool) error {
+func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool, join *tailscaleJoin) error {
 	// The store, not the configured path, because a remote hypervisor's
 	// default state directory sits under *its* home directory.
 	store, err := a.Store()
@@ -885,6 +915,9 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		a.out.Printf("ssh%s %s@<guest address> cat %s\n", jumpArgs(a.sshJump()), cfg.GuestUser, guestPublicKeyPath)
 		a.out.Printf("gh api --method POST user/keys -f title=%q -f key=<the guest's public key> --jq .id\n",
 			githubKeyTitle(name))
+	}
+	if join != nil {
+		a.printTailscalePlan(cfg.GuestUser, join)
 	}
 
 	for _, note := range []string{

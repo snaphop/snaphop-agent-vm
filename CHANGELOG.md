@@ -18,6 +18,18 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- A VM can join a Tailscale network when it is created. `agent-vm create work
+  --tailscale-auth-key-file ~/keys/tskey` installs Tailscale in that guest
+  after SSH is up and logs it in. The key stays in the file you name: it is
+  not a flag, it is not stored in the VM record, and it is not written into
+  the base image or the cloud-init seed. The hostname defaults to the VM
+  name. `--tailscale-login-server` names another coordination server,
+  `--tailscale-advertise-tag` can be repeated, and `--tailscale-ephemeral`
+  and `--tailscale-ssh` stay off unless you ask for them. Use a one-time
+  ephemeral key. The guest can read the key while it logs in, and destroying
+  the VM does not remove a node that was not ephemeral. `list` shows
+  `+tailscale` beside the network, and `info` shows the address the guest
+  reported. `agent-vm ssh` still uses the address libvirt reported.
 - A base image can be a self-hosted GitHub Actions runner. Append `-runner` to
   a family: `agent-vm image build ubuntu-runner`, then `agent-vm create ci
   --distro ubuntu-runner`. The image is that family's slim image plus the

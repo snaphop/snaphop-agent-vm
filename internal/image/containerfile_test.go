@@ -302,6 +302,16 @@ func TestContainerfiles_InstallAWordList(t *testing.T) {
 	}
 }
 
+// TestTailscaleJoinScript_IsNotPartOfTheBaseImage keeps the join script out of
+// the image build. It is sent to one guest over SSH. A base image is shared,
+// and the auth key never is.
+func TestTailscaleJoinScript_IsNotPartOfTheBaseImage(t *testing.T) {
+	t.Parallel()
+	if slices.Contains(buildContextFiles, "tailscale-join.sh") {
+		t.Fatal("tailscale-join.sh is in the base image build context")
+	}
+}
+
 // TestTmuxConfig_IsShippedInTheBuildContext ties the COPY above to the file the
 // builder actually writes next to the Containerfile. A COPY of a file that is
 // not in the build context fails the build minutes in, after the package

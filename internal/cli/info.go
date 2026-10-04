@@ -102,6 +102,9 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 	if key := vm.Guest.GitHubKey; key != nil {
 		rows = append(rows, []string{"github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
 	}
+	if detail := tailscaleDetail(vm.Tailscale); detail != "" {
+		rows = append(rows, []string{"tailscale", detail})
+	}
 	if detail.Disk != nil {
 		rows = append(rows,
 			[]string{"disk (virtual)", detail.Disk.VirtualSize.Human()},
