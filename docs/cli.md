@@ -341,9 +341,12 @@ and `chrony` — see “Guest clock” below)
 along with the tooling an agent expects to already be there (`ping`, `curl`,
 `wget`, `git`, a C toolchain, Python, Docker, and the coding agents themselves
 — see “Guest tooling” below),
-`podman export` to flatten it, `virt-make-fs` to write `base.qcow2`,
+`podman export` to flatten it, `virt-make-fs --type=ext4 --format=qcow2
+--partition --size=+1G` to write `base.qcow2`,
 `virt-ls`/`virt-copy-out` to extract `vmlinuz`/`initrd`, and `virt-sysprep` to
-clear the machine ID and SSH host keys. Finishes by recording `manifest.json`,
+clear the machine ID and SSH host keys. The extra gibibyte covers first-boot
+writes. Cloud-init then grows the root partition to the overlay's virtual size,
+which is what `create --disk` sets. Finishes by recording `manifest.json`,
 including the tool versions used.
 
 Use `--dry-run` to print the whole pipeline without running it.
@@ -1052,7 +1055,7 @@ and must not already exist.
 | `--vcpus <n>` | `2` | Virtual CPUs, from 1 to 255. |
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
-| `--disk <size>` | `50G` | Virtual root disk size (thin overlay), from `1G` to `8T`. |
+| `--disk <size>` | `50G` | Virtual root disk size (thin overlay), from `1G` to `8T`. Cloud-init grows the guest's root partition to this size at first boot. |
 | `--network <nat\|bridge>` | `nat` | Network mode. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
 | `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
@@ -1591,7 +1594,7 @@ table below is the summary.
 
 | Operation | Tools invoked |
 |---|---|
-| `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |

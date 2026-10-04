@@ -94,7 +94,8 @@ agent-vm create agent-03 --distro arch
 | Guest user | `agent`, passwordless `sudo`, your SSH public key | config file |
 
 The disk size is the virtual size of a copy-on-write overlay. A fresh 50 GiB VM
-consumes a few megabytes of host disk until the guest writes to it.
+consumes a few megabytes of host disk until the guest writes to it. Inside the
+guest, cloud-init grows the root partition to that size at first boot.
 
 ## Supported Guests
 

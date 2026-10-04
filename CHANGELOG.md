@@ -88,7 +88,9 @@ migration or rebuild step a user has to take.
   follow. `gh` runs on the client when the hypervisor is remote. An aarch64
   Debian or Ubuntu host uses the `qemu-system-arm` package, and the install
   lists include `ip` and `ssh`. The base-disk `virt-make-fs` invocation includes
-  `--partition`. Exit code `3` covers a helper that is present but too old.
+  `--partition` and `--size=+1G`. That extra gibibyte covers first-boot writes;
+  cloud-init then grows the root partition to the VM's disk size. Exit code `3`
+  covers a helper that is present but too old.
   `doctor` warns when `gh` is older than 2.0. Helper invocations are logged
   at debug level, which `--verbose` shows; a failure still names the tool,
   its arguments, and its exit status. The `virtio-mem` reference points at

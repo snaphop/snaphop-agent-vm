@@ -33,7 +33,9 @@ Requirements that shape the design:
 
 The full base images include guest-side agent tooling; slim images omit it, and
 nix images install it from one shared nix expression rather than from the
-family's package manager (ADR-0012). cloud-init can customize any variant. Deliberately outside this repository:
+family's package manager (ADR-0012). Runner images are that slim image plus an
+unconfigured GitHub Actions runner (ADR-0013). cloud-init can customize any
+variant. Deliberately outside this repository:
 multi-host scheduling, authentication of remote callers, and long-lived VM fleet management. This is a
 single-host tool with no daemon of its own.
 
@@ -54,6 +56,7 @@ single-host tool with no daemon of its own.
 │  internal/github     gh api calls for --github-ssh-key, on the client              │
 │  internal/tailscale  guest Tailscale join; auth key on stdin only                  │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
+│  internal/notices    LICENSE and NOTICE, embedded so one binary can print them     │
 │  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status,   │
 │                      and the ssh transport for a hypervisor on another machine     │
 └───────────────────────────────────────┬────────────────────────────────────────────┘
@@ -129,7 +132,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -d -json link show type bridge` |
 | OCI pull / build / flatten | `podman pull`, `podman build`, `podman create`, `podman export` |
-| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2 --partition` |
+| Root filesystem → qcow2 | `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G` |
 | Kernel/initrd extraction | `virt-ls`, `virt-copy-out` |
 | Base image generalization | `virt-sysprep --operations machine-id,ssh-hostkeys,…` |
 | Copy-on-write overlay | `qemu-img create -f qcow2 -b … -F qcow2` |
@@ -200,7 +203,10 @@ background worker. Long waits include image builds, the guest boot wait during `
   `virt-make-fs` to produce `base.qcow2` → `virt-ls`/`virt-copy-out` to extract
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and
-  builder tool versions.
+  builder tool versions. `virt-make-fs` gives the base filesystem 1 GiB beyond
+  the exported root, which covers first-boot writes. Cloud-init then grows the
+  root partition to the overlay's virtual size, so `--disk` is what the guest
+  sees.
   Each family also has three variant recipes, each built and cached as a base
   image of its own under `images/<family>-<variant>/<tag>/`, sharing the boot,
   cloud-init, clock, and SSH blocks with the full recipe word for word.
