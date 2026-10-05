@@ -28,6 +28,23 @@ migration or rebuild step a user has to take.
   created with; create it again to pick up this one. The host's own serial
   numbers are not copied into the guest.
 
+### Fixed
+
+- Building an Ubuntu 26.04 base image no longer stops while installing the
+  foreign-architecture emulator. Ubuntu 26.04 replaced `qemu-user-static` with
+  two providers, and apt will not choose between them. The Ubuntu image now
+  installs `qemu-user-binfmt` on 26.04 and later, and keeps `qemu-user-static`
+  on earlier releases, where that package is the one whose binfmt rules carry
+  the fix-binary flag. `docker build --platform` in the guest is unchanged.
+  An image already cached as `ubuntu:26.04` does not pick this up until
+  `agent-vm image build ubuntu --force`.
+- Building an Ubuntu 26.04 base image no longer stops while installing the
+  nested virtualization stack. `qemu-kvm` is a virtual package there, provided
+  by the release's QEMU and by the hardware-enablement build, and apt will not
+  choose between them. The image installs `qemu-system-x86` or
+  `qemu-system-arm`, the concrete package for the architecture being built.
+  Both provide `qemu-kvm`. A guest can still run `virt-install` and `virsh`.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

@@ -1154,8 +1154,12 @@ func TestHerdr_RunsAsADaemonForEveryAccount(t *testing.T) {
 func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 	t.Parallel()
 	packages := map[string][]string{
+		// qemu-kvm is a virtual package on Ubuntu 26.04, provided by both the
+		// release's emulator and the hardware-enablement build. apt will not
+		// choose. The recipe names the concrete package for the architecture
+		// being built; each one provides qemu-kvm.
 		distro.Ubuntu.Containerfile: {
-			"qemu-kvm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
+			"qemu-system-x86", "qemu-system-arm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
 			"dnsmasq-base", "guestfs-tools", "podman",
 		},
 		distro.Fedora.Containerfile: {
@@ -1202,6 +1206,14 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 		// no libvirt at all from inside the guest.
 		if !strings.Contains(recipe, "libvirtd.service") || !strings.Contains(recipe, "virtqemud.service") {
 			t.Errorf("%s does not enable a libvirt daemon; a nested `agent-vm create` would fail to connect", d.Containerfile)
+		}
+	}
+
+	// ubuntu-nix keeps libvirt on apt and copies this install.
+	nix := readTemplate(t, "distro/ubuntu-nix.Containerfile")
+	for _, pkg := range packages[distro.Ubuntu.Containerfile] {
+		if !strings.Contains(nix, pkg) {
+			t.Errorf("ubuntu-nix.Containerfile does not install %q, so a nix guest could not run a VM of its own", pkg)
 		}
 	}
 }
@@ -1345,10 +1357,16 @@ func TestContainerfiles_AllowUnprivilegedPing(t *testing.T) {
 func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
 	t.Parallel()
 	// The package that carries the interpreters, per family. Fedora splits
-	// them per target architecture; Ubuntu and Arch ship one package for
-	// every target, and Arch keeps the binfmt_misc rules in a second one.
+	// them per target architecture. Arch ships one package for every target
+	// and keeps the binfmt_misc rules in a second one. Ubuntu 26.04 publishes
+	// qemu-user-static as a virtual package with two providers, so apt will
+	// not install that name; qemu-user-binfmt is the concrete package and its
+	// rules carry the F flag. On 24.04 and earlier, qemu-user-binfmt's rules
+	// omit the F flag and qemu-user-static is the package that has it. The
+	// recipe selects on the release's major version, and both names have to
+	// stay in the file.
 	packages := map[string][]string{
-		distro.Ubuntu.Containerfile: {"qemu-user-static"},
+		distro.Ubuntu.Containerfile: {"qemu-user-binfmt", "qemu-user-static", `[ "$major" -ge 26 ]`},
 		distro.Fedora.Containerfile: {"qemu-user-static-aarch64", "qemu-user-static-x86"},
 		distro.Arch.Containerfile:   {"qemu-user-static", "qemu-user-static-binfmt"},
 	}
@@ -1387,6 +1405,21 @@ func TestContainerfiles_InstallCrossArchitectureBinfmt(t *testing.T) {
 		}
 		if !strings.Contains(recipe, "sysinit.target.wants/systemd-binfmt.service") {
 			t.Errorf("%s does not check that systemd-binfmt.service is wanted by sysinit.target; the rules would never be registered at boot", d.Containerfile)
+		}
+	}
+
+	// ubuntu-nix keeps Docker on apt and copies this install, rather than
+	// sharing the full recipe's text. The same release split has to be there,
+	// or an Ubuntu 26.04 nix build fails in apt and a 24.04 one registers
+	// rules that docker build --platform cannot use.
+	nixContents, err := templates.FS.ReadFile("distro/ubuntu-nix.Containerfile")
+	if err != nil {
+		t.Fatalf("reading ubuntu-nix.Containerfile: %v", err)
+	}
+	nix := string(nixContents)
+	for _, needle := range packages[distro.Ubuntu.Containerfile] {
+		if !strings.Contains(nix, needle) {
+			t.Errorf("ubuntu-nix.Containerfile does not contain %q; it would not install a user-mode QEMU whose binfmt rules carry the F flag on both Ubuntu 26.04 and 24.04", needle)
 		}
 	}
 }
