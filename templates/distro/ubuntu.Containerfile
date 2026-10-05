@@ -656,7 +656,7 @@ RUN systemctl --root=/ enable docker.service containerd.service
 # --install arm64` inside the running machine. That is the wrong shape for a
 # base image: it needs the daemon up and a registry reachable, so it costs a
 # pull on a VM that may have no route out, and the registration it makes lives
-# in the kernel of that one boot only. The distro's own qemu-user-static
+# in the kernel of that one boot only. The distro's own user-mode QEMU
 # packages ship the same interpreters with binfmt_misc rules under
 # /usr/lib/binfmt.d, which systemd-binfmt.service re-registers on every boot,
 # so an agent finds cross-building already working.
@@ -672,9 +672,25 @@ RUN systemctl --root=/ enable docker.service containerd.service
 # rule for the architecture it is built for, since that one needs no
 # emulation, which is why the check below looks only for the foreign one.
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      qemu-user-static \
+# Ubuntu 26.04 made qemu-user-static a virtual package provided by both
+# qemu-user-binfmt and qemu-user-binfmt-hwe, and apt will not choose between
+# them: `apt-get install qemu-user-static` exits with "no installation
+# candidate" and the image build stops. qemu-user-binfmt is the concrete
+# package. It depends on qemu-user for the static interpreters, and its rules
+# carry the F flag.
+#
+# On 24.04 and earlier that split has not happened, and qemu-user-binfmt's own
+# rules are registered without the F flag. The package that still carries it
+# there is qemu-user-static, so the same install line cannot be used for every
+# release this recipe builds.
+RUN . /etc/os-release \
+ && major=${VERSION_ID%%.*} \
+ && case "$major" in \
+      ''|*[!0-9]*) echo "Ubuntu VERSION_ID is not a numeric release: ${VERSION_ID:-unset}" >&2; exit 1 ;; \
+    esac \
+ && if [ "$major" -ge 26 ]; then pkg=qemu-user-binfmt; else pkg=qemu-user-static; fi \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends "$pkg" \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
@@ -828,9 +844,22 @@ RUN printf '%s\n' \
 # rather than dnsmasq: libvirt starts its own dnsmasq per network, and the full
 # package would additionally enable a system-wide resolver on port 53 that
 # fights with both libvirt's instances and systemd-resolved.
-RUN apt-get update \
+#
+# qemu-kvm is not installed by that name. On Ubuntu 26.04 it is a virtual
+# package provided by both qemu-system-<arch> and qemu-system-<arch>-hwe, and
+# apt will not choose: the image build stops with "no installation candidate".
+# The concrete package is the one for the architecture being built. It
+# provides qemu-kvm, which is the name libvirt's dependency accepts, and it is
+# a real package on 24.04 as well. The hardware-enablement build is the other
+# provider, and installing it would replace the release's QEMU.
+RUN case "$(uname -m)" in \
+      aarch64|arm64) qemu_pkg=qemu-system-arm ;; \
+      x86_64|amd64) qemu_pkg=qemu-system-x86 ;; \
+      *) echo "no QEMU system emulator package for $(uname -m)" >&2; exit 1 ;; \
+    esac \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
-      qemu-kvm \
+      "$qemu_pkg" \
       qemu-utils \
       libvirt-daemon-system \
       libvirt-clients \

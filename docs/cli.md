@@ -614,7 +614,7 @@ instead of on every first boot, and a VM works the same way offline.
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
-| Virtualization | `qemu-kvm`, `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
+| Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
@@ -626,9 +626,14 @@ paths described below.
 Docker can build for a foreign architecture out of the box: `docker build
 --platform linux/arm64 .` works on an x86_64 host, and `--platform
 linux/amd64` works on an aarch64 one. The base image installs the distro's
-`qemu-user-static` packages, whose `binfmt_misc` rules systemd registers at
+user-mode QEMU packages, whose `binfmt_misc` rules systemd registers at
 every boot with the fix-binary flag, so the emulator is reachable from inside
-a build container. Running `docker run --privileged --rm tonistiigi/binfmt
+a build container. On Ubuntu 26.04 and later that package is
+`qemu-user-binfmt`. Earlier Ubuntu releases still install `qemu-user-static`,
+because on those releases `qemu-user-binfmt` registers its rules without the
+fix-binary flag. Fedora and Arch install their `qemu-user-static` packages.
+Ubuntu 26.04 publishes `qemu-user-static` only as a virtual package with two
+providers, and apt will not choose one. Running `docker run --privileged --rm tonistiigi/binfmt
 --install arm64` in the guest is therefore unnecessary; it needs a registry
 round trip and its registration lasts only until the VM reboots. Multi-platform
 manifests in a single build (`docker buildx build --platform
