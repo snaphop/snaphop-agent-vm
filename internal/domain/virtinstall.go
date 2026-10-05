@@ -120,6 +120,8 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 		"--cpu", opts.cpuArg(),
 		"--virt-type", "kvm",
 		"--osinfo", osinfo,
+		// SMBIOS that a guest reads as a physical desktop. See sysinfoArg.
+		"--sysinfo", opts.sysinfoArg(),
 		// --import: there is no installation. The root disk already contains a
 		// system, built from an OCI image (ADR-0003).
 		"--import",
@@ -160,7 +162,13 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 }
 
 // featuresArg renders --features, and reports whether the argument is needed
-// at all. It is needed on one architecture only.
+// at all.
+//
+// On x86, kvm.hidden.state=on tells QEMU to drop the KVM CPUID leaf and the
+// MSR signature. The hypervisor flag itself is cleared on --cpu; this is the
+// KVM-specific half. Both are x86 features. Naming them on aarch64 makes
+// libvirt reject the domain, and the QEMU virt machine's device tree still
+// identifies that machine either way.
 //
 // On aarch64 libvirt refuses a domain that has ACPI but no UEFI firmware
 // ("unsupported configuration: ACPI requires UEFI on this architecture"), and
@@ -173,10 +181,17 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 //
 // x86_64 keeps ACPI: there the guest needs it to see its PCI devices at all.
 func (o CreateOptions) featuresArg() (string, bool) {
-	if armArches[o.Arch] {
-		return "acpi=off", true
+	var parts []string
+	if x86Arches[o.Arch] {
+		parts = append(parts, "kvm.hidden.state=on")
 	}
-	return "", false
+	if armArches[o.Arch] {
+		parts = append(parts, "acpi=off")
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return strings.Join(parts, ","), true
 }
 
 // hotplugsMemory reports whether this VM gets a virtio-mem device. The device
@@ -204,26 +219,36 @@ func (o CreateOptions) memoryArg() string {
 	}, ",")
 }
 
-// cpuArg renders --cpu. A memory device has to be attached to a guest NUMA
-// node, and a guest has no NUMA topology unless one is asked for, so enabling
-// hotplug means declaring a single cell that owns every vCPU and all of the
-// boot memory. libvirt rejects a topology whose cells do not add up to the
-// vCPU count, so the cpus range is derived from VCPUs rather than fixed.
+// cpuArg renders --cpu. host-passthrough is what gives the guest the host's
+// VMX or SVM feature, so it can run VMs of its own. On x86 the hypervisor
+// CPUID flag is disabled on that same model; see the comment at the flag.
 func (o CreateOptions) cpuArg() string {
-	if !o.hotplugsMemory() {
-		return cpuModel
+	parts := []string{cpuModel}
+	if x86Arches[o.Arch] {
+		// The hypervisor CPUID bit is what /proc/cpuinfo lists as "hypervisor"
+		// and what systemd-detect-virt reads. VMX and SVM stay enabled: nested
+		// KVM needs them, and this flag does not turn them off. The feature
+		// exists only on x86; passing it on aarch64 makes virt-install reject
+		// the domain.
+		parts = append(parts, "-hypervisor")
 	}
+	if !o.hotplugsMemory() {
+		return strings.Join(parts, ",")
+	}
+	// A memory device has to be attached to a guest NUMA node, and a guest has
+	// no NUMA topology unless one is asked for. One cell owns every vCPU and
+	// all of the boot memory. libvirt rejects a topology whose cells do not
+	// add up to the vCPU count, so the range is derived from VCPUs.
 	cpus := "0"
 	if o.VCPUs > 1 {
 		cpus = "0-" + strconv.Itoa(o.VCPUs-1)
 	}
-	return strings.Join([]string{
-		cpuModel,
+	return strings.Join(append(parts,
 		"numa.cell0.id=0",
-		"numa.cell0.cpus=" + cpus,
-		"numa.cell0.memory=" + strconv.FormatInt(o.Memory.MiBValue(), 10),
+		"numa.cell0.cpus="+cpus,
+		"numa.cell0.memory="+strconv.FormatInt(o.Memory.MiBValue(), 10),
 		"numa.cell0.unit=MiB",
-	}, ",")
+	), ",")
 }
 
 // memdevArg renders the virtio-mem device. Its size is the growth room, not
@@ -261,9 +286,9 @@ func (o CreateOptions) memdevArg() string {
 func (o CreateOptions) networkArg() (string, error) {
 	switch o.Network {
 	case config.NetworkNAT:
-		return "network=" + o.NATNetwork + ",model=virtio", nil
+		return "network=" + o.NATNetwork + ",model=virtio,mac=" + hardwareMAC(o.Name, o.OverlayPath), nil
 	case config.NetworkBridge:
-		return "bridge=" + o.Bridge + ",model=virtio", nil
+		return "bridge=" + o.Bridge + ",model=virtio,mac=" + hardwareMAC(o.Name, o.OverlayPath), nil
 	default:
 		return "", fmt.Errorf("unknown network mode %q", o.Network)
 	}
