@@ -18,6 +18,16 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- mise no longer waits a day before it will install a release. It skips
+  anything published in the last 24 hours unless `MISE_MINIMUM_RELEASE_AGE`
+  is `0`. Image builds set that on every `mise use`, guests carry it in
+  `/etc/environment`, and `agent-vm update` passes it when it upgrades mise
+  and the tools mise manages. The script that installs the mise binary
+  accepts only a duration with a unit, so that one command uses `0s`, which
+  is the same cutoff. An image already cached does not pick up the
+  build-time setting until `agent-vm image build <distro> --force` (and
+  `<distro>-nix` where that variant is cached). `agent-vm update` on a guest
+  that already exists is not held back.
 - A new VM presents itself as a physical desktop. Firmware identity reported
   inside the guest is an ordinary PC board, an x86 guest no longer advertises
   the hypervisor CPU flag or the KVM signature, and its network address is not
