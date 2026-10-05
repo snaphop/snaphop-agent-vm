@@ -946,7 +946,10 @@ by a missing group.
 A guest can run VMs of its own, including another `agent-vm`. Every VM is given
 the host CPU (`--cpu host-passthrough`), so the guest sees the host's VMX or SVM
 feature and `/dev/kvm` works inside it; the base image sets `nested=1` for both
-KVM modules so a VM inside that VM can nest once more. This needs nested
+KVM modules so a VM inside that VM can nest once more. On x86 that same
+`--cpu` disables the hypervisor CPUID flag, and `--features kvm.hidden.state=on`
+hides the KVM signature. VMX or SVM stays enabled, so nested KVM still works.
+See [Hardware identity](#hardware-identity). This needs nested
 virtualization enabled on the **host** — see
 [host-setup.md](./host-setup.md) — and it is off on some hosts, in which case
 nested `agent-vm` operations cannot use KVM and fail. Other VM tools may
@@ -1095,6 +1098,30 @@ has already defined the domain, and a create interrupted with Ctrl-C or
 `create` exits `7` and lists it, whatever the original failure was.
 `virsh undefine` is never given `--remove-all-storage`; the tool deletes its own
 files after verifying they are inside the state directory.
+
+#### Hardware identity
+
+A new VM presents itself to its own operating system as a physical desktop.
+`virt-install` is given `--sysinfo` SMBIOS values an unconfigured AMI board
+reports (BIOS vendor `American Megatrends Inc.`, manufacturer and product
+`To Be Filled By O.E.M.`), plus a serial derived from the VM name. On x86 it
+is also given `--cpu host-passthrough,-hypervisor` and
+`--features kvm.hidden.state=on`, so `/proc/cpuinfo` has no `hypervisor` flag
+and the KVM signature is not exposed. The guest NIC address is locally
+administered, derived from the VM name and its disk path, and is not the
+QEMU prefix `52:54:00`.
+
+The disk, the NIC, the random-number device, the memory balloon, and the
+guest agent channel stay virtio. Those are how the VM is attached. A program
+inside the guest that inspects PCI vendor IDs, or the guest-agent port name
+`org.qemu.guest_agent.0`, can still tell. On aarch64 the x86 CPU flags are
+not used — naming them makes libvirt reject the domain — and
+`--features acpi=off` stays. The QEMU virt machine's device tree still names
+that machine, which guest tools on aarch64 can see.
+
+The host's own serial numbers are not copied into the guest. Two VMs get
+different serials. A VM defined before this change keeps the identity it was
+created with; recreate it to pick up the new one.
 
 #### Growable Memory
 
@@ -1599,7 +1626,7 @@ table below is the summary.
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on`, `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
@@ -1709,7 +1736,7 @@ answer that goes stale.
     "path": "/home/you/.local/share/agent-vm/images/ubuntu/26.04/base.qcow2"
   },
   "resources": { "vcpus": 2, "memory": "4G", "disk": "50G" },
-  "network": { "mode": "nat", "name": "agent-vm-nat", "mac": "52:54:00:1a:2b:3c" },
+  "network": { "mode": "nat", "name": "agent-vm-nat", "mac": "02:1a:2b:3c:4d:5e" },
   "guest": {
     "user": "agent",
     "sshKeyPaths": ["/home/you/.ssh/id_ed25519.pub"]

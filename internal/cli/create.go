@@ -883,7 +883,8 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		LibvirtURI: uri,
 		// A plan runs nothing, so it cannot ask libvirt what a create asks it:
 		// this machine's architecture stands in. The two differ only when the
-		// hypervisor is another host, and then only in the --features argument.
+		// hypervisor is another host, and then only in the arguments that
+		// depend on architecture: --cpu and --features.
 		Arch:        runtime.GOARCH,
 		VCPUs:       cfg.VCPUs,
 		Memory:      cfg.Memory,

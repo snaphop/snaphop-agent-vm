@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -11,8 +12,11 @@ import (
 
 func natOptions() CreateOptions {
 	return CreateOptions{
-		Name:           "agent-01",
-		LibvirtURI:     "qemu:///system",
+		Name:       "agent-01",
+		LibvirtURI: "qemu:///system",
+		// The golden vectors are what an x86 create emits. create always asks
+		// libvirt for the architecture; the empty-arch case is tested on its own.
+		Arch:           "x86_64",
 		VCPUs:          2,
 		Memory:         4 * config.GiB,
 		OverlayPath:    "/home/operator/.local/share/agent-vm/vms/agent-01/root.qcow2",
@@ -129,8 +133,8 @@ func TestVirtInstallArgs_WithoutMaxMemoryDefinesNoMemoryDevice(t *testing.T) {
 	if value := flagValue(args, "--memory"); value != "4096" {
 		t.Errorf("--memory = %q, want the bare figure", value)
 	}
-	if value := flagValue(args, "--cpu"); value != "host-passthrough" {
-		t.Errorf("--cpu = %q, want no NUMA topology", value)
+	if value := flagValue(args, "--cpu"); value != "host-passthrough,-hypervisor" {
+		t.Errorf("--cpu = %q, want host-passthrough with the hypervisor flag disabled and no NUMA topology", value)
 	}
 }
 
@@ -181,8 +185,8 @@ func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
 	if count := countFlag(nat, "--network"); count != 1 {
 		t.Errorf("--network appears %d times, want exactly 1: %v", count, nat)
 	}
-	if value := flagValue(nat, "--network"); value != "network=agent-vm,model=virtio" {
-		t.Errorf("--network = %q, want the NAT network", value)
+	if value := flagValue(nat, "--network"); value != "network=agent-vm,model=virtio,mac="+hardwareMAC("agent-01", natOptions().OverlayPath) {
+		t.Errorf("--network = %q, want the NAT network and the VM's own MAC", value)
 	}
 
 	// Bridged mode is the one that puts the guest on the operator's LAN, so the
@@ -191,8 +195,8 @@ func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
 	}
-	if value := flagValue(bridged, "--network"); value != "bridge=br0,model=virtio" {
-		t.Errorf("--network = %q, want the host bridge", value)
+	if value := flagValue(bridged, "--network"); value != "bridge=br0,model=virtio,mac="+hardwareMAC("agent-01", bridgeOptions().OverlayPath) {
+		t.Errorf("--network = %q, want the host bridge and the VM's own MAC", value)
 	}
 	if strings.Contains(strings.Join(bridged, " "), "network=agent-vm") {
 		t.Errorf("a bridged VM must not be attached to the NAT network: %v", bridged)
@@ -416,9 +420,9 @@ func contains(args []string, want string) bool {
 	return false
 }
 
-// An aarch64 host is the one architecture that needs a --features argument:
-// libvirt refuses ACPI without UEFI there, and a directly booted kernel has no
-// UEFI (featuresArg).
+// An aarch64 host turns ACPI off: libvirt refuses ACPI without UEFI there, and
+// a directly booted kernel has no UEFI (featuresArg). The x86 hypervisor-hiding
+// flags are not valid on this architecture.
 func TestVirtInstallArgs_AArch64TurnsOffACPI(t *testing.T) {
 	t.Parallel()
 	opts := natOptions()
@@ -440,8 +444,161 @@ func TestVirtInstallArgs_KeepsACPIOnX8664(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VirtInstallArgs: %v", err)
 	}
-	if flagValue(args, "--features") != "" {
-		t.Errorf("--features = %q, want no --features: x86_64 guests need ACPI",
-			flagValue(args, "--features"))
+	if got := flagValue(args, "--features"); got != "kvm.hidden.state=on" {
+		t.Errorf("--features = %q, want kvm.hidden.state=on and ACPI left on", got)
+	}
+}
+
+// TestVirtInstallArgs_PresentsTheGuestAsAPhysicalDesktop is the firmware and
+// CPUID half of the disguise. The strings QEMU would have reported are absent,
+// the x86 hypervisor flag is disabled, and the NIC address is not the QEMU prefix.
+func TestVirtInstallArgs_PresentsTheGuestAsAPhysicalDesktop(t *testing.T) {
+	t.Parallel()
+	args, err := VirtInstallArgs(natOptions())
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	sysinfo := flagValue(args, "--sysinfo")
+	for _, banned := range []string{"QEMU", "SeaBIOS", "Bochs", "BOCHS", "KVM", "Standard PC"} {
+		if strings.Contains(sysinfo, banned) {
+			t.Errorf("--sysinfo contains %q: %s", banned, sysinfo)
+		}
+	}
+	for _, want := range []string{
+		"type=smbios",
+		"bios.vendor=" + firmwareBIOSVendor,
+		"bios.version=" + firmwareBIOSVersion,
+		"bios.date=" + firmwareBIOSDate,
+		"system.serial=" + hardwareSerial("agent-01"),
+		"chassis.asset=" + firmwareOEM,
+		"baseBoard.manufacturer=" + firmwareOEM,
+	} {
+		if !strings.Contains(sysinfo, want) {
+			t.Errorf("--sysinfo = %q, want it to contain %q", sysinfo, want)
+		}
+	}
+	for _, part := range strings.Split(sysinfo, ",") {
+		key, val, ok := strings.Cut(part, "=")
+		if !ok || key == "" || val == "" {
+			t.Errorf("sysinfo suboption %q is not key=value", part)
+		}
+		if strings.ContainsAny(val, `"'=\`) {
+			t.Errorf("sysinfo value %q contains a character virt-install's parser treats specially", val)
+		}
+	}
+	if got := flagValue(args, "--cpu"); !strings.Contains(got, "-hypervisor") {
+		t.Errorf("--cpu = %q, want the hypervisor flag disabled", got)
+	}
+	if got := flagValue(args, "--features"); got != "kvm.hidden.state=on" {
+		t.Errorf("--features = %q, want the KVM signature hidden", got)
+	}
+	network := flagValue(args, "--network")
+	mac := hardwareMAC(natOptions().Name, natOptions().OverlayPath)
+	if !strings.Contains(network, "mac="+mac) {
+		t.Errorf("--network = %q, want mac=%s", network, mac)
+	}
+	if strings.Contains(network, "52:54:00:") {
+		t.Errorf("--network = %q, want no QEMU MAC prefix", network)
+	}
+}
+
+func TestVirtInstallArgs_HidesTheHypervisorOnEveryX86Name(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"x86_64", "amd64", "i686", "386"} {
+		opts := natOptions()
+		opts.Arch = arch
+		args, err := VirtInstallArgs(opts)
+		if err != nil {
+			t.Fatalf("VirtInstallArgs arch %s: %v", arch, err)
+		}
+		if !strings.Contains(flagValue(args, "--cpu"), "-hypervisor") {
+			t.Errorf("arch %s --cpu = %q, want -hypervisor", arch, flagValue(args, "--cpu"))
+		}
+		if got := flagValue(args, "--features"); got != "kvm.hidden.state=on" {
+			t.Errorf("arch %s --features = %q, want kvm.hidden.state=on", arch, got)
+		}
+	}
+}
+
+func TestVirtInstallArgs_LeavesX86HypervisorFlagsOffARM(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"aarch64", "arm64"} {
+		opts := natOptions()
+		opts.Arch = arch
+		args, err := VirtInstallArgs(opts)
+		if err != nil {
+			t.Fatalf("VirtInstallArgs arch %s: %v", arch, err)
+		}
+		cpu := flagValue(args, "--cpu")
+		if strings.Contains(cpu, "hypervisor") {
+			t.Errorf("arch %s --cpu = %q, want no hypervisor feature", arch, cpu)
+		}
+		if got := flagValue(args, "--features"); got != "acpi=off" {
+			t.Errorf("arch %s --features = %q, want acpi=off only", arch, got)
+		}
+		if flagValue(args, "--sysinfo") == "" {
+			t.Errorf("arch %s has no --sysinfo", arch)
+		}
+	}
+}
+
+func TestVirtInstallArgs_OmitsX86FlagsWhenTheArchitectureIsUnknown(t *testing.T) {
+	t.Parallel()
+	opts := natOptions()
+	opts.Arch = ""
+	args, err := VirtInstallArgs(opts)
+	if err != nil {
+		t.Fatalf("VirtInstallArgs: %v", err)
+	}
+	if got := flagValue(args, "--cpu"); got != "host-passthrough" {
+		t.Errorf("--cpu = %q, want host-passthrough with no x86-only feature", got)
+	}
+	if got := flagValue(args, "--features"); got != "" {
+		t.Errorf("--features = %q, want none when the architecture is unknown", got)
+	}
+	if flagValue(args, "--sysinfo") == "" {
+		t.Error("firmware identity does not depend on the architecture")
+	}
+}
+
+func TestHardwareIdentity_IsStableAndNotAQEMUAddress(t *testing.T) {
+	t.Parallel()
+	const (
+		name    = "agent-01"
+		overlay = "/home/operator/.local/share/agent-vm/vms/agent-01/root.qcow2"
+	)
+	serial := hardwareSerial(name)
+	if serial != hardwareSerial(name) {
+		t.Fatal("serial changed for the same name")
+	}
+	if serial == hardwareSerial("agent-02") {
+		t.Fatal("two VM names share a serial")
+	}
+	if strings.ContainsAny(serial, ",='\"\\ ") {
+		t.Fatalf("serial %q is not safe inside a virt-install suboption", serial)
+	}
+
+	mac := hardwareMAC(name, overlay)
+	if mac != hardwareMAC(name, overlay) {
+		t.Fatal("MAC changed for the same name and disk")
+	}
+	if mac == hardwareMAC("agent-02", overlay) {
+		t.Fatal("two VM names share a MAC")
+	}
+	if mac == hardwareMAC(name, overlay+"-other") {
+		t.Fatal("two disk paths share a MAC")
+	}
+	if strings.HasPrefix(mac, "52:54:00:") {
+		t.Fatalf("MAC %s uses the QEMU prefix", mac)
+	}
+	parsed, err := net.ParseMAC(mac)
+	if err != nil {
+		t.Fatalf("MAC %s: %v", mac, err)
+	}
+	if parsed[0]&0x01 != 0 {
+		t.Fatalf("MAC %s is multicast", mac)
+	}
+	if parsed[0]&0x02 == 0 {
+		t.Fatalf("MAC %s is not locally administered", mac)
 	}
 }

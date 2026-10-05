@@ -16,6 +16,18 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Changed
+
+- A new VM presents itself as a physical desktop. Firmware identity reported
+  inside the guest is an ordinary PC board, an x86 guest no longer advertises
+  the hypervisor CPU flag or the KVM signature, and its network address is not
+  the QEMU address prefix. The disk, network card, and guest agent stay
+  virtio. Nested virtualization is unchanged: the guest still sees the host's
+  VMX or SVM feature. On aarch64 the machine's device tree still identifies
+  the QEMU virt machine. A VM that already exists keeps the identity it was
+  created with; create it again to pick up this one. The host's own serial
+  numbers are not copied into the guest.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

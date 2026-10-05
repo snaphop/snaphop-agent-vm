@@ -272,7 +272,9 @@ background worker. Long waits include image builds, the guest boot wait during `
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,
   `--network`, `--memory`, `--vcpus`, `--cpu host-passthrough` (which is what
   gives a guest the host's virtualization features, so it can run VMs of its
-  own), `--graphics none`, serial console with a log file, `--rng`,
+  own; on x86 the hypervisor CPUID flag is disabled on that model), `--sysinfo`
+  SMBIOS values for a physical desktop, `--features kvm.hidden.state=on` on x86,
+  `--graphics none`, serial console with a log file, `--rng`,
   `--memballoon virtio`, and the guest agent channel. This is what golden tests
   pin.
 - **Key dependencies:** `virt-install` (4.0+), `virsh`, `qemu-img` (overlays and disk facts), libvirt (9.0+), QEMU (8.0+).
@@ -295,8 +297,9 @@ background worker. Long waits include image builds, the guest boot wait during `
   is active (`virsh net-list`, then `net-define` from the embedded network XML,
   `net-start`, `net-autostart`). Bridge mode — validate with `ip -d -json link show
   type bridge` that the named bridge exists and is up, then pass
-  `--network bridge=<iface>` to `virt-install`. MAC allocation is left to
-  `virt-install`/libvirt and read back from `virsh domiflist` into `vm.json`.
+  `--network bridge=<iface>` to `virt-install`. The guest MAC is a locally
+  administered address derived from the VM name and its disk path, passed on
+  `--network`, and read back from `virsh domiflist` into `vm.json`.
 - **Failure behavior:** a missing or down bridge is a host-readiness failure
   (exit `3`) with the `nmcli`/`ip` command needed to fix it, not a half-created
   VM. The tool never creates, modifies, or deletes host bridges, and never edits
@@ -443,12 +446,15 @@ background worker. Long waits include image builds, the guest boot wait during `
 7. **Ensure networking.** `virsh net-list`/`net-define`/`net-start` for the NAT
    network, or `ip -d -json link` validation of the bridge.
 8. **Define and start.** Read the hypervisor's architecture with `virsh
-   capabilities` — it decides the arguments that cannot be the same everywhere,
-   currently `--features acpi=off` on aarch64, where libvirt refuses ACPI
-   without UEFI and a directly booted kernel has none. Then one `virt-install
-   --import --boot kernel=…,initrd=…` run defines and starts the domain, with
-   the serial console logged to `console.log`. The exact argv is logged and
-   recorded.
+   capabilities` — it decides the arguments that cannot be the same everywhere.
+   On aarch64 that is `--features acpi=off`, because libvirt refuses ACPI
+   without UEFI and a directly booted kernel has none. On x86 it is
+   `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`,
+   so the guest CPU does not advertise a hypervisor. Every architecture gets
+   `--sysinfo` SMBIOS values for a physical desktop and a locally administered
+   MAC. Then one `virt-install --import --boot kernel=…,initrd=…` run defines
+   and starts the domain, with the serial console logged to `console.log`.
+   The exact argv is logged and recorded.
 9. **Record.** Read the MAC with `virsh domiflist`, capture `virsh dumpxml` to
    `domain.xml`, and write `vm.json` (including the `virt-install` version and
    argv). Recording happens *before* the wait, so that a VM left in place by a
