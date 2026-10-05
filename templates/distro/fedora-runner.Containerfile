@@ -286,6 +286,29 @@ RUN set -eu; \
 RUN systemctl --root=/ enable qemu-guest-agent.service \
  || echo "qemu-guest-agent has no [Install] section here; it is udev-activated instead"
 
+# Ubuntu 26.04's unit carries ConditionVirtualization=vm. A new guest is
+# presented as a physical desktop, so systemd-detect-virt reports "none" and
+# that condition skips the agent: the virtio port is there, udev asks for the
+# service, and systemd never starts it. Bridged create learns the address only
+# from this agent, so the create runs out its wait and reports that the guest
+# agent is not connected, while the guest has booted and already has an
+# address.
+#
+# An empty ConditionVirtualization= in a drop-in clears the vendor condition.
+# A unit that does not carry one is left as the distro shipped it.
+RUN set -eu; \
+    unit=""; \
+    for candidate in /usr/lib/systemd/system/qemu-guest-agent.service \
+                     /lib/systemd/system/qemu-guest-agent.service; do \
+      if [ -f "${candidate}" ]; then unit="${candidate}"; break; fi; \
+    done; \
+    test -n "${unit}"; \
+    if grep -q '^ConditionVirtualization=' "${unit}"; then \
+      mkdir -p /etc/systemd/system/qemu-guest-agent.service.d; \
+      printf '%s\n' '[Unit]' 'ConditionVirtualization=' \
+        > /etc/systemd/system/qemu-guest-agent.service.d/10-agent-vm-start-without-virt-detection.conf; \
+    fi
+
 RUN printf '/dev/vda1 / ext4 defaults 0 1\n' > /etc/fstab
 
 # NoCloud only: a guest must never probe a metadata service on the network.

@@ -30,6 +30,15 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- A bridged Ubuntu 26.04 guest reports its address again. That release's QEMU
+  guest agent starts only when systemd decides the machine is a virtual
+  machine. A new guest is presented as a physical desktop, so systemd skipped
+  the agent: the guest booted and had an address, and `create` still timed out
+  saying the guest agent was not connected. The image clears that condition.
+  An image already cached does not pick this up until
+  `agent-vm image build <distro> --force` for each tag built from these
+  recipes. Ubuntu 24.04 and the other families are unchanged when their unit
+  does not carry the condition.
 - Building an Ubuntu 26.04 base image no longer stops while installing the
   foreign-architecture emulator. Ubuntu 26.04 replaced `qemu-user-static` with
   two providers, and apt will not choose between them. The Ubuntu image now
