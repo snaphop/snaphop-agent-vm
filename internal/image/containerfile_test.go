@@ -1595,6 +1595,7 @@ var bootAndCloudInitContract = []struct{ needle, why string }{
 	{"chrony-wait.service", "a guest could be handed over with a clock weeks out"},
 	{"After=time-sync.target", "SSH would answer before the clock was correct"},
 	{"qemu-guest-agent.service", "the host could not query the guest"},
+	{"10-agent-vm-start-without-virt-detection.conf", "Ubuntu 26.04 would skip the guest agent on a guest presented as hardware"},
 	{"/dev/vda1 / ext4 defaults 0 1", "systemd's fstab generator would disagree with the kernel about the root filesystem"},
 	{"net.ipv4.ping_group_range", "an unprivileged account could not run ping"},
 }

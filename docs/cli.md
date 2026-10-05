@@ -1124,6 +1124,13 @@ not used — naming them makes libvirt reject the domain — and
 `--features acpi=off` stays. The QEMU virt machine's device tree still names
 that machine, which guest tools on aarch64 can see.
 
+The guest agent still starts. Ubuntu 26.04 ships
+`qemu-guest-agent.service` with `ConditionVirtualization=vm`, and this
+identity is one `systemd-detect-virt` reports as a physical machine. The
+image clears that condition, so the agent runs and a bridged guest can report
+its address. A cached image picks the drop-in up on the next
+`agent-vm image build <distro> --force`.
+
 The host's own serial numbers are not copied into the guest. Two VMs get
 different serials. A VM defined before this change keeps the identity it was
 created with; recreate it to pick up the new one.
