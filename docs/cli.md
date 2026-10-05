@@ -797,6 +797,14 @@ new account before cloud-init could get to the SSH keys: about nine seconds
 added to every VM's first boot, and 1.7 GiB written into its copy-on-write
 overlay. A symlink costs neither.
 
+mise skips a release for 24 hours after it is published unless
+`MISE_MINIMUM_RELEASE_AGE` is `0`. That variable is set in `/etc/environment`,
+so a later `mise use` or `mise upgrade` in the guest takes the newest release,
+and each `mise use` during the image build sets it too, because a build step
+does not read `/etc/environment`. The script that installs the `mise` binary
+rejects a bare `0` and wants a unit, so that one command uses `0s`, the same
+cutoff. An image already cached does not pick this up until it is rebuilt.
+
 The newest Temurin JDK mise offers and Maven are installed into that store
 during the build, so every account has `java` and `mvn` without downloading anything —
 which also works when the guest cannot reach download servers. Neither version is pinned:
@@ -1451,9 +1459,9 @@ Then the rest of what a guest carries, in this order:
 | Step | What it runs | As |
 |---|---|---|
 | root's mise temporary directory | `mkdir -p -- /root/.cache/mise-tmp` | root |
-| `mise` itself | `mise self-update --yes`, which also refreshes its plugins, with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
-| root's mise-managed tools | `mise upgrade --yes` with `HOME=/root` and `TMPDIR=/root/.cache/mise-tmp` | root |
-| the guest user's mise-managed tools | `mise upgrade --yes` | the guest user |
+| `mise` itself | `mise self-update --yes`, which also refreshes its plugins, with `HOME=/root`, `TMPDIR=/root/.cache/mise-tmp`, and `MISE_MINIMUM_RELEASE_AGE=0` | root |
+| root's mise-managed tools | `mise upgrade --yes` with `HOME=/root`, `TMPDIR=/root/.cache/mise-tmp`, and `MISE_MINIMUM_RELEASE_AGE=0` | root |
+| the guest user's mise-managed tools | `mise upgrade --yes` with `MISE_MINIMUM_RELEASE_AGE=0` | the guest user |
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` | root |
 
@@ -1478,6 +1486,10 @@ directory is created first. `mise self-update` downloads the replacement
 binary into a file directly under `$TMPDIR` and does not create that
 directory, so an update against a guest that has never had the path stops
 with "No such file or directory" before replacing anything.
+Those mise steps also set `MISE_MINIMUM_RELEASE_AGE=0`. mise otherwise skips a
+release for 24 hours after it is published, and `sudo` does not keep the
+`/etc/environment` line a newly built image sets. Passing it on the command
+covers a guest built before that line existed.
 Before each tooling step the guest is asked whether it has the command at all; a
 VM built from an image that predates one — or from an image you built yourself —
 skips that step and reports it, rather than failing the update.

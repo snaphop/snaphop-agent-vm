@@ -295,8 +295,18 @@ RUN set -eu; \
 # The binary goes in /usr/local/bin so that `mise` is on the default PATH for
 # every account, and what it installs goes in /usr/local/lib/mise, one store
 # shared by every account rather than a copy in each home.
+#
+# mise skips a release for 24 hours after it is published unless
+# MISE_MINIMUM_RELEASE_AGE is 0. A zero duration is how it turns that cutoff
+# off, so the tools below and a later `mise use` in the guest are the newest
+# release rather than yesterday's. /etc/environment is what sshd gives a
+# non-interactive session through PAM. A build step does not read that file,
+# so the mise invocation below sets the variable itself. The bootstrap
+# installer is a shell script that only accepts a duration with a unit, and a
+# bare 0 makes it abort, so that one command uses 0s -- the same cutoff.
 RUN set -eu; \
-    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh; \
+    printf 'MISE_MINIMUM_RELEASE_AGE=0\n' >> /etc/environment; \
+    curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise MISE_MINIMUM_RELEASE_AGE=0s sh; \
     install -d -m 0755 /usr/local/lib/mise
 
 # The versions are deliberately unpinned, like the vendor installers below:
@@ -308,6 +318,7 @@ RUN set -eu; \
     MISE_CONFIG_DIR=/etc/skel/.config/mise \
     MISE_STATE_DIR=/etc/skel/.local/state/mise \
     MISE_CACHE_DIR=/tmp/mise-cache \
+    MISE_MINIMUM_RELEASE_AGE=0 \
       PATH="/usr/local/bin:${PATH}" \
       mise use --global --yes pi herdr agy npm:@xai-official/grok; \
     rm -rf /tmp/mise-cache /tmp/fslock /usr/local/lib/mise/downloads

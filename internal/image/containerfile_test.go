@@ -943,6 +943,63 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 	}
 }
 
+// TestContainerfiles_DoNotHoldBackMiseReleases covers mise's default of
+// skipping a release for 24 hours after it is published. The image sets
+// MISE_MINIMUM_RELEASE_AGE=0 so a build and a later mise use in the guest
+// take the newest release. The bootstrap installer rejects a bare 0, so that
+// one command uses 0s, which is the same cutoff.
+func TestContainerfiles_DoNotHoldBackMiseReleases(t *testing.T) {
+	t.Parallel()
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		for _, file := range []string{d.Containerfile, d.NixContainerfile} {
+			contents, err := templates.FS.ReadFile("distro/" + file)
+			if err != nil {
+				t.Fatalf("reading %s: %v", file, err)
+			}
+			recipe := string(contents)
+			if !strings.Contains(recipe, "printf 'MISE_MINIMUM_RELEASE_AGE=0\\n' >> /etc/environment") {
+				t.Errorf("%s does not set MISE_MINIMUM_RELEASE_AGE=0 in /etc/environment; a later mise command in the guest skips releases from the last 24 hours", file)
+			}
+			if !strings.Contains(recipe, "MISE_INSTALL_PATH=/usr/local/bin/mise MISE_MINIMUM_RELEASE_AGE=0s") {
+				t.Errorf("%s does not set MISE_MINIMUM_RELEASE_AGE=0s on the mise installer; that script rejects a bare 0 and otherwise installs a binary at least 24 hours old", file)
+			}
+			// Comments mention `mise use` while explaining the contract, so only
+			// a command line counts. The age has to be on that same RUN: a
+			// build step does not read /etc/environment.
+			var run strings.Builder
+			uses := 0
+			for _, line := range strings.Split(recipe, "\n") {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "RUN") {
+					run.Reset()
+				}
+				if strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				run.WriteString(line)
+				run.WriteByte('\n')
+				if !strings.Contains(trimmed, "mise use") {
+					continue
+				}
+				uses++
+				body := run.String()
+				if !strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0 ") &&
+					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0;") &&
+					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0\n") {
+					t.Errorf("%s runs mise use without MISE_MINIMUM_RELEASE_AGE=0, so the build installs a release at least 24 hours old:\n%s", file, body)
+				}
+			}
+			if uses == 0 {
+				t.Errorf("%s installs nothing with mise", file)
+			}
+		}
+	}
+}
+
 // TestUserSetupScript_DoesEveryJobItIsThereFor guards the first-boot script
 // that finishes every interactive account.
 //

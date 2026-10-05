@@ -219,6 +219,14 @@ const (
 // runs first.
 const rootMiseTmpDir = "/root/.cache/mise-tmp"
 
+// miseMinimumReleaseAge turns off the 24 hours mise otherwise waits before it
+// will install a release. A zero duration is the value mise treats as no
+// cutoff. The image also writes it to /etc/environment, which sshd applies
+// through PAM, but sudo's env_reset drops that, and a guest built before the
+// line existed has nothing to drop. Naming it here is what makes an update
+// of either account take the newest release.
+const miseMinimumReleaseAge = "MISE_MINIMUM_RELEASE_AGE=0"
+
 // ToolingUpdate is what `agent-vm update` runs in every guest, whatever its
 // family, after that family's PackageUpdate. It covers the software the base
 // images install from outside the distro's repositories — which no package
@@ -254,17 +262,20 @@ func ToolingUpdate(user string) []UpdateStep {
 		// named explicitly because sudo's env_reset decides it otherwise, and
 		// self-update also refreshes the plugins under that home. TMPDIR is
 		// named for the reason rootMiseTmpDir documents.
+		// MISE_MINIMUM_RELEASE_AGE is named for the reason
+		// miseMinimumReleaseAge documents: without it, self-update and the
+		// upgrades below skip a release for a day.
 		{
 			Name:     "updating mise",
 			Root:     true,
 			Requires: "mise",
-			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, "mise", "self-update", "--yes"},
+			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, miseMinimumReleaseAge, "mise", "self-update", "--yes"},
 		},
 		{
 			Name:     "upgrading root's mise-managed tools",
 			Root:     true,
 			Requires: "mise",
-			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, "mise", "upgrade", "--yes"},
+			Argv:     []string{"env", "HOME=/root", "TMPDIR=" + rootMiseTmpDir, miseMinimumReleaseAge, "mise", "upgrade", "--yes"},
 		},
 	}
 	if user != "root" {
@@ -274,7 +285,7 @@ func ToolingUpdate(user string) []UpdateStep {
 		steps = append(steps, UpdateStep{
 			Name:     "upgrading " + user + "'s mise-managed tools",
 			Requires: "mise",
-			Argv:     []string{"mise", "upgrade", "--yes"},
+			Argv:     []string{"env", miseMinimumReleaseAge, "mise", "upgrade", "--yes"},
 		})
 	}
 	return append(steps,

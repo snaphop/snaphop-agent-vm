@@ -94,8 +94,8 @@ func TestToolingUpdate_UpgradesBothAccountsMiseInstallations(t *testing.T) {
 	if len(perUser) != 1 {
 		t.Fatalf("want exactly one unelevated step, the guest user's own mise: %+v", perUser)
 	}
-	if got := strings.Join(perUser[0].Argv, " "); got != "mise upgrade --yes" {
-		t.Errorf("the guest user's step = %q, want mise upgrade --yes", got)
+	if got := strings.Join(perUser[0].Argv, " "); got != "env "+miseMinimumReleaseAge+" mise upgrade --yes" {
+		t.Errorf("the guest user's step = %q, want mise upgrade --yes with the release-age cutoff off", got)
 	}
 	if !strings.Contains(perUser[0].Name, "agent") {
 		t.Errorf("the step name should say whose tools it upgrades: %q", perUser[0].Name)
@@ -107,7 +107,7 @@ func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
 	steps := ToolingUpdate("root")
 	upgrades := 0
 	for _, step := range steps {
-		if strings.Join(step.Argv, " ") == "env HOME=/root TMPDIR="+rootMiseTmpDir+" mise upgrade --yes" {
+		if strings.Join(step.Argv, " ") == "env HOME=/root TMPDIR="+rootMiseTmpDir+" "+miseMinimumReleaseAge+" mise upgrade --yes" {
 			upgrades++
 		}
 		if !step.Root {
@@ -188,6 +188,28 @@ func TestToolingUpdate_CreatesTheMiseTmpDirBeforeSelfUpdate(t *testing.T) {
 	}
 	if mkdirAt > selfUpdateAt {
 		t.Errorf("mkdir at step %d runs after mise self-update at step %d", mkdirAt, selfUpdateAt)
+	}
+}
+
+// TestToolingUpdate_DoesNotHoldBackMiseReleases covers mise's default of
+// skipping a release for 24 hours after it is published. Every mise step has
+// to set the cutoff to zero, including the guest user's: sudo is not the only
+// way to lose /etc/environment, and a guest built before that line existed
+// has none.
+func TestToolingUpdate_DoesNotHoldBackMiseReleases(t *testing.T) {
+	t.Parallel()
+	sawMise := false
+	for _, step := range ToolingUpdate("agent") {
+		if !containsArg(step.Argv, "mise") {
+			continue
+		}
+		sawMise = true
+		if !containsArg(step.Argv, miseMinimumReleaseAge) {
+			t.Errorf("%q lets mise skip releases from the last 24 hours: %v", step.Name, step.Argv)
+		}
+	}
+	if !sawMise {
+		t.Fatal("the mise steps disappeared")
 	}
 }
 
