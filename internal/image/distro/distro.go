@@ -198,6 +198,11 @@ const (
 	codexHome  = "/usr/local/lib/codex"
 	rustupHome = "/usr/local/rustup"
 	cargoHome  = "/usr/local/cargo"
+	// miseStore is the one toolchain store every account shares. The
+	// Containerfiles create it, and each account's ~/.local/share/mise is a
+	// symlink to it. Selector links (latest, a version prefix) live directly
+	// inside installs/<tool>/, beside the version directories.
+	miseStore = "/usr/local/lib/mise"
 )
 
 // rootMiseTmpDir keeps root's mise out of the lock directory the guest user's
@@ -310,6 +315,28 @@ func ToolingUpdate(user string) []UpdateStep {
 		},
 	}
 	if user != "root" {
+		// Root's upgrade just above rewrites the store's selector symlinks
+		// (latest, a version prefix such as temurin-25) and owns whatever it
+		// recreates. mise 2026.10.3 does that rewrite again for the account
+		// that is upgrading, and exits if any unlink fails. The store is
+		// sticky, so the guest user cannot remove a link root owns — "Operation
+		// not permitted", os error 1 — and the whole update stops after the
+		// tools themselves have already moved. Handing the links over, and
+		// only the links, lets this account retarget or drop one. find stays
+		// at that one directory level, and chown -h changes the symlink rather
+		// than the version directory it names, so the sticky bit still stops
+		// one account from removing another's install.
+		steps = append(steps, UpdateStep{
+			Name:     "handing mise's runtime symlinks to " + user,
+			Root:     true,
+			Requires: "mise",
+			Argv: []string{
+				"find", miseStore + "/installs",
+				"-mindepth", "2", "-maxdepth", "2",
+				"-type", "l",
+				"-exec", "chown", "-h", user, "{}", "+",
+			},
+		})
 		// Unelevated on purpose: this bumps the account's own mise
 		// configuration, and running it through sudo would bump root's twice
 		// and leave this account on the versions the image shipped.

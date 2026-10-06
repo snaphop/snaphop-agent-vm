@@ -268,6 +268,10 @@ func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
 		"sudo -n mkdir -p -- /root/.cache/mise-tmp",
 		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0s mise self-update --yes",
 		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0s mise upgrade --yes",
+		// Root's upgrade owns the selector symlinks it rewrites. The guest
+		// user's upgrade removes one it needs to retarget, and a sticky store
+		// refuses that with EPERM unless the link is theirs.
+		"sudo -n find /usr/local/lib/mise/installs -mindepth 2 -maxdepth 2 -type l -exec chown -h agent {} +",
 		// The guest user's own mise data directory, so not through sudo: root's
 		// copy and this account's copy are separate installations. The release
 		// age is named here too: an image built before /etc/environment carried

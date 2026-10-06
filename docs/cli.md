@@ -789,7 +789,9 @@ each, and never contend. Every directory in the store is writable with the
 sticky bit, the way `/tmp` and the Playwright browser directory are: any account
 may install a tool, none may remove another's. That is defensible for the same
 reason those are — the VM is the sandbox, single-tenant and disposable, and the
-accounts inside it are not a security boundary.
+accounts inside it are not a security boundary. The selector symlinks beside a
+version (`latest`, a prefix such as `temurin-25`) are the exception mise itself
+rewrites: see `agent-vm update` below.
 
 Sharing the store is also what keeps first boot fast. The toolchain is around
 1.7 GiB, and when it lived in `/etc/skel` `useradd` copied all of it into the
@@ -1464,6 +1466,7 @@ Then the rest of what a guest carries, in this order:
 | root's mise temporary directory | `mkdir -p -- /root/.cache/mise-tmp` | root |
 | `mise` itself | `mise self-update --yes`, which also refreshes its plugins, with `HOME=/root`, `TMPDIR=/root/.cache/mise-tmp`, and `MISE_MINIMUM_RELEASE_AGE=0s` | root |
 | root's mise-managed tools | `mise upgrade --yes` with `HOME=/root`, `TMPDIR=/root/.cache/mise-tmp`, and `MISE_MINIMUM_RELEASE_AGE=0s` | root |
+| mise's runtime symlinks | `find /usr/local/lib/mise/installs -mindepth 2 -maxdepth 2 -type l -exec chown -h <guest user> {} +` | root |
 | the guest user's mise-managed tools | `mise upgrade --yes` with `MISE_MINIMUM_RELEASE_AGE=0s` | the guest user |
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` | root |
@@ -1476,8 +1479,17 @@ for both accounts because `mise`'s configuration is per account — the installs
 are in one shared store, but which version each account uses is recorded under
 its own home, and both accounts are in use. The second run is cheap: whatever
 the first one installed is already in the store, so only the configuration
-moves. `codex` and Rust are shared, root-owned installations, so each is updated
-once for the whole VM.
+moves. Between the two, the selector symlinks in that store — `latest` and a
+version prefix such as `temurin-25`, the entries directly inside
+`installs/<tool>/` — are given to the guest user. mise rewrites those links at
+the end of an upgrade and exits if it cannot remove the old one. Root's upgrade
+runs first and owns the links it rewrites, and the store is sticky, so the
+guest user's upgrade was refused with "Operation not permitted" and the update
+stopped. `chown -h` changes the link itself, not the version directory it
+points at, and `find` does not descend into those directories, so one account
+still cannot remove another's install. A guest whose user is root has only the
+one upgrade and skips the hand-off. `codex` and Rust are shared, root-owned
+installations, so each is updated once for the whole VM.
 
 Steps run as root go through `sudo -n` as the guest user, which cloud-init grants
 passwordless sudo, and the guest's own output is streamed to stderr as it runs.
@@ -1660,7 +1672,7 @@ table below is the summary.
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
-| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
+| `update` | `virsh domstate`, `virsh domifaddr`, then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `find`/`chown -h` (the shared store's selector symlinks, handed to the guest user), `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
