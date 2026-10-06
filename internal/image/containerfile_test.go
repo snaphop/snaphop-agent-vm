@@ -945,9 +945,9 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 
 // TestContainerfiles_DoNotHoldBackMiseReleases covers mise's default of
 // skipping a release for 24 hours after it is published. The image sets
-// MISE_MINIMUM_RELEASE_AGE=0 so a build and a later mise use in the guest
-// take the newest release. The bootstrap installer rejects a bare 0, so that
-// one command uses 0s, which is the same cutoff.
+// MISE_MINIMUM_RELEASE_AGE=0s so a build and a later mise use in the guest
+// take the newest release. A bare 0 is not a duration: mise 2026.10.2 rejects
+// it while choosing a self-update, and the bootstrap installer rejects it too.
 func TestContainerfiles_DoNotHoldBackMiseReleases(t *testing.T) {
 	t.Parallel()
 	for _, name := range distro.Names() {
@@ -961,8 +961,13 @@ func TestContainerfiles_DoNotHoldBackMiseReleases(t *testing.T) {
 				t.Fatalf("reading %s: %v", file, err)
 			}
 			recipe := string(contents)
-			if !strings.Contains(recipe, "printf 'MISE_MINIMUM_RELEASE_AGE=0\\n' >> /etc/environment") {
-				t.Errorf("%s does not set MISE_MINIMUM_RELEASE_AGE=0 in /etc/environment; a later mise command in the guest skips releases from the last 24 hours", file)
+			if !strings.Contains(recipe, "printf 'MISE_MINIMUM_RELEASE_AGE=0s\\n' >> /etc/environment") {
+				t.Errorf("%s does not set MISE_MINIMUM_RELEASE_AGE=0s in /etc/environment; a later mise command in the guest skips releases from the last 24 hours, and a bare 0 makes mise self-update refuse to start", file)
+			}
+			if strings.Contains(recipe, "MISE_MINIMUM_RELEASE_AGE=0\\n") ||
+				strings.Contains(recipe, "MISE_MINIMUM_RELEASE_AGE=0 ") ||
+				strings.Contains(recipe, "MISE_MINIMUM_RELEASE_AGE=0;") {
+				t.Errorf("%s still sets MISE_MINIMUM_RELEASE_AGE=0; mise 2026.10.2 rejects that duration", file)
 			}
 			if !strings.Contains(recipe, "MISE_INSTALL_PATH=/usr/local/bin/mise MISE_MINIMUM_RELEASE_AGE=0s") {
 				t.Errorf("%s does not set MISE_MINIMUM_RELEASE_AGE=0s on the mise installer; that script rejects a bare 0 and otherwise installs a binary at least 24 hours old", file)
@@ -987,10 +992,10 @@ func TestContainerfiles_DoNotHoldBackMiseReleases(t *testing.T) {
 				}
 				uses++
 				body := run.String()
-				if !strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0 ") &&
-					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0;") &&
-					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0\n") {
-					t.Errorf("%s runs mise use without MISE_MINIMUM_RELEASE_AGE=0, so the build installs a release at least 24 hours old:\n%s", file, body)
+				if !strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0s ") &&
+					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0s;") &&
+					!strings.Contains(body, "MISE_MINIMUM_RELEASE_AGE=0s\n") {
+					t.Errorf("%s runs mise use without MISE_MINIMUM_RELEASE_AGE=0s, so the build installs a release at least 24 hours old:\n%s", file, body)
 				}
 			}
 			if uses == 0 {

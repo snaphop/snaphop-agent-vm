@@ -220,12 +220,21 @@ const (
 const rootMiseTmpDir = "/root/.cache/mise-tmp"
 
 // miseMinimumReleaseAge turns off the 24 hours mise otherwise waits before it
-// will install a release. A zero duration is the value mise treats as no
-// cutoff. The image also writes it to /etc/environment, which sshd applies
-// through PAM, but sudo's env_reset drops that, and a guest built before the
-// line existed has nothing to drop. Naming it here is what makes an update
-// of either account take the newest release.
-const miseMinimumReleaseAge = "MISE_MINIMUM_RELEASE_AGE=0"
+// will install a release. 0s is a zero duration, which is the value mise
+// treats as no cutoff. A bare 0 is not: mise 2026.10.2's self-update parser
+// rejects it ("Invalid date or duration: 0") and stops before replacing the
+// binary, and the mise.run installer rejects it the same way. The image also
+// writes 0s to /etc/environment, which sshd applies through PAM, but sudo's
+// env_reset drops that, and a guest built before the line existed has nothing
+// to drop. Naming it here is what makes an update of either account take the
+// newest release.
+const miseMinimumReleaseAge = "MISE_MINIMUM_RELEASE_AGE=0s"
+
+// bareMiseReleaseAgeLine is the /etc/environment entry written before mise
+// started rejecting a bare 0. The rewrite matches that line and no other, so
+// a second update does not turn 0s into 0ss.
+const bareMiseReleaseAgeLine = "MISE_MINIMUM_RELEASE_AGE=0"
+const miseReleaseAgeFile = "/etc/environment"
 
 // ToolingUpdate is what `agent-vm update` runs in every guest, whatever its
 // family, after that family's PackageUpdate. It covers the software the base
@@ -248,9 +257,31 @@ const miseMinimumReleaseAge = "MISE_MINIMUM_RELEASE_AGE=0"
 // other tools in the shared store.
 func ToolingUpdate(user string) []UpdateStep {
 	steps := []UpdateStep{
+		// An image built with the first form of this setting has a bare 0 in
+		// /etc/environment. sshd hands that to every session through PAM, and
+		// mise self-update then refuses to start. touch first: sed will not
+		// edit a path that is not there, and an image from before the line
+		// existed may not have the file. The anchored expression leaves a 0s
+		// line alone. Skipped with the rest of the mise steps in a guest that
+		// has no mise.
+		{
+			Name:     "preparing mise's release-age setting",
+			Root:     true,
+			Requires: "mise",
+			Argv:     []string{"touch", "--", miseReleaseAgeFile},
+		},
+		{
+			Name:     "correcting mise's release-age setting",
+			Root:     true,
+			Requires: "mise",
+			Argv: []string{
+				"sed", "-i", "-e",
+				"s/^" + bareMiseReleaseAgeLine + "$/" + miseMinimumReleaseAge + "/",
+				"--", miseReleaseAgeFile,
+			},
+		},
 		// Created before either mise invocation. See rootMiseTmpDir: self-update
 		// does not create a missing TMPDIR, and this is the path it is given.
-		// Skipped with the rest of the mise steps in a guest that has no mise.
 		{
 			Name:     "preparing mise's temporary directory",
 			Root:     true,
