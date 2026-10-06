@@ -191,6 +191,46 @@ func TestToolingUpdate_CreatesTheMiseTmpDirBeforeSelfUpdate(t *testing.T) {
 	}
 }
 
+// TestToolingUpdate_CorrectsABareMiseReleaseAge covers an image that wrote
+// MISE_MINIMUM_RELEASE_AGE=0. mise 2026.10.2 rejects that while choosing a
+// self-update, and sshd applies the file to later sessions, so the line has
+// to be 0s before mise runs. The expression is anchored: a second update must
+// not turn 0s into 0ss. touch runs first because sed refuses a missing file.
+func TestToolingUpdate_CorrectsABareMiseReleaseAge(t *testing.T) {
+	t.Parallel()
+	steps := ToolingUpdate("agent")
+	touchAt, sedAt, selfUpdateAt := -1, -1, -1
+	for i, step := range steps {
+		joined := strings.Join(step.Argv, " ")
+		switch {
+		case joined == "touch -- "+miseReleaseAgeFile:
+			touchAt = i
+		case strings.HasPrefix(joined, "sed "):
+			sedAt = i
+		case strings.Contains(joined, "mise self-update"):
+			selfUpdateAt = i
+		default:
+			continue
+		}
+		if !step.Root {
+			t.Errorf("%q edits a root-owned file as the guest user: %v", step.Name, step.Argv)
+		}
+		if step.Requires != "mise" {
+			t.Errorf("%q runs in a guest with no mise; Requires = %q", step.Name, step.Requires)
+		}
+	}
+	if touchAt < 0 || sedAt < 0 || selfUpdateAt < 0 {
+		t.Fatalf("release-age correction or self-update is missing: touch=%d sed=%d self-update=%d", touchAt, sedAt, selfUpdateAt)
+	}
+	if touchAt > sedAt || sedAt > selfUpdateAt {
+		t.Errorf("correction order is touch %d, sed %d, self-update %d", touchAt, sedAt, selfUpdateAt)
+	}
+	script := steps[sedAt].Argv[3]
+	if script != "s/^"+bareMiseReleaseAgeLine+"$/"+miseMinimumReleaseAge+"/" {
+		t.Errorf("sed script = %q, which would miss a bare 0 or rewrite 0s on the next update", script)
+	}
+}
+
 // TestToolingUpdate_DoesNotHoldBackMiseReleases covers mise's default of
 // skipping a release for 24 hours after it is published. Every mise step has
 // to set the cutoff to zero, including the guest user's: sudo is not the only

@@ -20,14 +20,13 @@ migration or rebuild step a user has to take.
 
 - mise no longer waits a day before it will install a release. It skips
   anything published in the last 24 hours unless `MISE_MINIMUM_RELEASE_AGE`
-  is `0`. Image builds set that on every `mise use`, guests carry it in
-  `/etc/environment`, and `agent-vm update` passes it when it upgrades mise
-  and the tools mise manages. The script that installs the mise binary
-  accepts only a duration with a unit, so that one command uses `0s`, which
-  is the same cutoff. An image already cached does not pick up the
-  build-time setting until `agent-vm image build <distro> --force` (and
-  `<distro>-nix` where that variant is cached). `agent-vm update` on a guest
-  that already exists is not held back.
+  is `0s`. Image builds set that on every `mise use` and on the mise
+  installer, and guests carry it in `/etc/environment`. `agent-vm update`
+  passes the same value when it upgrades mise and the tools mise manages.
+  A bare `0` is not a duration mise accepts. An image already cached does
+  not pick up the build-time setting until `agent-vm image build <distro>
+  --force` (and `<distro>-nix` where that variant is cached). `agent-vm
+  update` on a guest that already exists is not held back.
 - A new VM presents itself as a physical desktop. Firmware identity reported
   inside the guest is an ordinary PC board, an x86 guest no longer advertises
   the hypervisor CPU flag or the KVM signature, and its network address is not
@@ -40,6 +39,13 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `agent-vm update` no longer stops while updating mise. mise 2026.10.2
+  rejects `MISE_MINIMUM_RELEASE_AGE=0` and exits before it replaces itself.
+  The update now passes `0s`, which that release accepts and which means no
+  wait. A guest whose `/etc/environment` still has the bare `0` gets that
+  line rewritten to `0s` on the next update, so a later `mise` in the guest
+  is not refused the same way. Install this build of `agent-vm` before
+  updating; the copy already on `PATH` still passes `0`.
 - A bridged Ubuntu 26.04 guest reports its address again. That release's QEMU
   guest agent starts only when systemd decides the machine is a virtual
   machine. A new guest is presented as a physical desktop, so systemd skipped

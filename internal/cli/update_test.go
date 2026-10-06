@@ -260,14 +260,19 @@ func TestUpdate_UpdatesTheToolingTheDistroDoesNotPackage(t *testing.T) {
 	want := []string{
 		// self-update writes a tempfile directly into this directory and does
 		// not create it, so the directory has to exist before that step.
+		// A bare 0 left in /etc/environment makes the next mise self-update refuse
+		// to start. The file is created if an older image never had it, then
+		// rewritten only when the line is exactly that bare 0.
+		"sudo -n touch -- /etc/environment",
+		"sudo -n sed -i -e s/^MISE_MINIMUM_RELEASE_AGE=0$/MISE_MINIMUM_RELEASE_AGE=0s/ -- /etc/environment",
 		"sudo -n mkdir -p -- /root/.cache/mise-tmp",
-		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0 mise self-update --yes",
-		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0 mise upgrade --yes",
+		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0s mise self-update --yes",
+		"sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0s mise upgrade --yes",
 		// The guest user's own mise data directory, so not through sudo: root's
 		// copy and this account's copy are separate installations. The release
 		// age is named here too: an image built before /etc/environment carried
 		// it would otherwise skip a release for a day.
-		"env MISE_MINIMUM_RELEASE_AGE=0 mise upgrade --yes",
+		"env MISE_MINIMUM_RELEASE_AGE=0s mise upgrade --yes",
 		"sudo -n env CODEX_HOME=/usr/local/lib/codex codex update",
 		"sudo -n env RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo rustup update",
 	}
@@ -307,7 +312,7 @@ func TestUpdate_SkipsToolingTheGuestDoesNotHave(t *testing.T) {
 		t.Errorf("the rest of the update still counts as one:\n%s", stdout)
 	}
 	// The tools that are there are still updated.
-	if !contains(sshArgvs(fake), "sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0 mise self-update --yes") {
+	if !contains(sshArgvs(fake), "sudo -n env HOME=/root TMPDIR=/root/.cache/mise-tmp MISE_MINIMUM_RELEASE_AGE=0s mise self-update --yes") {
 		t.Errorf("one missing tool must not stop the others being updated:\n%s", fake)
 	}
 }
