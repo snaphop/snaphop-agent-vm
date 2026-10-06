@@ -39,6 +39,14 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `agent-vm update` no longer stops while upgrading the guest user's
+  mise-managed tools. After the tools move, mise rewrites selector symlinks
+  in the shared store (`latest`, a version prefix such as `temurin-25`) and
+  exits if it cannot remove the old one. Root's upgrade runs first and owns
+  those links, and the store is sticky, so the guest user was refused with
+  "Operation not permitted". The update now gives that account the links,
+  and only the links, before its own upgrade. An installed version stays
+  owned by whoever installed it.
 - `agent-vm update` no longer stops while updating mise. mise 2026.10.2
   rejects `MISE_MINIMUM_RELEASE_AGE=0` and exits before it replaces itself.
   The update now passes `0s`, which that release accepts and which means no

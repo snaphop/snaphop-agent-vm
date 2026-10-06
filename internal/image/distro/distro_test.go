@@ -102,6 +102,66 @@ func TestToolingUpdate_UpgradesBothAccountsMiseInstallations(t *testing.T) {
 	}
 }
 
+// TestToolingUpdate_LetsTheGuestUserReplaceRuntimeSymlinks covers mise
+// 2026.10.3 exiting the guest user's upgrade with "Operation not permitted"
+// while it rebuilds selector symlinks. Root's upgrade runs first and owns
+// the links it rewrites. The shared store is sticky, so the guest user cannot
+// unlink them. The hand-off is root, names that user, and stays on the
+// symlinks: a deeper find would walk into the version directories, and chown
+// without -h would change the install the link points at.
+func TestToolingUpdate_LetsTheGuestUserReplaceRuntimeSymlinks(t *testing.T) {
+	t.Parallel()
+	steps := ToolingUpdate("agent")
+	rootUpgradeAt, handoffAt, userUpgradeAt := -1, -1, -1
+	for i, step := range steps {
+		joined := strings.Join(step.Argv, " ")
+		switch {
+		case strings.Contains(joined, "HOME=/root") && strings.Contains(joined, "mise upgrade"):
+			rootUpgradeAt = i
+		case strings.HasPrefix(joined, "find "+miseStore+"/installs "):
+			handoffAt = i
+			if !step.Root {
+				t.Errorf("only root can give the links away: %+v", step)
+			}
+			if step.Requires != "mise" {
+				t.Errorf("a guest without mise has no store to hand over; Requires = %q", step.Requires)
+			}
+			for _, want := range []string{"-mindepth", "2", "-maxdepth", "2", "-type", "l", "-exec", "chown", "-h", "agent", "{}", "+"} {
+				if !containsArg(step.Argv, want) {
+					t.Errorf("handoff argv missing %q: %v", want, step.Argv)
+				}
+			}
+			if containsArg(step.Argv, "-R") || containsArg(step.Argv, miseStore+"/shims") {
+				t.Errorf("handoff reaches past the selector symlinks: %v", step.Argv)
+			}
+		case !step.Root && strings.Contains(joined, "mise upgrade"):
+			userUpgradeAt = i
+		}
+	}
+	if rootUpgradeAt < 0 || handoffAt < 0 || userUpgradeAt < 0 {
+		t.Fatalf("root upgrade %d, handoff %d, guest upgrade %d", rootUpgradeAt, handoffAt, userUpgradeAt)
+	}
+	if rootUpgradeAt > handoffAt || handoffAt > userUpgradeAt {
+		t.Errorf("order is root upgrade %d, handoff %d, guest upgrade %d; root recreates the links, so the handoff has to follow it", rootUpgradeAt, handoffAt, userUpgradeAt)
+	}
+
+	for _, step := range ToolingUpdate("root") {
+		if strings.HasPrefix(strings.Join(step.Argv, " "), "find ") {
+			t.Errorf("a root guest already owns the links: %+v", step)
+		}
+	}
+	other := ToolingUpdate("devops")
+	sawDevops := false
+	for _, step := range other {
+		if containsArg(step.Argv, "devops") && containsArg(step.Argv, "chown") {
+			sawDevops = true
+		}
+	}
+	if !sawDevops {
+		t.Error("the handoff names a fixed account rather than the guest user")
+	}
+}
+
 func TestToolingUpdate_DoesNotUpgradeRootsMiseTwiceForARootGuest(t *testing.T) {
 	t.Parallel()
 	steps := ToolingUpdate("root")
