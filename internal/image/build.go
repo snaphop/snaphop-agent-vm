@@ -543,6 +543,9 @@ func (b *Builder) extractBootArtifacts(ctx context.Context, work *workspace, d d
 			return fmt.Errorf("renaming %s to %s: %w", rename.from, rename.to, err)
 		}
 	}
+	if err := b.unpackUnifiedKernel(ctx, work.dir, filepath.Join(work.dir, state.KernelFile)); err != nil {
+		return err
+	}
 	return nil
 }
 

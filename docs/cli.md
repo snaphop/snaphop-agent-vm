@@ -343,7 +343,12 @@ along with the tooling an agent expects to already be there (`ping`, `curl`,
 — see “Guest tooling” below),
 `podman export` to flatten it, `virt-make-fs --type=ext4 --format=qcow2
 --partition --size=+1G` to write `base.qcow2`,
-`virt-ls`/`virt-copy-out` to extract `vmlinuz`/`initrd`, and `virt-sysprep` to
+`virt-ls`/`virt-copy-out` to extract `vmlinuz`/`initrd`. A unified kernel
+image is replaced with the decompressed kernel from its `.linux` section,
+which direct boot starts. `zstd` on the hypervisor decompresses a zstd
+payload. A kernel that is already a plain image is cached as extracted.
+An image already cached keeps its kernel until
+`agent-vm image build <distro> --force`. `virt-sysprep` then runs to
 clear the machine ID and SSH host keys. The extra gibibyte covers first-boot
 writes. Cloud-init then grows the root partition to the overlay's virtual size,
 which is what `create --disk` sets. Finishes by recording `manifest.json`,

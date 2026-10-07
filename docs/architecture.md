@@ -203,7 +203,10 @@ background worker. Long waits include image builds, the guest boot wait during `
   `virt-make-fs` to produce `base.qcow2` → `virt-ls`/`virt-copy-out` to extract
   `vmlinuz`/`initrd` → `virt-sysprep` to clear the machine ID and SSH host keys →
   `manifest.json` with the source digest, kernel version, kernel command line, and
-  builder tool versions. `virt-make-fs` gives the base filesystem 1 GiB beyond
+  builder tool versions. When the extracted kernel is a unified kernel image,
+  the cached file is the decompressed kernel from its `.linux` section, which
+  direct boot starts. `zstd` on the hypervisor decompresses a zstd payload.
+  A plain kernel is cached as extracted. `virt-make-fs` gives the base filesystem 1 GiB beyond
   the exported root, which covers first-boot writes. Cloud-init then grows the
   root partition to the overlay's virtual size, so `--disk` is what the guest
   sees.
