@@ -39,6 +39,16 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Creating a VM from a base image whose `/boot/vmlinuz` is a unified kernel
+  image reaches a booted guest. Ubuntu 26.04 on aarch64 ships that file as an
+  EFI application. Direct kernel boot starts it as a Linux kernel, the guest
+  never runs, and `create` times out waiting for an address because the guest
+  agent is not connected. The image build now stores the unified image's
+  `.linux` section, and decompresses it when that section is an EFI zboot
+  image, which is the kernel direct boot runs. A zstd payload is decompressed
+  with `zstd` on the hypervisor. A kernel that is already a plain image is
+  stored unchanged. An image already cached as `ubuntu:26.04` keeps the
+  unified kernel until `agent-vm image build ubuntu --force`.
 - `agent-vm update` no longer stops while upgrading the guest user's
   mise-managed tools. After the tools move, mise rewrites selector symlinks
   in the shared store (`latest`, a version prefix such as `temurin-25`) and

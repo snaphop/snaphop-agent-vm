@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -890,6 +891,140 @@ func TestNewestByVersion_ComparesVersionNumbersNotStrings(t *testing.T) {
 	} {
 		if got := newestByVersion(tt.names); got != tt.want {
 			t.Errorf("newestByVersion(%q) = %q, want %q", tt.names, got, tt.want)
+		}
+	}
+}
+
+func TestBuild_LeavesAPlainKernelUntouched(t *testing.T) {
+	t.Parallel()
+	fake := ubuntuHost(t)
+	builder, store := newBuilder(t, fake)
+
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got, err := os.ReadFile(store.KernelPath("ubuntu", "26.04"))
+	if err != nil {
+		t.Fatalf("reading the cached kernel: %v", err)
+	}
+	if string(got) != "test artifact\n" {
+		t.Fatalf("cached kernel = %q, want the extracted file unchanged", got)
+	}
+	if commandRan(fake, "zstd") {
+		t.Fatal("a plain kernel was passed to zstd")
+	}
+}
+
+func TestBuild_UnpacksAGzipUnifiedKernel(t *testing.T) {
+	t.Parallel()
+	want := []byte("gzip-direct-boot-kernel")
+	kernel := peWithSections([]namedBytes{{name: ".linux", data: efiZboot("gzip", gzipBytes(t, want), 0)}})
+	fake := ubuntuHostWithKernel(t, kernel)
+	builder, store := newBuilder(t, fake)
+
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got, err := os.ReadFile(store.KernelPath("ubuntu", "26.04"))
+	if err != nil {
+		t.Fatalf("reading the cached kernel: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("cached kernel = %q, want the decompressed payload", got)
+	}
+	if commandRan(fake, "zstd") {
+		t.Fatal("a gzip payload was passed to zstd")
+	}
+	assertNoUnpackLeftovers(t, store.ImageDir("ubuntu", "26.04"))
+}
+
+func TestBuild_UnpacksAZstdUnifiedKernelWithZstd(t *testing.T) {
+	t.Parallel()
+	const want = "zstd-direct-boot-kernel\n"
+	kernel := peWithSections([]namedBytes{{name: ".linux", data: efiZboot("zstd", []byte{0x28, 0xb5, 0x2f, 0xfd}, 0)}})
+	fake := ubuntuHostWithKernel(t, kernel)
+	fake.RespondPrefix("zstd", hostexec.FakeResponse{
+		Do: func(c hostexec.Command) error {
+			if c.Location != hostexec.Hypervisor {
+				return fmt.Errorf("zstd location = %d, want the hypervisor", c.Location)
+			}
+			out := argAfter(c.Args, "-o")
+			if out == "" {
+				return errors.New("zstd was not given -o")
+			}
+			return os.WriteFile(out, []byte(want), 0o644)
+		},
+	})
+	builder, store := newBuilder(t, fake)
+
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t)}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got, err := os.ReadFile(store.KernelPath("ubuntu", "26.04"))
+	if err != nil {
+		t.Fatalf("reading the cached kernel: %v", err)
+	}
+	if string(got) != want {
+		t.Fatalf("cached kernel = %q, want %q", got, want)
+	}
+	assertNoUnpackLeftovers(t, store.ImageDir("ubuntu", "26.04"))
+}
+
+func TestBuild_RefusesAUnifiedKernelWhenZstdFails(t *testing.T) {
+	t.Parallel()
+	kernel := peWithSections([]namedBytes{{name: ".linux", data: efiZboot("zstd", []byte{0x28, 0xb5, 0x2f, 0xfd}, 0)}})
+	fake := ubuntuHostWithKernel(t, kernel)
+	fake.Missing["zstd"] = true
+	builder, store := newBuilder(t, fake)
+
+	_, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t)})
+	if err == nil {
+		t.Fatal("Build succeeded without zstd")
+	}
+	if !strings.Contains(err.Error(), "zstd") {
+		t.Fatalf("error = %v, want it to name zstd", err)
+	}
+	if hasImage(t, store, "ubuntu", "26.04") {
+		t.Fatal("a failed unpack left a bootable image in the cache")
+	}
+}
+
+func commandRan(fake *hostexec.Fake, name string) bool {
+	for _, call := range fake.Calls() {
+		if call.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func ubuntuHostWithKernel(t *testing.T, kernel []byte) *hostexec.Fake {
+	t.Helper()
+	fake := ubuntuHost(t)
+	fake.RespondPrefix("virt-copy-out", hostexec.FakeResponse{
+		Do: func(c hostexec.Command) error {
+			dir := c.Args[len(c.Args)-1]
+			if err := os.WriteFile(filepath.Join(dir, "vmlinuz-6.8.0-31-generic"), kernel, 0o644); err != nil {
+				return err
+			}
+			return touch(filepath.Join(dir, "initrd.img-6.8.0-31-generic"))
+		},
+	})
+	return fake
+}
+
+func assertNoUnpackLeftovers(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "kernel.zstd" || strings.HasSuffix(entry.Name(), ".unpacked") {
+			t.Errorf("unpacking left %s in the image cache", entry.Name())
 		}
 	}
 }
