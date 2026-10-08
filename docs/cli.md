@@ -136,6 +136,9 @@ interface = "br0"
 [guest]
 user     = "agent"
 ssh_keys = ["~/.ssh/id_ed25519.pub"]
+
+[github]
+org = "acme"   # optional: register a -runner VM with this organization
 ```
 
 A key the file does not support — including a misspelled key or table name —
@@ -169,6 +172,7 @@ the **client** home directory, so use absolute remote paths.
 | `AGENT_VM_NETWORK` | `create --network` |
 | `AGENT_VM_BRIDGE` | `create --bridge` |
 | `AGENT_VM_SSH_KEY` | `create --ssh-key` |
+| `AGENT_VM_GITHUB_ORG` | `create --github-org` |
 
 ## Commands
 
@@ -226,10 +230,11 @@ stops mattering and the check confirms instead that the configured directory
 holds the kernel and module tree supermin will be pointed at. See
 [`docs/host-setup.md`](./host-setup.md#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance).
 
-`gh` is checked too, but never fails the report: it is needed solely by
-`--github-ssh-key`, so a host without it is still a ready host. It reports
-`skip` when `gh` is not installed, and `warn` when it is older than 2.0
-or its version cannot be read, since `--github-ssh-key` would then fail.
+`gh` is checked too, but never fails the report: it is needed by
+`--github-ssh-key` and by `--github-org` on a `-runner` image, so a host
+without it is still a ready host. It reports `skip` when `gh` is not
+installed, and `warn` when it is older than 2.0 or its version cannot be
+read, since those two operations would then fail.
 
 Each check reports `pass`, `warn`, `fail`, or `skip`, and only a `fail` makes
 `doctor` exit non-zero. Group membership is a warning, because a host may grant
@@ -436,8 +441,8 @@ the service.
 
 A base image is shared by every VM built on it, so the image is not
 registered with GitHub. It contains no repository URL and no registration
-token, and `create` has no flag that would put one in cloud-init. After the
-VM accepts SSH, register it from inside the guest:
+token, and cloud-init does not receive one. After the VM accepts SSH, you
+can register it from inside the guest:
 
 ```bash
 sudo agent-vm-github-runner configure --url https://github.com/org/repo --token <registration-token>
@@ -459,9 +464,18 @@ sudo agent-vm-github-runner remove --token <removal-token>
 ```
 
 unregisters the guest at GitHub. The value is a removal token. `configure`
-uses a registration token, and that value is rejected by `remove`. Destroying
-the VM leaves the registration in place at GitHub. Remove it with that
-command first, or delete it in the GitHub UI.
+uses a registration token, and that value is rejected by `remove`.
+
+When the image is a `-runner` variant and an organization is set, `create`
+registers the guest itself after SSH is up. See
+[`--github-org`](#--github-org). A create that names no organization leaves
+the runner unregistered, and the `configure` command above is how you
+register it.
+
+`destroy` removes a runner this tool registered, before it undefines the
+domain. A runner you registered by hand has no `githubRunner` record and
+stays at GitHub. Remove that one with the `remove` command above, or delete
+it in the GitHub UI.
 
 The command is `/usr/local/sbin/agent-vm-github-runner`, linked from
 `/usr/sbin` so `sudo` finds it on every family. It runs GitHub's `config.sh`
@@ -1091,6 +1105,7 @@ and must not already exist.
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
 | `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
+| `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
 | `--tailscale-auth-key-file <path>` | none | Join the guest to a Tailscale network after it boots. The file holds one auth key. No flag takes the key itself, and no config key or environment variable turns this on. Requires a wait. |
 | `--tailscale-hostname <name>` | the VM name | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. |
 | `--tailscale-login-server <url>` | Tailscale's coordination server | `https` URL of another coordination server. No user, password, query, or fragment. |
@@ -1107,8 +1122,9 @@ Inputs are checked before anything on the host is touched. The SSH keys, the
 requested — the Tailscale auth key file (one key, and nothing else) are read
 and validated first, and a bad one exits `2` — under `--dry-run` too. An error
 from the auth key file names the path and does not print the file. Next, the minimum versions of
-`virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` with
-`--github-ssh-key`) are checked, and a missing or too-old tool exits `3`. Only
+`virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` when
+`--github-ssh-key` is set or a runner will be registered) are checked, and a
+missing or too-old tool exits `3`. Only
 then is the VM locked and its base image looked up or built.
 
 `create` is transactional. If a step through recording `vm.json` fails, the tool
@@ -1191,8 +1207,9 @@ Constraints, all of which are checked before anything on the host changes:
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.
 
-After the VM is recorded, boot-wait, Tailscale join, and GitHub registration
-failures retain
+After the VM is recorded, a boot-wait timeout, a Tailscale join failure, a
+GitHub SSH-key registration failure, and a GitHub Actions runner registration
+failure retain
 it for inspection. A `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
 booted slowly" and "it failed to boot" need the same evidence. Clean it up with
@@ -1298,6 +1315,85 @@ would leave the operator with a `known_hosts` file full of conflicts for reused
 addresses. In the default NAT mode the network is host-local; with
 `--network bridge` the guest is on the LAN and this is a weaker guarantee.
 
+#### `--github-org`
+
+`--github-org <org>` registers a `-runner` VM as a GitHub Actions runner in
+that organization after SSH accepts a login
+([ADR-0015](./decisions/0015-register-a-github-actions-runner-with-gh.md)).
+The same name can be set as `[github] org` in the config file or as
+`AGENT_VM_GITHUB_ORG`. The flag wins over the environment, which wins over
+the file. An empty value is unset. The name is a GitHub login on github.com:
+1 to 39 characters, letters, digits, and hyphens, and it does not start or
+end with a hyphen. A name that does not match exits `2` before anything is
+created.
+
+```console
+$ agent-vm create ci-01 --distro ubuntu-runner --github-org acme
+```
+
+Registration runs only when the resolved image is a `-runner` variant and an
+organization is set. `agent-vm create ci --distro ubuntu-runner` with no
+organization still boots an unregistered runner, and you register it with
+`agent-vm-github-runner configure` as described under
+[Runner images](#runner-images). An organization set in the config file or
+the environment is ignored for every other image, so a default organization
+does not change an ordinary create. Naming `--github-org` for an image that
+is not a `-runner` variant exits `2` and names the distro.
+
+The flag needs a boot wait. `--wait-for-ssh 0` exits `2`, because the guest
+is registered over SSH after it boots.
+
+`gh` 2.0 or newer runs on the client, with your existing login. It is checked
+before anything is created. A missing or too-old `gh` exits `3`. When
+`gh auth status` lists token scopes, one of `admin:org` or
+`manage_runners:org` is required; otherwise create exits `1` and names
+`gh auth refresh -h github.com -s admin:org`. A login that prints no scope
+line is left for GitHub's API to accept or refuse. `--dry-run` prints the
+planned `gh` and `ssh` lines and does not fetch a token, so it does not
+require `gh` to be installed. Usage checks still run.
+
+Once the guest accepts SSH, `create` asks GitHub for a registration token:
+
+```text
+gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token
+```
+
+The token is passed on the stdin of the configure command the runner image
+already installs. It is not a flag value, and it is not written into the
+image, the seed, generated user-data, `vm.json`, or a log:
+
+```text
+sudo -n /usr/local/sbin/agent-vm-github-runner configure \
+  --url https://github.com/<org> --name <vm> --token-file - --replace
+```
+
+The runner's name is the VM name. No labels, runner group, or ephemeral flag
+are set. `--replace` lets a recreated VM of the same name take the place of a
+runner GitHub still has. The operator's `gh` credential stays on the client.
+The guest can read the registration token while `config.sh` runs.
+
+The order after SSH is the Tailscale join, then `--github-ssh-key`, then this
+registration, for whichever of those were requested. A failure leaves the VM
+in place. When the configure command fails, the error redacts the token. When
+configure succeeded and the runner's id cannot be read, `vm.json` still
+records the organization and the name, the command exits non-zero, and
+`destroy` looks the runner up by name.
+
+The id comes from GitHub, by the VM's name:
+
+```text
+gh api --paginate orgs/<org>/actions/runners --jq '.runners[] | select(.name == "<vm>") | .id'
+```
+
+Exactly one positive id is recorded. `vm.json` gains an optional
+`githubRunner` object: `org`, `name`, `id` (omitted when it was not
+recorded), and `url` (`https://github.com/<org>`). `schemaVersion` stays 1.
+The token is not a field. `create` and `info` show `org/name (id N)`. `list`
+does not gain a column.
+
+`destroy` of a VM with that record deletes the runner before it undefines the
+domain. See [destroy](#agent-vm-destroy-name).
+
 #### Tailscale
 
 `--tailscale-auth-key-file` joins that guest to a Tailscale network after SSH
@@ -1395,6 +1491,8 @@ the overlay path, the MAC address, the captured domain XML path, and the
 `virt-install` version and argument vector that defined it. A guest that joined
 a tailnet also shows a `tailscale` row: the address it reported, the hostname,
 and any login server, tags, ephemeral node, or Tailscale SSH that was requested.
+A guest registered as a GitHub Actions runner shows a `github runner` row:
+`org/name (id N)`, or `org/name` when the id was not recorded.
 That address is display only; `agent-vm ssh` still uses the address libvirt
 reported.
 
@@ -1575,6 +1673,24 @@ VM with no recorded key exits `4`. Without the flag, a destroy of a VM that has
 one says so and prints the `gh` command that removes it — the key is never
 deleted implicitly.
 
+A VM whose record has `githubRunner` also has that Actions runner removed,
+with no extra flag. The prompt names the runner. Cancelling the prompt does
+not call GitHub. The removal runs after the SSH-key step and before the
+domain is undefined: `gh auth status`, then
+`gh api --method DELETE orgs/<org>/actions/runners/<id> --silent`. A missing
+or too-old `gh` exits `3` and leaves the VM. A login whose listed scopes
+cannot manage runners exits `1` and leaves the VM, because GitHub answers a
+missing scope with the same 404 as a runner that is already gone. HTTP 404
+after the scope check means the runner is already gone, and destroy
+continues. Any other `gh` failure leaves the domain and the record. The
+record is cleared before undefine, so a later failure retries a runner GitHub
+no longer has. A recorded id of 0 is looked up by name first
+(`gh api --paginate orgs/<org>/actions/runners`). No runner of that name is
+treated as already gone. More than one runner of that name stops destroy, so
+the wrong one is not deleted. `--keep-disk` still removes the recorded runner
+and clears the record. A runner you registered by hand has no record and
+stays at GitHub. `--dry-run` prints the DELETE and does not change `vm.json`.
+
 `destroy` only ever touches domains and paths recorded in this state directory.
 It refuses to remove a path that does not resolve inside the state directory,
 and it refuses to undefine a libvirt domain it did not create — a domain whose
@@ -1670,8 +1786,10 @@ table below is the summary.
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
+| `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
+| `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
 | `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
@@ -1818,6 +1936,7 @@ answer that goes stale.
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
 | `tailscale` | Present only for a VM created with `--tailscale-auth-key-file`: `hostname`, and, when set, `loginServer`, `advertiseTags`, `ephemeral`, `ssh`, and `ipv4`. The auth key and the path of its file are not stored. `ipv4` is the address the guest reported and is not an SSH destination. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
+| `githubRunner` | Present only when `create` registered this VM as a GitHub Actions runner: `org`, `name`, `id` (omitted when it was not recorded), and `url` (`https://github.com/<org>`). The registration token is not stored. `destroy` deletes that runner by `id`, or by `name` when `id` is absent. Absent on every other VM, including records written before this field existed and runner VMs created with no organization. `schemaVersion` stays 1. |
 | `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |
 | `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |
 

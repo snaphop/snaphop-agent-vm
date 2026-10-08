@@ -29,7 +29,10 @@ cloud-init seed, `vm.json`, a log, or an argument vector. A base image is
 shared by every VM built from it. The seed sits on disk for the life of the
 VM. Argument vectors are logged. The GitHub Actions runner faces the same
 constraint and is registered after boot, with the token supplied then
-([ADR-0013](./0013-self-hosted-github-actions-runner-variant.md)).
+([ADR-0013](./0013-self-hosted-github-actions-runner-variant.md)). When an
+organization is named, `create` fetches that token on the client and passes
+it on stdin
+([ADR-0015](./0015-register-a-github-actions-runner-with-gh.md)).
 
 Tailscale's own `tailscale up --auth-key=file:…` reads the key from a file.
 The three families this tool supports do not all ship that package, and a

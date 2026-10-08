@@ -110,6 +110,10 @@ type Config struct {
 	// SSHKeys are paths to SSH *public* keys. Private key material never
 	// enters this tool (SECURITY.md).
 	SSHKeys []string
+	// GitHubOrg is the organization whose Actions runners a -runner VM joins
+	// when create registers it. Empty means create leaves the runner
+	// unconfigured. It is never a secret.
+	GitHubOrg string
 }
 
 // Overrides carries values from one source as the operator wrote them. An
@@ -133,6 +137,7 @@ type Overrides struct {
 
 	GuestUser string
 	SSHKeys   []string
+	GitHubOrg string
 }
 
 // Environ is a lookup of environment variables, so tests do not mutate the
@@ -259,6 +264,7 @@ func environOverrides(env Environ) Overrides {
 	if key := env("AGENT_VM_SSH_KEY"); key != "" {
 		o.SSHKeys = []string{key}
 	}
+	o.GitHubOrg = env("AGENT_VM_GITHUB_ORG")
 	return o
 }
 
@@ -348,6 +354,15 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 			keys = append(keys, path)
 		}
 		cfg.SSHKeys = keys
+	}
+	if o.GitHubOrg != "" {
+		org, err := ParseGitHubOrg(o.GitHubOrg)
+		if err != nil {
+			return err
+		}
+		if org != "" {
+			cfg.GitHubOrg = org
+		}
 	}
 	return nil
 }

@@ -80,9 +80,12 @@ Ubuntu names (`libvirt-clients`, `virtinst`, `qemu-utils`, `libguestfs-tools`,
 `iproute2`, `openssh-client`). On Fedora and Arch, install the packages in the
 commands above.
 
-Optional, and only for `--github-ssh-key` on `create` and `destroy`: the GitHub
-CLI, `gh` (`apt install gh`, `dnf install gh`, `pacman -S github-cli`), logged in
-with `gh auth login`. Every other command works without it.
+Optional, for `--github-ssh-key` on `create` and `destroy`, and for
+`--github-org` when creating a `-runner` VM: the GitHub CLI, `gh`
+(`apt install gh`, `dnf install gh`, `pacman -S github-cli`), logged in with
+`gh auth login`. Registering a runner needs a token that can manage the
+organization's Actions runners (`admin:org` or `manage_runners:org` when
+`gh auth status` lists scopes). Every other command works without `gh`.
 
 Required minimum versions (`doctor` probes `virsh` and `qemu-img`; it does
 not separately enforce the connected libvirt daemon or QEMU emulator version):
@@ -96,7 +99,7 @@ not separately enforce the connected libvirt daemon or QEMU emulator version):
 | `podman` | 4.0 | OCI pull, build, flatten |
 | `ip` (iproute2) | any | host bridge validation |
 | `ssh` (openssh-client) | any | reaching a guest, and a remote hypervisor |
-| `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub |
+| `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub, and registering or removing an organization Actions runner |
 
 `podman` is required and has no substitute today: the per-distro image recipes
 are `Containerfile`s, and `podman build` is what runs them. `skopeo` appears as
@@ -627,8 +630,8 @@ directory goes by default. `agent-vm doctor` run from the client reports both.
 
 ### On the client
 
-Only `ssh` (and `gh`, if you use `--github-ssh-key`). No KVM, no libvirt, no
-podman, no libguestfs.
+Only `ssh` (and `gh`, if you use `--github-ssh-key` or `--github-org`). No KVM,
+no libvirt, no podman, no libguestfs.
 
 Key-based login must work without a prompt, because `agent-vm` captures ssh's
 output and a prompt would look like a hang:

@@ -115,9 +115,10 @@ var (
 		versionArgs: []string{"-V"},
 		versionRe:   regexp.MustCompile(`iproute2-(\d+\.\d+(?:\.\d+)?)`),
 	}
-	// GH is optional: it is required only for `create --github-ssh-key` and
-	// `destroy --github-ssh-key`, so it is not in RequiredTools and doctor
-	// never fails a host for its absence.
+	// GH is optional: it is required only for `create --github-ssh-key`,
+	// `destroy --github-ssh-key`, and registering or removing a GitHub Actions
+	// runner (`create --github-org` on a -runner image). It is not in
+	// RequiredTools and doctor never fails a host for its absence.
 	GH = Tool{
 		Name: "gh", Package: "gh", Minimum: Version{Major: 2},
 		versionArgs: []string{"--version"},

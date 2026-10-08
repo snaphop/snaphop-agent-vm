@@ -72,6 +72,9 @@ func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
 	if cfg.NATNetwork != "agent-vm-nat" {
 		t.Errorf("NATNetwork = %s, want agent-vm-nat", cfg.NATNetwork)
 	}
+	if cfg.GitHubOrg != "" {
+		t.Errorf("GitHubOrg = %q, want empty", cfg.GitHubOrg)
+	}
 }
 
 func TestLoad_PrecedenceIsDefaultsThenFileThenEnvThenFlags(t *testing.T) {
@@ -350,6 +353,7 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 		"AGENT_VM_MEMORY":      "2G",
 		"AGENT_VM_DISK":        "20G",
 		"AGENT_VM_NETWORK":     "nat",
+		"AGENT_VM_GITHUB_ORG":  "acme",
 	}), Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -366,6 +370,9 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 	}
 	if cfg.VCPUs != 6 || cfg.Memory.String() != "2G" || cfg.Disk.String() != "20G" {
 		t.Errorf("resources = %d vcpu / %s / %s", cfg.VCPUs, cfg.Memory, cfg.Disk)
+	}
+	if cfg.GitHubOrg != "acme" {
+		t.Errorf("GitHubOrg = %q, want acme", cfg.GitHubOrg)
 	}
 }
 
@@ -448,6 +455,68 @@ memory = "8G"
 		if !strings.Contains(verr.Error(), want) {
 			t.Errorf("error does not name %q:\n%v", want, verr)
 		}
+	}
+}
+
+func TestLoad_GitHubOrgFromFileEnvAndFlag(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[github]\norg = \"from-file\"\n")
+
+	fromFile, err := Load(noEnv, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load file: %v", err)
+	}
+	if fromFile.GitHubOrg != "from-file" {
+		t.Errorf("GitHubOrg = %q, want from-file", fromFile.GitHubOrg)
+	}
+
+	fromEnv, err := Load(envMap(map[string]string{
+		"HOME":                emptyHome,
+		"AGENT_VM_GITHUB_ORG": "from-env",
+	}), Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load env: %v", err)
+	}
+	if fromEnv.GitHubOrg != "from-env" {
+		t.Errorf("GitHubOrg = %q, want from-env (env beats file)", fromEnv.GitHubOrg)
+	}
+
+	fromFlag, err := Load(envMap(map[string]string{
+		"HOME":                emptyHome,
+		"AGENT_VM_GITHUB_ORG": "from-env",
+	}), Overrides{ConfigFile: path, GitHubOrg: "from-flag"})
+	if err != nil {
+		t.Fatalf("Load flag: %v", err)
+	}
+	if fromFlag.GitHubOrg != "from-flag" {
+		t.Errorf("GitHubOrg = %q, want from-flag (flag beats env)", fromFlag.GitHubOrg)
+	}
+}
+
+func TestLoad_RejectsAnInvalidGitHubOrg(t *testing.T) {
+	t.Parallel()
+	for _, org := range []string{"foo/bar", "-acme", "acme-", "this-name-is-longer-than-thirty-nine-characters"} {
+		t.Run(org, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(noEnv, Overrides{GitHubOrg: org})
+			var verr *ValidationError
+			if !errors.As(err, &verr) || verr.Field != "github org" {
+				t.Fatalf("Load(%q) = %v, want a github org *ValidationError", org, err)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsAnUnknownGitHubConfigKey(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[github]\nnope = \"acme\"\n")
+	_, err := Load(noEnv, Overrides{ConfigFile: path})
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("Load = %v, want *ValidationError", err)
+	}
+	if !strings.Contains(verr.Error(), "github.nope") {
+		t.Errorf("error does not name the unknown key:\n%v", verr)
 	}
 }
 

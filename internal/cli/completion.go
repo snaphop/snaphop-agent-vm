@@ -164,7 +164,7 @@ func completionSpecs() map[string]*completionSpec {
 		"create": {flags: []string{
 			"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge",
 			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key",
-			"host-authorized-keys", "virt-install-arg", "github-ssh-key",
+			"host-authorized-keys", "virt-install-arg", "github-org", "github-ssh-key",
 			"tailscale-auth-key-file", "tailscale-hostname", "tailscale-login-server",
 			"tailscale-advertise-tag", "tailscale-ephemeral", "tailscale-ssh",
 		}},

@@ -16,6 +16,23 @@ migration or rebuild step a user has to take.
 
 ## [Unreleased]
 
+### Added
+
+- A runner VM can join a GitHub organization when it is created, when `gh` is
+  installed and logged in. `agent-vm create ci --distro ubuntu-runner
+  --github-org <org>` waits until SSH works, asks GitHub for a short-lived
+  registration token, and passes that token on the guest's standard input to
+  the configure command the image already has. The token is not stored in the
+  VM record, the base image, or the cloud-init seed, and it is not printed.
+  The same organization can be set as `[github] org` in the config file or
+  with `AGENT_VM_GITHUB_ORG`. The login needs permission to manage that
+  organization's runners. A runner image created without an organization is
+  still unregistered, and you register it from inside the guest as before.
+  `agent-vm destroy` removes a runner this tool registered before it removes
+  the VM. A runner you registered yourself stays at GitHub. `info` shows the
+  organization, the runner name, and GitHub's id. `gh` stays optional: a host
+  without it is still ready, and only these steps need it.
+
 ### Changed
 
 - mise no longer waits a day before it will install a release. It skips

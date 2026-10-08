@@ -63,6 +63,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
+	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; requires a -runner image and gh")
 	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "file containing a Tailscale auth key; the guest joins that network after it boots")
 	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: the VM name)")
 	tailscaleLoginServer := flags.String("tailscale-login-server", "", "https URL of a coordination server other than Tailscale's")
@@ -104,6 +105,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		Network:   *networkMode,
 		Bridge:    *bridge,
 		SSHKeys:   sshKeys,
+		GitHubOrg: *githubOrgFlag,
 	})
 	if err != nil {
 		return err
@@ -176,6 +178,20 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return exitf(ExitUsage,
 			"--tailscale-auth-key-file needs --wait-for-ssh: the guest is joined over SSH after it boots.")
 	}
+	// A configured organization is ignored for an ordinary image, so a default
+	// org does not change create. Naming --github-org for an image that has
+	// no runner is a mistake to report, not a flag to drop.
+	if flagOrg := strings.TrimSpace(*githubOrgFlag); flagOrg != "" && cfg.Distro.Variant != distro.Runner {
+		return exitf(ExitUsage,
+			"--github-org applies to a -runner image, and %s is not one.\n"+
+				"  Create the runner with `--distro ubuntu-runner --github-org %s`.",
+			cfg.Distro, cfg.GitHubOrg)
+	}
+	githubOrg := githubOrgForCreate(cfg)
+	if githubOrg != "" && *waitForSSH <= 0 {
+		return exitf(ExitUsage,
+			"registering a GitHub Actions runner needs --wait-for-ssh: the guest is registered over SSH after it boots.")
+	}
 
 	if app.dryRun {
 		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join)
@@ -184,17 +200,26 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	// virt-make-fs writes the cloud-init seed, so its floor is checked here with
 	// the others rather than discovered once the VM directory exists.
 	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg, hostexec.VirtMakeFS}
-	if *githubSSHKey {
+	if *githubSSHKey || githubOrg != "" {
 		tools = append(tools, hostexec.GH)
 	}
 	if err := app.requireTools(ctx, tools...); err != nil {
 		return err
 	}
-	if *githubSSHKey {
+	if *githubSSHKey || githubOrg != "" {
 		// Checked before anything is created, so an expired login costs
-		// nothing more than the message.
-		if err := github.New(app.runner).CheckAuth(ctx); err != nil {
-			return err
+		// nothing more than the message. The two checks ask for different
+		// scopes and each reports its own remedy.
+		client := github.New(app.runner)
+		if *githubSSHKey {
+			if err := client.CheckAuth(ctx); err != nil {
+				return err
+			}
+		}
+		if githubOrg != "" {
+			if err := client.CheckRunnerAuth(ctx); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -276,6 +301,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		virtInstallArgs: virtInstallArgs,
 		waitForSSH:      *waitForSSH,
 		githubSSHKey:    *githubSSHKey,
+		githubOrg:       githubOrg,
 		tailscale:       join,
 	})
 }
@@ -466,6 +492,7 @@ type createRequest struct {
 	virtInstallArgs []string
 	waitForSSH      time.Duration
 	githubSSHKey    bool
+	githubOrg       string
 	tailscale       *tailscaleJoin
 }
 
@@ -500,6 +527,11 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 	}
 	if req.githubSSHKey {
 		if err := a.addGitHubKey(ctx, req, vm, address); err != nil {
+			return err
+		}
+	}
+	if req.githubOrg != "" {
+		if err := a.registerGitHubRunner(ctx, req, vm, address); err != nil {
 			return err
 		}
 	}
@@ -740,6 +772,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if detail := tailscaleDetail(vm.Tailscale); detail != "" {
 		rows = append(rows, []string{"  tailscale", detail})
 	}
+	if detail := githubRunnerDetail(vm.GitHubRunner); detail != "" {
+		rows = append(rows, []string{"  github runner", detail})
+	}
 	rows = append(rows, []string{"  state dir", vm.Paths.Dir})
 	a.out.Table(rows)
 
@@ -919,6 +954,9 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	}
 	if join != nil {
 		a.printTailscalePlan(cfg.GuestUser, join)
+	}
+	if org := githubOrgForCreate(cfg); org != "" {
+		a.printGitHubRunnerPlan(cfg.GuestUser, org, name)
 	}
 
 	for _, note := range []string{

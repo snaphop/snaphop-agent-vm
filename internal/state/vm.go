@@ -36,8 +36,13 @@ type VM struct {
 	// It is omitted otherwise, so a record written before the field existed
 	// stays valid without a schema bump. The auth key is not stored.
 	Tailscale *VMTailscale `json:"tailscale,omitempty"`
-	Paths     VMPaths      `json:"paths"`
-	CreatedBy VMProvenance `json:"createdBy"`
+	// GitHubRunner is set when create registered this guest as a GitHub
+	// Actions runner. It is omitted otherwise, so a record written before the
+	// field existed stays valid without a schema bump. The registration token
+	// is not stored.
+	GitHubRunner *GitHubRunner `json:"githubRunner,omitempty"`
+	Paths        VMPaths       `json:"paths"`
+	CreatedBy    VMProvenance  `json:"createdBy"`
 }
 
 // VMTailscale is the non-secret record of a Tailscale join. IPv4 is whatever
@@ -105,6 +110,17 @@ type GitHubSSHKey struct {
 	Title     string    `json:"title"`
 	PublicKey string    `json:"publicKey"`
 	AddedAt   time.Time `json:"addedAt"`
+}
+
+// GitHubRunner identifies one Actions runner this tool registered in an
+// organization. ID is GitHub's, and is the handle destroy removes the runner
+// by. Zero means the runner was registered but its id was not recorded, and
+// destroy looks the runner up by name. The registration token is not stored.
+type GitHubRunner struct {
+	Org  string `json:"org"`
+	Name string `json:"name"`
+	ID   int64  `json:"id,omitempty"`
+	URL  string `json:"url"`
 }
 
 // VMPaths are absolute paths inside the state directory.
