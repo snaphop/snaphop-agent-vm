@@ -142,7 +142,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 | Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
-| GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command; `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
+| GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command. That command sets labels `<org>`, `<family>-latest`, and `<family>-<tag>` (for the default Ubuntu image, `ubuntu-latest` and `ubuntu-26.04`). `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
 
 Two rules keep this maintainable. **Machine-readable output only** — `--output=json`,
 `--format json`, `-json`, `--xml`, and structured `virsh` subcommands, never scraping

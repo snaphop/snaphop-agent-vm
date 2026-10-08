@@ -69,7 +69,7 @@ login. `gh` 2.0 or newer runs on the client.
   fetched only after the guest is reachable. A dry run prints the command and
   does not fetch a token.
 - **The token crosses only on stdin.** The guest command is
-  `sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --token-file - --replace`.
+  `sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --labels <org>,<family>-latest,<family>-<tag> --token-file - --replace`.
   The token is the raw value, with no added newline, on that command's
   stdin. It is not a flag value, not an environment variable, not an
   argument, and it is not written into the image, the seed, generated
@@ -77,10 +77,15 @@ login. `gh` 2.0 or newer runs on the client.
   string and debug output, and from a tool error's stderr. The operator's
   `gh` credential stays on the client. `gh` is not authenticated inside the
   guest.
-- **The runner name is the VM name.** No labels, runner group, or ephemeral
-  flag are set. `--replace` lets a recreated VM of the same name take the
-  place of a runner GitHub still has. The in-guest command is the one
-  ADR-0013 already installs. This decision does not change that script.
+- **The runner name is the VM name.** The runner is labeled with the
+  organization, `<family>-latest`, and `<family>-<tag>`. For Ubuntu's
+  default tag those are `<org>`, `ubuntu-latest`, and `ubuntu-26.04`. A
+  tag of `latest` is already the family's latest label and is listed once.
+  GitHub also applies `self-hosted`, the operating system, and the
+  architecture. No runner group or ephemeral flag is set. `--replace` lets
+  a recreated VM of the same name take the place of a runner GitHub still
+  has. The in-guest command is the one ADR-0013 already installs. This
+  decision does not change that script.
 - **The record holds no token.** After configure returns, the id is read with
   `gh api --paginate orgs/<org>/actions/runners --jq '.runners[] | select(.name == "<vm>") | .id'`.
   Exactly one positive id is accepted. `vm.json` gains an optional
@@ -123,7 +128,9 @@ hand.
 Easier:
 
 - `agent-vm create ci --distro ubuntu-runner --github-org <org>` registers
-  the runner after boot, using the login `gh` already has.
+  the runner after boot, using the login `gh` already has. A workflow can
+  select that runner by the organization, by `ubuntu-latest`, or by
+  `ubuntu-26.04`.
 - `agent-vm destroy ci` removes that registration before the domain is
   undefined, so a thrown-away runner does not stay in the organization.
 - The image, the seed, and generated user-data still contain no token.

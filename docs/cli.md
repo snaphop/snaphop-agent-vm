@@ -467,7 +467,8 @@ unregisters the guest at GitHub. The value is a removal token. `configure`
 uses a registration token, and that value is rejected by `remove`.
 
 When the image is a `-runner` variant and an organization is set, `create`
-registers the guest itself after SSH is up. See
+registers the guest itself after SSH is up and labels it with the
+organization, `<family>-latest`, and `<family>-<tag>`. See
 [`--github-org`](#--github-org). A create that names no organization leaves
 the runner unregistered, and the `configure` command above is how you
 register it.
@@ -1105,7 +1106,7 @@ and must not already exist.
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
 | `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
-| `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
+| `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots, labeled with `<org>`, `<family>-latest`, and `<family>-<tag>`. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
 | `--tailscale-auth-key-file <path>` | none | Join the guest to a Tailscale network after it boots. The file holds one auth key. No flag takes the key itself, and no config key or environment variable turns this on. Requires a wait. |
 | `--tailscale-hostname <name>` | the VM name | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. |
 | `--tailscale-login-server <url>` | Tailscale's coordination server | `https` URL of another coordination server. No user, password, query, or fragment. |
@@ -1364,12 +1365,22 @@ image, the seed, generated user-data, `vm.json`, or a log:
 
 ```text
 sudo -n /usr/local/sbin/agent-vm-github-runner configure \
-  --url https://github.com/<org> --name <vm> --token-file - --replace
+  --url https://github.com/<org> --name <vm> \
+  --labels <org>,<family>-latest,<family>-<tag> \
+  --token-file - --replace
 ```
 
-The runner's name is the VM name. No labels, runner group, or ephemeral flag
-are set. `--replace` lets a recreated VM of the same name take the place of a
-runner GitHub still has. The operator's `gh` credential stays on the client.
+The runner's name is the VM name. It is labeled with the organization,
+`<family>-latest`, and `<family>-<tag>`. `ubuntu-runner` in organization
+`acme` is labeled `acme`, `ubuntu-latest`, and `ubuntu-26.04`. A Fedora 44
+runner is labeled `acme`, `fedora-latest`, and `fedora-44`. An Arch runner
+uses that image's tag the same way, so the default tag produces
+`arch-latest` and `arch-base-20260927.0.600689`. A tag of `latest` is
+already the family's latest label, so it is listed once. GitHub
+also applies its own `self-hosted`, operating system, and architecture
+labels. The runner group and the ephemeral flag are left unset. `--replace`
+lets a recreated VM of the same name take the place of a runner GitHub still
+has. The operator's `gh` credential stays on the client.
 The guest can read the registration token while `config.sh` runs.
 
 The order after SSH is the Tailscale join, then `--github-ssh-key`, then this
@@ -1786,7 +1797,7 @@ table below is the summary.
 |---|---|
 | `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
-| `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
+| `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --labels <org>,<family>-latest,<family>-<tag> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |

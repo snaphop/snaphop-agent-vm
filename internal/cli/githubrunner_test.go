@@ -104,6 +104,30 @@ func treeContains(t *testing.T, root, needle string) bool {
 	return found
 }
 
+func TestGitHubRunnerLabels_NamesTheOrgTheLatestAliasAndTheRelease(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name             string
+		org, family, tag string
+		want             string
+	}{
+		{name: "ubuntu default", org: "snaphop", family: "ubuntu", tag: "26.04", want: "snaphop,ubuntu-latest,ubuntu-26.04"},
+		{name: "ubuntu older release", org: "acme", family: "ubuntu", tag: "24.04", want: "acme,ubuntu-latest,ubuntu-24.04"},
+		{name: "fedora", org: "acme", family: "fedora", tag: "44", want: "acme,fedora-latest,fedora-44"},
+		{name: "arch snapshot", org: "acme", family: "arch", tag: "base-20260927.0.600689", want: "acme,arch-latest,arch-base-20260927.0.600689"},
+		{name: "arch rolling tag", org: "acme", family: "arch", tag: "base", want: "acme,arch-latest,arch-base"},
+		{name: "latest tag is already the alias", org: "acme", family: "ubuntu", tag: "latest", want: "acme,ubuntu-latest"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := githubRunnerLabels(tc.org, tc.family, tc.tag); got != tc.want {
+				t.Errorf("githubRunnerLabels(%q, %q, %q) = %q, want %q", tc.org, tc.family, tc.tag, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCreate_RegistersARunnerWithTheTokenOnlyOnStdin(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := runnerEnv(t)
@@ -123,6 +147,7 @@ func TestCreate_RegistersARunnerWithTheTokenOnlyOnStdin(t *testing.T) {
 		"sudo -n /usr/local/sbin/agent-vm-github-runner configure",
 		"--url https://github.com/" + runnerOrg,
 		"--name agent-01",
+		"--labels " + runnerOrg + ",ubuntu-latest,ubuntu-26.04",
 		"--token-file -",
 		"--replace",
 	} {
@@ -369,6 +394,7 @@ func TestCreate_DryRunPrintsThePlanWithoutTheToken(t *testing.T) {
 	for _, want := range []string{
 		"gh api --method POST orgs/acme/actions/runners/registration-token --jq .token",
 		"agent-vm-github-runner configure",
+		"--labels acme,ubuntu-latest,ubuntu-26.04",
 		"--token-file -",
 		"--replace",
 		`select(.name == "agent-01")`,

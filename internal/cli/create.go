@@ -63,7 +63,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
-	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; requires a -runner image and gh")
+	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; labels are the org, <family>-latest, and <family>-<tag>; requires a -runner image and gh")
 	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "file containing a Tailscale auth key; the guest joins that network after it boots")
 	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: the VM name)")
 	tailscaleLoginServer := flags.String("tailscale-login-server", "", "https URL of a coordination server other than Tailscale's")
@@ -956,7 +956,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		a.printTailscalePlan(cfg.GuestUser, join)
 	}
 	if org := githubOrgForCreate(cfg); org != "" {
-		a.printGitHubRunnerPlan(cfg.GuestUser, org, name)
+		a.printGitHubRunnerPlan(cfg.GuestUser, cfg.Distro, org, name)
 	}
 
 	for _, note := range []string{
