@@ -31,7 +31,11 @@ migration or rebuild step a user has to take.
   `agent-vm destroy` removes a runner this tool registered before it removes
   the VM. A runner you registered yourself stays at GitHub. `info` shows the
   organization, the runner name, and GitHub's id. `gh` stays optional: a host
-  without it is still ready, and only these steps need it.
+  without it is still ready, and only these steps need it. The registered
+  runner carries three labels: the organization name, `<family>-latest`
+  (for example `ubuntu-latest`), and `<family>-<tag>` (for example
+  `ubuntu-26.04`). A workflow can require any one of them. GitHub still
+  adds its own `self-hosted`, operating system, and architecture labels.
 
 ### Changed
 

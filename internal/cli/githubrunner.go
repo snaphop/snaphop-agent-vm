@@ -36,15 +36,37 @@ func githubOrgForCreate(cfg *config.Config) string {
 	return cfg.GitHubOrg
 }
 
+// githubRunnerLabels are the custom labels create registers on a runner.
+// A workflow can require the organization (snaphop), the family's moving
+// name (ubuntu-latest), or the release this image was built from
+// (ubuntu-26.04, the family plus the image tag). GitHub still adds
+// self-hosted, the operating system, and the architecture. Each label is
+// listed once, in that order: a tag of latest is already the family's
+// latest label.
+func githubRunnerLabels(org, family, tag string) string {
+	candidates := []string{org, family + "-latest", family + "-" + tag}
+	seen := make(map[string]struct{}, len(candidates))
+	labels := make([]string, 0, len(candidates))
+	for _, label := range candidates {
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	return strings.Join(labels, ",")
+}
+
 // githubRunnerConfigureArgv is the guest command that registers the runner.
 // --replace lets a recreated VM of the same name take the place of a runner
-// GitHub still has. No labels, runner group, or ephemeral flag: those stay
-// the operator's choice when they configure by hand.
-func githubRunnerConfigureArgv(org, name string) []string {
+// GitHub still has. --labels is githubRunnerLabels. The runner group and
+// the ephemeral flag are left unset.
+func githubRunnerConfigureArgv(org, name, family, tag string) []string {
 	return []string{
 		"sudo", "-n", githubRunnerConfigure, "configure",
 		"--url", github.OrgURL(org),
 		"--name", name,
+		"--labels", githubRunnerLabels(org, family, tag),
 		"--token-file", "-",
 		"--replace",
 	}
@@ -68,7 +90,8 @@ func (a *App) registerGitHubRunner(ctx context.Context, req createRequest, vm *s
 		return runnerKept(vm.Name, fmt.Errorf("fetching a registration token for %s: %w", org, err))
 	}
 
-	_, err = a.runGuest(ctx, vm, address, githubRunnerConfigureArgv(org, vm.Name), token.Reader(), githubRunnerConfigureTimeout)
+	ref := req.cfg.Distro
+	_, err = a.runGuest(ctx, vm, address, githubRunnerConfigureArgv(org, vm.Name, ref.Distro.Name, ref.Tag), token.Reader(), githubRunnerConfigureTimeout)
 	if err != nil {
 		return runnerKept(vm.Name, fmt.Errorf("configuring the GitHub Actions runner in %s: %w", vm.Name, token.RedactError(err)))
 	}
@@ -184,7 +207,7 @@ func githubRunnerDetail(runner *state.GitHubRunner) string {
 
 // printGitHubRunnerPlan writes the gh and ssh lines a registration would run.
 // The token is fetched by the first gh command and is not printed.
-func (a *App) printGitHubRunnerPlan(user, org, name string) {
+func (a *App) printGitHubRunnerPlan(user string, ref distro.Ref, org, name string) {
 	a.out.Printf("%s\n", a.runner.Render(hostexec.Command{
 		Name: hostexec.GH.Name,
 		Args: []string{"auth", "status", "--hostname", "github.com"},
@@ -193,7 +216,7 @@ func (a *App) printGitHubRunnerPlan(user, org, name string) {
 		Name: hostexec.GH.Name,
 		Args: github.RegistrationTokenArgs(org),
 	}))
-	a.out.Printf("ssh%s %s@<guest address> %s\n", jumpArgs(a.sshJump()), user, strings.Join(githubRunnerConfigureArgv(org, name), " "))
+	a.out.Printf("ssh%s %s@<guest address> %s\n", jumpArgs(a.sshJump()), user, strings.Join(githubRunnerConfigureArgv(org, name, ref.Distro.Name, ref.Tag), " "))
 	a.out.Printf("%s\n", a.runner.Render(hostexec.Command{
 		Name: hostexec.GH.Name,
 		Args: github.RunnerIDArgs(org, name),

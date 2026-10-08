@@ -140,6 +140,10 @@ agent-vm create ci-01 --distro ubuntu-runner
 agent-vm create ci-02 --distro ubuntu-runner --github-org acme
 ```
 
+The registered runner is labeled with the organization, `ubuntu-latest`, and
+`ubuntu-26.04` (the image's family and tag). A workflow can require any one
+of those labels.
+
 Each family also has a **Nix** variant (`ubuntu-nix`, `fedora-nix`,
 `arch-nix`). It keeps the distro boot layer and takes most guest tooling from
 one shared Nix expression. Codex and a small set of mise-managed tools remain
