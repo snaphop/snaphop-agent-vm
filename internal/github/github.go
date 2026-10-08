@@ -1,10 +1,12 @@
-// Package github adds and removes SSH public keys on the operator's GitHub
-// account through the `gh` CLI.
+// Package github talks to GitHub through the operator's `gh` CLI: SSH public
+// keys on the account, and Actions runner registration for an organization.
 //
-// It runs on the host, never in the guest: the guest is untrusted and a GitHub
-// token must never reach it (SECURITY.md). What travels the other way is a
-// public key the guest generated for itself, so no private material is
-// involved in either direction.
+// It runs on the client, never in the guest. The guest is untrusted. A GitHub
+// credential must never reach it (SECURITY.md). A registration token is
+// fetched here and handed to the caller, who may pass it on the guest's stdin
+// for the one configure command that consumes it. It is not an argument, not
+// logged, and not stored. What travels the other way for SSH keys is a public
+// key the guest generated for itself.
 //
 // `gh api` is used rather than `gh ssh-key add`/`delete` because the API
 // subcommand is the machine-readable one: it returns the key's numeric id on
@@ -45,15 +47,7 @@ const keyScope = "admin:public_key"
 // token that cannot manage keys is a refusal before a VM exists, and before a
 // key is deleted, so that a 404 can only mean the key is not on the account.
 func (c *Client) CheckAuth(ctx context.Context) error {
-	res, err := c.runner.Run(ctx, hostexec.Command{
-		Name:   hostexec.GH.Name,
-		Args:   []string{"auth", "status", "--hostname", "github.com"},
-		Effect: hostexec.Read,
-		// gh runs here, never on the hypervisor: it uses the operator's own
-		// GitHub login, and no GitHub credential belongs on a machine that
-		// hosts untrusted guests (SECURITY.md).
-		Location: hostexec.Client,
-	})
+	status, err := c.ghAuthStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("gh is not logged in to github.com; run `gh auth login`: %w", err)
 	}
@@ -62,13 +56,29 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 	// format for this output -- is left alone: the API is still the authority,
 	// and refusing on a line we failed to find would be worse than letting the
 	// request be tried.
-	scopes, found := tokenScopes(string(res.Stdout))
+	scopes, found := tokenScopes(status)
 	if found && !slices.Contains(scopes, keyScope) {
 		return fmt.Errorf("gh is logged in to github.com, but its token does not have the %q scope "+
 			"that managing SSH keys needs; add it with `gh auth refresh -h github.com -s %s`",
 			keyScope, keyScope)
 	}
 	return nil
+}
+
+// ghAuthStatus runs `gh auth status` and returns its stdout. gh runs on the
+// client: it uses the operator's own GitHub login, and no GitHub credential
+// belongs on a machine that hosts untrusted guests (SECURITY.md).
+func (c *Client) ghAuthStatus(ctx context.Context) (string, error) {
+	res, err := c.runner.Run(ctx, hostexec.Command{
+		Name:     hostexec.GH.Name,
+		Args:     []string{"auth", "status", "--hostname", "github.com"},
+		Effect:   hostexec.Read,
+		Location: hostexec.Client,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(res.Stdout), nil
 }
 
 // tokenScopes pulls the scopes out of `gh auth status` output

@@ -34,8 +34,9 @@ Requirements that shape the design:
 The full base images include guest-side agent tooling; slim images omit it, and
 nix images install it from one shared nix expression rather than from the
 family's package manager (ADR-0012). Runner images are that slim image plus an
-unconfigured GitHub Actions runner (ADR-0013). cloud-init can customize any
-variant. Deliberately outside this repository:
+unconfigured GitHub Actions runner (ADR-0013). When an organization is named,
+`create` registers that guest after it boots (ADR-0015). cloud-init can
+customize any variant. Deliberately outside this repository:
 multi-host scheduling, authentication of remote callers, and long-lived VM fleet management. This is a
 single-host tool with no daemon of its own.
 
@@ -53,7 +54,7 @@ single-host tool with no daemon of its own.
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -d -json link bridge validation      │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
-│  internal/github     gh api calls for --github-ssh-key, on the client              │
+│  internal/github     gh on the client: SSH keys and Actions runner registration    │
 │  internal/tailscale  guest Tailscale join; auth key on stdin only                  │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
 │  internal/notices    LICENSE and NOTICE, embedded so one binary can print them     │
@@ -141,6 +142,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 | Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
+| GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command; `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
 
 Two rules keep this maintainable. **Machine-readable output only** — `--output=json`,
 `--format json`, `-json`, `--xml`, and structured `virsh` subcommands, never scraping
@@ -217,7 +219,8 @@ background worker. Long waits include image builds, the guest boot wait during `
   language toolchains, coding agents, browser, Docker, and nested
   virtualization stack. `<family>-runner.Containerfile` is that slim recipe
   plus the GitHub Actions self-hosted runner, installed unconfigured under
-  `/opt/actions-runner` (ADR-0013). `<family>-nix.Containerfile` keeps all of
+  `/opt/actions-runner` (ADR-0013). `create` registers that guest after boot
+  when an organization is set (ADR-0015). `<family>-nix.Containerfile` keeps all of
   it but takes the tooling from the shared `templates/distro/agent-tools.nix`
   instead of the family's package manager and mise; Docker and the
   virtualization stack still come from the distro, because a nix profile
@@ -334,16 +337,28 @@ background worker. Long waits include image builds, the guest boot wait during `
   GitHub account through `gh api`, for `create --github-ssh-key` and
   `destroy --github-ssh-key`. `gh api` is used rather than `gh ssh-key
   add`/`delete` because it returns the key's numeric id, which is the handle
-  `destroy` needs later, and takes that id back without a prompt.
+  `destroy` needs later, and takes that id back without a prompt. The same
+  package registers and removes an organization Actions runner when `create`
+  names an organization on a `-runner` image (ADR-0015). The registration
+  token is fetched with `gh` on the client and passed on the stdin of the
+  guest configure command. The runner id is read from GitHub's runner list,
+  by the VM's name, and a recorded runner is deleted with
+  `gh api --method DELETE orgs/<org>/actions/runners/<id>`.
 - **Public interface:** the `guest.githubKey` field in `vm.json` and the key
-  title `agent-vm <name> on <host>`.
+  title `agent-vm <name> on <host>`; the optional `githubRunner` object
+  (`org`, `name`, `id`, `url`) with no token.
 - **Failure behavior:** `gh auth status` is checked before a VM is created, so
-  an expired login costs nothing. A `gh` failure after the VM exists leaves the
-  VM in place and names the command to rerun; a key already deleted on
-  github.com is not an error.
+  an expired login costs nothing. The SSH-key check requires
+  `admin:public_key`. The runner check requires `admin:org` or
+  `manage_runners:org` when scopes are listed, and accepts a login that
+  prints no scope line. A `gh` failure after the VM exists leaves the VM in
+  place and names the command to rerun; a key already deleted on github.com
+  is not an error. A runner GitHub answers 404 for, after the scope check,
+  is treated as already gone. Two runners of the same name stop destroy.
 - **Compatibility constraints:** it runs on the **client**, with the operator's
-  existing login. No GitHub credential ever enters a guest, and the guest's
-  private key never leaves it (SECURITY.md).
+  existing login. The operator's `gh` credential never enters a guest, and
+  the guest's private key never leaves it (SECURITY.md). The registration
+  token crosses only on stdin, after SSH, and is not stored.
 
 ### `internal/tailscale`
 
@@ -472,13 +487,20 @@ background worker. Long waits include image builds, the guest boot wait during `
     copy the join script over SSH, install Tailscale when the guest does not
     already have it, then run `tailscale up` with the auth key on stdin.
     Save the non-secret result into `vm.json`. A failure here leaves the VM
-    in place and does not store the key. `--github-ssh-key`, when also given,
-    runs after the join. Then print the result.
+    in place and does not store the key.
+12. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
+    after the join: it reads the guest's public key and adds it with `gh` on
+    the client. When the image is a `-runner` variant and an organization is
+    set, `create` then fetches a registration token with `gh` on the client
+    and passes it on the stdin of the guest's configure command (ADR-0015).
+    The token is not stored. A failure here leaves the VM in place. Then
+    print the result.
 
 Rollback: steps 5–9 are undone in reverse on failure — `virsh destroy`, `virsh
 undefine`, then delete the overlay, the seed, and the state directory. Steps 10
-and 11 are the deliberate exceptions: a boot-wait timeout, a failed Tailscale
-join, and a failed GitHub registration preserve the VM and its
+through 12 are the deliberate exceptions: a boot-wait timeout, a failed
+Tailscale join, a failed GitHub SSH-key registration, and a failed
+Actions-runner registration preserve the VM and its
 console log rather than destroying the evidence. `undefine` is
 never given `--remove-all-storage`; the tool deletes its own files after the
 containment check, so libvirt is never asked to remove storage it might interpret
@@ -491,7 +513,8 @@ require execution, which doubles as the documentation of what the tool does and 
 operator perform the same work by hand.
 
 `destroy` is the same path in reverse, and only ever acts on domains and paths
-recorded in `vm.json`.
+recorded in `vm.json`. When that record names a GitHub Actions runner, the
+runner is deleted at GitHub before the domain is undefined.
 
 ## Public Contracts
 
@@ -542,7 +565,9 @@ Operator-supplied cloud-init data can contain sensitive configuration and
 lives only in the per-VM seed and is deleted with the VM. Guest disk contents are
 whatever the agent wrote and are destroyed with the VM; `destroy --keep-disk`
 deliberately retains the VM directory and its contents.
-A GitHub key remains registered unless `destroy --github-ssh-key` removes it.
+A GitHub SSH key remains registered unless `destroy --github-ssh-key` removes it.
+An Actions runner recorded in `githubRunner` is deleted by `destroy` before the
+domain is undefined. A runner with no such record stays registered at GitHub.
 
 ## Runtime Profiles And Configuration
 
@@ -557,7 +582,9 @@ One profile, parameterized:
 
 There are no feature flags, no build-time profiles, and no staging/production
 distinction — the tool runs on whatever host invokes it. Secrets are not part of
-configuration; the only key material referenced is an SSH public key path.
+configuration; the only key material referenced is an SSH public key path. A
+GitHub organization name may be configured, and it is a name. The registration
+token is fetched when the guest is registered and is not stored.
 
 ## External Dependencies
 
@@ -572,7 +599,7 @@ configuration; the only key material referenced is an SSH public key path.
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause, and a host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel` | Exit `3` with the libguestfs diagnostic; upstream |
 | `iproute2` (`ip -d -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | Guest SSH, boot readiness, updates, and all remote-hypervisor operations | Guest connections and remote operations fail | Host operator |
-| `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`) | Only that flag fails; every other command is unaffected | Exit `3` naming `gh`; host operator |
+| `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`), and register or remove an organization Actions runner (`--github-org` on a `-runner` image, and `destroy` of a recorded runner) | Only those operations fail; every other command is unaffected. `doctor` does not fail a host that lacks `gh` | Exit `3` naming `gh` when an operation needs it; host operator |
 | Container registries | — | Source images | `image build` fails; unaffected once cached | Retry; pin digests to avoid surprise drift |
 | `cloud-init` in the guest | — | First-boot configuration | VM boots but has no user or SSH key; surfaces as a `--wait-for-ssh` timeout | Console log shows cloud-init output; fix the base image |
 
@@ -615,9 +642,11 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
   `vm.json`/`manifest.json` — so a "worked last month" regression can be traced to a
   host tool upgrade.
 - Redaction: cloud-init user-data contents, the contents of any file passed by
-  the operator, and a Tailscale auth key are never logged; only paths and sizes are. Argv is logged, so no
-  secret is ever passed as a command-line argument. The auth key travels on
-  the guest command's stdin, which is not logged.
+  the operator, a Tailscale auth key, and a GitHub Actions registration token
+  are never logged; only paths and sizes are. Argv is logged, so no
+  secret is ever passed as a command-line argument. The auth key and the
+  registration token travel on the guest command's stdin, which is not logged.
+  The token's type redacts itself from errors.
 - The guest serial console is captured to `vms/<name>/console.log`, which is the
   primary artifact for diagnosing a VM that never became reachable.
 - `agent-vm doctor` is the health check, machine-readable with
@@ -640,11 +669,14 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   path sharing is not implemented; adding it would require an ADR and the
   per-VM, explicit, default-read-only handling `SECURITY.md` mandates.
 - Credentials this tool places in a guest are an SSH **public** key path,
-  injected into the cloud-init seed, and — only when the operator names a file
-  on `create` — a Tailscale auth key passed on that guest's stdin after boot
-  (ADR-0014). The auth key is not written into an image, a seed, or `vm.json`,
-  and it is not a command-line argument. No private key ever enters an image,
-  a seed, or this repository.
+  injected into the cloud-init seed, and — only when the operator asks — two
+  short-lived secrets passed on that guest's stdin after boot: a Tailscale
+  auth key when `create` names a file (ADR-0014), and a GitHub Actions
+  registration token when `create` registers a `-runner` VM with an
+  organization (ADR-0015). Neither is written into an image, a seed, or
+  `vm.json`, and neither is a command-line argument. The operator's `gh`
+  credential stays on the client. No private key ever enters an image, a
+  seed, or this repository.
 - Authorization decisions belong to the host: libvirt/QEMU enforce guest
   isolation, and the operator's own privileges determine what the tool may do.
   The tool adds its own guard rails on destructive operations — name validation,
@@ -653,7 +685,10 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
 - Data that must never cross into a guest: host SSH private keys, cloud
   credentials, the operator's home directory, and the state directory itself.
   A Tailscale auth key is not one of those. It crosses only on stdin, and only
-  for the guest whose `create` named the file.
+  for the guest whose `create` named the file. A GitHub Actions registration
+  token is not one of those either. It crosses only on stdin, and only for the
+  `-runner` guest whose `create` named an organization. The operator's `gh`
+  credential does not cross.
 
 ## Constraints And Risks
 

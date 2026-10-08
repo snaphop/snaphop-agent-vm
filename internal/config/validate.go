@@ -47,6 +47,34 @@ func ValidateVMName(name string) error {
 	}
 }
 
+// GitHubOrgPattern is GitHub's login shape for an organization: 1 to 39
+// letters, digits, and hyphens, not starting or ending with a hyphen. The
+// organization is placed in a gh api path, so it is checked here rather than
+// escaped at the call.
+var GitHubOrgPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+
+// ParseGitHubOrg returns the trimmed organization, or "" when org is empty.
+// An empty value means registration is not configured. A non-empty value that
+// is not a GitHub login is a usage error.
+func ParseGitHubOrg(org string) (string, error) {
+	org = strings.TrimSpace(org)
+	if org == "" || GitHubOrgPattern.MatchString(org) {
+		return org, nil
+	}
+	return "", &ValidationError{
+		Field:  "github org",
+		Value:  org,
+		Err:    fmt.Errorf("names must match %s", GitHubOrgPattern),
+		Remedy: "Use the organization's GitHub login: 1 to 39 letters, digits, and hyphens, not starting or ending with a hyphen.",
+	}
+}
+
+// ValidateGitHubOrg checks an organization login. An empty value is valid.
+func ValidateGitHubOrg(org string) error {
+	_, err := ParseGitHubOrg(org)
+	return err
+}
+
 // validate checks the fully resolved configuration. It runs before any host
 // state changes, so a rejected configuration leaves nothing behind.
 // validateMaxMemory checks the virtio-mem ceiling. Zero means the feature is

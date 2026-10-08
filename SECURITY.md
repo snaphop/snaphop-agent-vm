@@ -195,17 +195,31 @@ section named here.
 - Forge and cloud credentials MUST stay on the host. `--github-ssh-key` runs
   `gh` on the client with the operator's existing login and sends only the
   **public** half of a key the guest generated for itself. `gh` MUST NOT be
-  authenticated inside a guest by this tool, and this tool MUST NEVER write a
-  GitHub token into an image, a seed, or a guest's filesystem.
+  authenticated inside a guest by this tool. The operator's `gh` credential
+  MUST NEVER enter a guest, an image, a seed, `vm.json`, a log, or an argument
+  vector.
 - A `-runner` base image carries the GitHub Actions self-hosted runner and the
-  command that registers it. The image, the cloud-init seed, and generated
-  user-data contain no registration token, and `create` has no flag that
-  supplies one. The operator registers a guest by running
-  `agent-vm-github-runner configure` inside it. That command passes the token
-  to GitHub's `config.sh`, which stores the runner credential on the guest.
-  The `runner` account has no sudo. Destroying the VM leaves the registration
-  at GitHub in place; unregister with `agent-vm-github-runner remove` or in
-  the GitHub UI.
+  command that registers it. The image, the cloud-init seed, generated
+  user-data, and `vm.json` contain no registration token. A registration
+  token may cross into a guest in exactly one way: the organization is set
+  with `create --github-org` (or `[github] org`, or `AGENT_VM_GITHUB_ORG`),
+  the image is a `-runner` variant, and after SSH is up the tool fetches the
+  token on the client with
+  `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`
+  and passes that value on the stdin of
+  `sudo -n /usr/local/sbin/agent-vm-github-runner configure --token-file -`
+  (ADR-0015). The token MUST NOT be a flag value, an environment variable, an
+  argument vector, a base-image layer, generated cloud-init user-data, a field
+  in `vm.json`, or a log line. The type that carries it MUST redact it. The
+  guest can read the token while `config.sh` runs, so the value that crosses
+  is the short-lived registration token. A create that names no organization
+  does not fetch a token; the operator registers that guest by running
+  `agent-vm-github-runner configure` inside it. `config.sh` stores the runner
+  credential on the guest. The `runner` account has no sudo. Destroying a VM
+  whose record names a runner deletes that runner at GitHub before the domain
+  is undefined. A runner registered by hand, which has no record, stays at
+  GitHub; unregister it with `agent-vm-github-runner remove` or in the GitHub
+  UI.
 - Registry credentials, when needed, MUST come from the host's existing
   container auth mechanism and MUST NOT be copied into the state directory or
   logged.

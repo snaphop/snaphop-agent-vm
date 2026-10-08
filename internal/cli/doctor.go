@@ -408,18 +408,18 @@ func checkOptionalTools(ctx context.Context, app *App) []check {
 		case errors.As(err, &missing):
 			checks = append(checks, check{
 				Name: tool.Name, Status: statusSkip,
-				Detail: fmt.Sprintf("not installed; only `--github-ssh-key` needs it (package %s)", tool.Package),
+				Detail: fmt.Sprintf("not installed; only `--github-ssh-key` and `--github-org` need it (package %s)", tool.Package),
 			})
 		case err != nil:
 			checks = append(checks, check{
 				Name: tool.Name, Status: statusWarn,
 				Detail: err.Error(),
-				Remedy: "`--github-ssh-key` will not work until this is fixed; every other command is unaffected.",
+				Remedy: "`--github-ssh-key` and `--github-org` will not work until this is fixed; every other command is unaffected.",
 			})
 		default:
 			checks = append(checks, check{
 				Name: tool.Name, Status: statusPass,
-				Detail: fmt.Sprintf("%s (optional; used by --github-ssh-key)", version),
+				Detail: fmt.Sprintf("%s (optional; used by --github-ssh-key and --github-org)", version),
 			})
 		}
 	}

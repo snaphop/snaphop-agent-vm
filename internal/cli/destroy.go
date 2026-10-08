@@ -104,6 +104,19 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 			vm.Name, vm.Guest.GitHubKey.Title, vm.Guest.GitHubKey.ID)
 	}
 
+	// A recorded runner is removed with the VM. There is no separate flag:
+	// the record is the request. A runner the operator registered by hand has
+	// no record and is left at GitHub. The DELETE runs before undefine, so a
+	// gh failure leaves the domain and the record in place.
+	if vm.GitHubRunner != nil {
+		if _, err := app.versions.Require(ctx, hostexec.GH); err != nil {
+			return err
+		}
+		if err := app.removeGitHubRunner(ctx, store, vm); err != nil {
+			return err
+		}
+	}
+
 	return app.destroyVM(ctx, destroyRequest{
 		vm:       vm,
 		store:    store,
@@ -126,6 +139,9 @@ func destroyPrompt(vm *state.VM, keepDisk, force, githubSSHKey bool) string {
 	}
 	if githubSSHKey && vm.Guest.GitHubKey != nil {
 		what += fmt.Sprintf(" Its SSH key %q will also be removed from your GitHub account.", vm.Guest.GitHubKey.Title)
+	}
+	if vm.GitHubRunner != nil {
+		what += fmt.Sprintf(" Its GitHub Actions runner %s/%s will also be removed.", vm.GitHubRunner.Org, vm.GitHubRunner.Name)
 	}
 	return what
 }

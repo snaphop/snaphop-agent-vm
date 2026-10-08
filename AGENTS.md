@@ -124,7 +124,7 @@ Ordinary focused work continues to follow this file directly.
 │   ├── network/            # virsh net-* for NAT, ip -d -json bridge validation
 │   ├── guestinit/          # cloud-init user-data and meta-data generation
 │   ├── state/              # state directory, vm.json, locking
-│   ├── github/             # gh api calls for --github-ssh-key, on the client
+│   ├── github/             # gh on the client: SSH keys and Actions runner registration
 │   ├── tailscale/          # guest Tailscale join; the auth key travels on stdin
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── notices/            # LICENSE and NOTICE, embedded in the release binary
@@ -171,7 +171,8 @@ Where new code belongs:
   `TestNixContainerfiles_KeepTheBootAndCloudInitContract`, and
   `TestRunnerContainerfiles_KeepTheBootAndCloudInitContract` enforce. The
   runner recipe is the slim recipe plus one shared section that installs the
-  GitHub Actions self-hosted runner unconfigured (ADR-0013).
+  GitHub Actions self-hosted runner unconfigured (ADR-0013). `create`
+  registers that guest when an organization is set (ADR-0015).
   `TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner` requires that slim
   body to stay byte-identical and the runner section to stay the same on every
   family. The nix recipes take their guest tooling from the shared
@@ -208,8 +209,10 @@ Prerequisites:
 - `virt-install` 4.0+ (`virtinst` on Debian/Ubuntu)
 - `qemu-img`, `podman` 4.0+, and libguestfs 1.50+
   (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`)
-- `gh` 2.0+ — optional, and needed only by `--github-ssh-key` on `create` and
-  `destroy`
+- `gh` 2.0+ — optional. `--github-ssh-key` on `create` and `destroy` needs
+  it, and so does registering or removing an organization Actions runner
+  (`--github-org` on a `-runner` image, and `destroy` of a VM that recorded
+  one). A host without `gh` is still ready.
 - `golangci-lint` for linting
 
 No libvirt development headers are needed — the build is pure Go and talks to
@@ -331,8 +334,12 @@ Major modules and responsibilities:
   the ssh transport for a remote hypervisor.
 - `internal/github` — adds and removes SSH **public** keys on the operator's
   GitHub account through `gh api`, for `--github-ssh-key` on `create` and
-  `destroy`. It runs on the client with the operator's existing login; no GitHub
-  credential ever enters a guest.
+  `destroy`. On a `-runner` image with an organization set, it also fetches a
+  registration token on the client and passes that token on the stdin of the
+  guest configure command (ADR-0015). It runs on the client with the
+  operator's existing login. The operator's `gh` credential never enters a
+  guest. The registration token is not written into the image, the seed,
+  `vm.json`, a log, or an argument vector.
 - `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
   when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth
   key is read from that file and passed on the guest's stdin. It is not a
@@ -363,8 +370,11 @@ read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
 → poll `virsh domifaddr` and wait for SSH (unless waiting is disabled)
 → optionally install Tailscale in the guest and join the tailnet (the auth
 key goes on stdin, not into the seed) → optionally register the guest public
-key with GitHub. Failures through recording
-roll back the domain and per-VM directory; a boot-wait, Tailscale join, or GitHub registration
+key with GitHub → optionally register a `-runner` guest as an organization
+Actions runner (the registration token goes on stdin, not into the seed).
+Failures through recording
+roll back the domain and per-VM directory; a boot-wait, Tailscale join, GitHub
+SSH-key, or Actions-runner registration
 failure retains the recorded VM for inspection. Built base images and the shared
 NAT network remain reusable. Cleanup failures must report what remains.
 
@@ -380,8 +390,8 @@ and, for full images, tool and vendor download services. Runner images also
 download the pinned GitHub Actions runner release during the image build.
 The first Tailscale join downloads Tailscale's installer inside that guest;
 a guest that already has `tailscale` on `PATH` skips the download.
-`--github-ssh-key` contacts GitHub from the client; `update` downloads
-packages and tools from inside guests.
+`--github-ssh-key` and `--github-org` contact GitHub from the client; `update`
+downloads packages and tools from inside guests.
 
 Canonical contracts and what must change together: `docs/cli.md` (flags,
 subcommands, exit codes, underlying commands), `test/golden/` (`virt-install` argv
@@ -413,7 +423,8 @@ cache format, guest-to-host sharing, network modes, where host tools run
 (ADR-0010), the default resource profile,
 adding a supported distro family, adding a base image variant or changing where
 guest tooling comes from (ADR-0012, ADR-0013), joining a guest to an overlay
-network (ADR-0014), or **implementing something a standard host
+network (ADR-0014), registering a guest as a GitHub Actions runner
+(ADR-0015), or **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
 Document observable or operational effects in `CHANGELOG.md` under
@@ -539,7 +550,12 @@ The essentials, which `SECURITY.md` states precisely:
   guest's stdin after boot when `create --tailscale-auth-key-file` names a
   file (ADR-0014). It is not written into the image, the seed, `vm.json`, a
   log, or an argument vector. Do not put that key in cloud-init to simplify
-  the join.
+  the join. A GitHub Actions registration token is passed on the guest's
+  stdin after boot when `create` registers a `-runner` VM with an
+  organization (ADR-0015). The operator's `gh` credential stays on the
+  client. The token is not written into the image, the seed, `vm.json`, a
+  log, or an argument vector. Do not put that token in cloud-init to simplify
+  registration.
 - Never bake secrets into a base image or a cloud-init seed that outlives the
   VM, and never log the contents of user-supplied cloud-init data.
 - Treat everything crossing a boundary as untrusted: CLI arguments, config

@@ -42,6 +42,13 @@ type fileConfig struct {
 		User    string   `toml:"user"`
 		SSHKeys []string `toml:"ssh_keys"`
 	} `toml:"guest"`
+
+	// GitHub names the organization create registers a -runner VM with.
+	// The registration token is not a config value: it is fetched at create
+	// time and lives only for that request (ADR-0015).
+	GitHub struct {
+		Org string `toml:"org"`
+	} `toml:"github"`
 }
 
 // loadFile reads the configuration file at path. A missing file is not an
@@ -96,6 +103,7 @@ func loadFile(path string) (Overrides, bool, error) {
 		NATNetwork:      file.Network.NAT.Name,
 		GuestUser:       file.Guest.User,
 		SSHKeys:         file.Guest.SSHKeys,
+		GitHubOrg:       file.GitHub.Org,
 	}
 	// Whether vcpus was written is asked of the file, not inferred from the
 	// value: `vcpus = 0` is a mistake to report, not an absent key.

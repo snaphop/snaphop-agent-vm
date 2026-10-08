@@ -28,6 +28,7 @@ Documentation for SnapHop Agent VM.
 | [0012](./decisions/0012-nix-provided-guest-tooling.md) | Provide guest tooling through Nix as a third image variant |
 | [0013](./decisions/0013-self-hosted-github-actions-runner-variant.md) | Add a self-hosted GitHub Actions runner variant of each slim image |
 | [0014](./decisions/0014-join-a-tailscale-network-from-the-guest.md) | Join a Tailscale network from inside the guest |
+| [0015](./decisions/0015-register-a-github-actions-runner-with-gh.md) | Register a GitHub Actions runner with `gh` |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.

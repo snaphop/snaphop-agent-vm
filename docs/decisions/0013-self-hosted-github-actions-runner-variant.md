@@ -6,6 +6,12 @@ Date: 2026-10-03
 
 Accepted
 
+Narrowed by [ADR-0015](./0015-register-a-github-actions-runner-with-gh.md).
+When an organization is set, `create` of a `-runner` image registers the guest
+after SSH, and `destroy` removes that registration. The image, the seed, and
+the in-guest command are unchanged. A create that names no organization still
+leaves registration to the operator.
+
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided
 guest tooling) with another variant of each existing family. Bounded by
@@ -114,10 +120,12 @@ Add a **runner** variant of every supported family: `ubuntu-runner`,
   does not print it. `config.sh` itself takes the value as an argument; that
   is the interface the upstream program ships, and this wrapper adds no second
   copy of it to the image.
-- **`create` stays out of it.** There is no flag and no cloud-init field that
-  writes a registration token. Destroying the VM does not unregister the
-  runner at GitHub. The operator runs `remove`, or deletes the runner in the
-  GitHub UI.
+- **The image stays out of registration.** There is no cloud-init field that
+  writes a registration token. A create that names no organization leaves
+  the runner unregistered; the operator runs `configure`, and later `remove`
+  or the GitHub UI. When an organization is set, registration and removal
+  are [ADR-0015](./0015-register-a-github-actions-runner-with-gh.md). The
+  token still arrives on stdin of this command, after boot.
 - **No new host tool and no schema change.** `curl`, `sha256sum`, `tar`, and
   `useradd` already exist inside the slim image. `doctor` is unchanged.
   `manifest.json` is unchanged: the variant is a different image name, the
@@ -149,9 +157,10 @@ Harder:
   script. A future runner can fail at job time if the bundled runtime's
   SONAMEs move away from Arch's packages. That combination is not part of the
   default integration run.
-- Destroying the VM leaves a runner registered at GitHub until the operator
-  removes it. An ephemeral runner unregisters itself after one job; a normal
-  one does not.
+- A create that names no organization leaves a hand-registered runner at
+  GitHub until the operator removes it. An ephemeral runner unregisters
+  itself after one job; a normal one does not. A create that names an
+  organization removes that registration on destroy (ADR-0015).
 - The registration value is visible to other processes on the guest for the
   duration of `config.sh`, because that is how `config.sh` accepts it. The
   wrapper does not log it, and the `runner` directory is mode `0750` so the
