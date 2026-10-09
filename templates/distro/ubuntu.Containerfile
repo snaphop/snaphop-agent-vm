@@ -868,6 +868,11 @@ RUN printf '%s\n' \
 # provides qemu-kvm, which is the name libvirt's dependency accepts, and it is
 # a real package on 24.04 as well. The hardware-enablement build is the other
 # provider, and installing it would replace the release's QEMU.
+#
+# guestfish ships virt-copy-out. guestfs-tools ships virt-make-fs, virt-ls,
+# and virt-sysprep, and only recommends the metapackage that depends on
+# guestfish. --no-install-recommends would leave virt-copy-out uninstalled,
+# and a nested `agent-vm doctor` would fail the same way a host setup did.
 RUN case "$(uname -m)" in \
       aarch64|arm64) qemu_pkg=qemu-system-arm ;; \
       x86_64|amd64) qemu_pkg=qemu-system-x86 ;; \
@@ -881,6 +886,7 @@ RUN case "$(uname -m)" in \
       libvirt-clients \
       virtinst \
       dnsmasq-base \
+      guestfish \
       guestfs-tools \
       podman \
  && apt-get clean \
@@ -938,6 +944,7 @@ RUN set -eu; \
     command -v "qemu-system-$(uname -m)" >/dev/null \
       || { echo "no qemu-system-$(uname -m) in this image; the guest could not start a VM of its own" >&2; exit 1; }; \
     virt-make-fs --version >/dev/null || { echo "guestfs-tools installed but virt-make-fs cannot run" >&2; exit 1; }; \
+    virt-copy-out --version >/dev/null || { echo "virt-copy-out is missing; image builds cannot extract a kernel" >&2; exit 1; }; \
     podman --version >/dev/null || { echo "podman installed but cannot run" >&2; exit 1; }; \
     dnsmasq --version >/dev/null || { echo "dnsmasq installed but cannot run" >&2; exit 1; }
 

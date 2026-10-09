@@ -75,7 +75,8 @@ Ubuntu on x86_64:
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-    virtinst dnsmasq-base guestfs-tools podman iproute2 openssh-client acl
+    virtinst dnsmasq-base guestfish guestfs-tools podman iproute2 \
+    openssh-client acl
 ```
 
 Ubuntu on aarch64. The package that provides `qemu-system-aarch64` is
@@ -85,7 +86,8 @@ Ubuntu on aarch64. The package that provides `qemu-system-aarch64` is
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     qemu-system-arm qemu-utils libvirt-daemon-system libvirt-clients \
-    virtinst dnsmasq-base guestfs-tools podman iproute2 openssh-client acl
+    virtinst dnsmasq-base guestfish guestfs-tools podman iproute2 \
+    openssh-client acl
 ```
 
 Fedora 43 and 44:
@@ -105,8 +107,14 @@ sudo pacman -Sy --noconfirm --needed qemu-base qemu-img libvirt virt-install \
 
 The package names `doctor` prints when a tool is missing are the Debian and
 Ubuntu names (`libvirt-clients`, `virtinst`, `qemu-utils`, `libguestfs-tools`,
-`iproute2`, `openssh-client`). On Fedora and Arch, install the packages in the
-commands above. The `guestfs-tools` package is what provides `virt-make-fs`.
+`guestfish`, `iproute2`, `openssh-client`). On Fedora and Arch, install the
+packages in the commands above. `guestfs-tools` provides `virt-make-fs`,
+`virt-ls`, and `virt-sysprep`. On Ubuntu, `virt-copy-out` is in `guestfish`,
+not in `guestfs-tools`. `guestfs-tools` only recommends the metapackage that
+depends on `guestfish`, and setup installs with `--no-install-recommends`, so
+`guestfish` is named on its own. Fedora and Arch install `virt-copy-out` with
+`guestfs-tools`, through its dependency on `libguestfs`. A host already set up
+without `guestfish` needs `sudo apt-get install guestfish`.
 
 Optional, for `--github-ssh-key` on `create` and `destroy`, and for
 `--github-org` when creating a `-runner` VM: the GitHub CLI, `gh`

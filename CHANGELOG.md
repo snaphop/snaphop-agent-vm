@@ -59,6 +59,20 @@ migration or rebuild step a user has to take.
   `ubuntu-26.04`). A workflow can require any one of them. GitHub still
   adds its own `self-hosted`, operating system, and architecture labels.
 
+### Fixed
+
+- `agent-vm setup` on Ubuntu also installs `guestfish`. That package provides
+  `virt-copy-out`. `guestfs-tools` provides `virt-make-fs`, `virt-ls`, and
+  `virt-sysprep`, and only recommends the package that pulls `guestfish` in.
+  Setup installs with `--no-install-recommends`, so a finished setup still
+  left `virt-copy-out` off `PATH` and `doctor` failed. Fedora and Arch already
+  install that command with `guestfs-tools`. On an Ubuntu host that was set
+  up before this change, run `sudo apt-get install guestfish` and then
+  `agent-vm doctor`. Ubuntu full and nix images install `guestfish` too, so a
+  guest that runs agent-vm has `virt-copy-out`. An image already cached stays
+  without it until `agent-vm image build ubuntu --force` (and `ubuntu-nix`
+  where that variant is cached).
+
 ### Changed
 
 - Jobs on a runner image run as `github-runner`. That account can `sudo`

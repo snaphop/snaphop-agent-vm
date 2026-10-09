@@ -749,6 +749,7 @@ RUN set -eu; \
     command -v "qemu-system-$(uname -m)" >/dev/null \
       || { echo "no qemu-system-$(uname -m) in this image; the guest could not start a VM of its own" >&2; exit 1; }; \
     virt-make-fs --version >/dev/null || { echo "guestfs-tools installed but virt-make-fs cannot run" >&2; exit 1; }; \
+    virt-copy-out --version >/dev/null || { echo "virt-copy-out is missing; image builds cannot extract a kernel" >&2; exit 1; }; \
     podman --version >/dev/null || { echo "podman installed but cannot run" >&2; exit 1; }; \
     dnsmasq --version >/dev/null || { echo "dnsmasq installed but cannot run" >&2; exit 1; }
 

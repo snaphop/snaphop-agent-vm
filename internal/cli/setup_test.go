@@ -67,7 +67,7 @@ func TestSetup_InstallsTheUbuntuPackages(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d: %s", code, stderr)
 	}
-	if !strings.Contains(stdout, "qemu-system-x86") || !strings.Contains(stdout, "guestfs-tools") {
+	if !strings.Contains(stdout, "qemu-system-x86") || !strings.Contains(stdout, "guestfs-tools") || !strings.Contains(stdout, "guestfish") {
 		t.Errorf("stdout does not name the packages:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "docs/host-setup.md") || !strings.Contains(stdout, "new login") {

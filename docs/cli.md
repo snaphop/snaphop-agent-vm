@@ -728,7 +728,7 @@ instead of on every first boot, and a VM works the same way offline.
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
-| Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `dnsmasq`, `podman` |
+| Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `guestfish` on Ubuntu (it provides `virt-copy-out`; Fedora and Arch get that command from `libguestfs`), `dnsmasq`, `podman` |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
