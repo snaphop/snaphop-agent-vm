@@ -12,6 +12,10 @@ after SSH, and `destroy` removes that registration. The image, the seed, and
 the in-guest command are unchanged. A create that names no organization still
 leaves registration to the operator.
 
+Extended by [ADR-0016](./0016-install-docker-on-the-runner-image.md). The
+shared section also installs Docker from the distro's packages, and the
+`runner` account is in the `docker` group.
+
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided
 guest tooling) with another variant of each existing family. Bounded by
@@ -151,8 +155,8 @@ Harder:
 - The runner pin is a dependency with a checksum. Moving it is an edit to
   `templates/distro/github-runner.sh`, with both published checksums.
 - The image is much larger than slim, because the runner ships its own
-  Node.js and .NET runtime. It does not include Docker; a workflow that
-  needs a daemon has to provide one.
+  Node.js and .NET runtime. Docker is installed by
+  [ADR-0016](./0016-install-docker-on-the-runner-image.md).
 - Arch's native libraries are installed by name rather than by GitHub's
   script. A future runner can fail at job time if the bundled runtime's
   SONAMEs move away from Arch's packages. That combination is not part of the

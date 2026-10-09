@@ -171,7 +171,8 @@ Where new code belongs:
   `TestNixContainerfiles_KeepTheBootAndCloudInitContract`, and
   `TestRunnerContainerfiles_KeepTheBootAndCloudInitContract` enforce. The
   runner recipe is the slim recipe plus one shared section that installs the
-  GitHub Actions self-hosted runner unconfigured (ADR-0013). `create`
+  GitHub Actions self-hosted runner unconfigured (ADR-0013) and Docker
+  (ADR-0016). `create`
   registers that guest when an organization is set (ADR-0015).
   `TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner` requires that slim
   body to stay byte-identical and the runner section to stay the same on every
@@ -422,7 +423,7 @@ boundary — specifically the virtualization stack, the boot method, the image
 cache format, guest-to-host sharing, network modes, where host tools run
 (ADR-0010), the default resource profile,
 adding a supported distro family, adding a base image variant or changing where
-guest tooling comes from (ADR-0012, ADR-0013), joining a guest to an overlay
+guest tooling comes from (ADR-0012, ADR-0013, ADR-0016), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
 (ADR-0015), or **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.

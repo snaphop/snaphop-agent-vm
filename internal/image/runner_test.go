@@ -69,7 +69,7 @@ func refuseRealRunner(t *testing.T) {
 
 func TestGitHubRunnerScripts_AreValidShell(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh"} {
+	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh"} {
 		path := writeEmbeddedScript(t, name)
 		out, err := exec.Command("sh", "-n", path).CombinedOutput()
 		if err != nil {
@@ -123,6 +123,47 @@ func TestGitHubRunnerInstall_PinsTheReleaseAndCarriesNoRegistration(t *testing.T
 	}
 	if strings.Contains(script, "./config.sh") || strings.Contains(script, "RUNNER_ALLOW_RUNASROOT") {
 		t.Error("github-runner.sh executes config.sh during the image build")
+	}
+}
+
+func TestRunnerDocker_InstallsTheDistroDaemonAndAdmitsTheRunner(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-docker.sh")
+	lower := strings.ToLower(script)
+
+	for _, want := range []string{
+		"docker.io",
+		"docker-compose-v2",
+		"docker-buildx",
+		"moby-engine",
+		"containerd",
+		"docker-compose",
+		"pacman -S --noconfirm --needed",
+		"systemctl --root=/ enable docker.service containerd.service",
+		"usermod -aG docker runner",
+		"command -v docker",
+		"no Docker install for this distro",
+		"the runner account is missing",
+		"the docker group is missing",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-docker.sh does not contain %q", want)
+		}
+	}
+	// -Sy or -Su refreshes or upgrades every installed package. The slim
+	// recipe has already built the initramfs this image direct-boots.
+	if strings.Contains(script, "pacman -Sy") || strings.Contains(script, "pacman -Su") {
+		t.Error("runner-docker.sh must install the named Arch packages only")
+	}
+	// Foreign-architecture builds stay on the full and nix images. Pulling
+	// qemu-user into the runner image is a different, larger decision.
+	if strings.Contains(script, "qemu-user") || strings.Contains(script, "binfmt") {
+		t.Error("runner-docker.sh installs user-mode QEMU; cross-architecture docker build is not part of the runner image")
+	}
+	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-docker.sh contains %q; the image build must not carry a registration or an unpinned release", forbidden)
+		}
 	}
 }
 

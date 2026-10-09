@@ -146,8 +146,9 @@ toolchains, browsers, and agent tooling and need substantially more space than
 a minimal distro image. Allow additional space for build intermediates and
 whatever guests write; measure cached artifacts with `agent-vm image list` and
 `du -sh ~/.local/share/agent-vm/images`. Slim images omit the agent tooling.
-Runner images are that slim image plus the GitHub Actions runner, which
-brings its own Node.js and .NET runtime, so they are much larger than slim.
+Runner images are that slim image plus the GitHub Actions runner and
+Docker. The runner brings its own Node.js and .NET runtime, so these
+images are much larger than slim.
 
 Guest package updates do not change the kernel used for direct boot: that
 kernel and initramfs live beside the cached base disk on the host. Before

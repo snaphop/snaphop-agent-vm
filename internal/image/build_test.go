@@ -813,7 +813,7 @@ func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
 func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *testing.T) {
 	t.Parallel()
 	fake := ubuntuHost(t)
-	var recipe, install, configure []byte
+	var recipe, install, configure, dockerScript []byte
 	fake.RespondPrefix("podman build", hostexec.FakeResponse{
 		Do: func(c hostexec.Command) error {
 			// The workspace is removed once the build commits, so the recipe
@@ -828,7 +828,10 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 			if install, err = os.ReadFile(filepath.Join(dir, "github-runner.sh")); err != nil {
 				return err
 			}
-			configure, err = os.ReadFile(filepath.Join(dir, "github-runner-configure.sh"))
+			if configure, err = os.ReadFile(filepath.Join(dir, "github-runner-configure.sh")); err != nil {
+				return err
+			}
+			dockerScript, err = os.ReadFile(filepath.Join(dir, "runner-docker.sh"))
 			return err
 		},
 	})
@@ -865,6 +868,7 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 	}{
 		{"github-runner.sh", install},
 		{"github-runner-configure.sh", configure},
+		{"runner-docker.sh", dockerScript},
 	} {
 		want, err := templates.FS.ReadFile("distro/" + got.name)
 		if err != nil {

@@ -127,13 +127,15 @@ and name, so `ubuntu` and `ubuntu-slim` can be cached side by side and are
 built and removed independently.
 
 Each family also has a **runner** variant (`ubuntu-runner`, `fedora-runner`,
-`arch-runner`): the slim image plus the GitHub Actions self-hosted runner.
-The runner is installed and not registered. Jobs run as the `runner` account,
-which has no sudo. With `gh` logged in on the client, name an organization
+`arch-runner`): the slim image plus the GitHub Actions self-hosted runner
+and Docker. The runner is installed and not registered. Jobs run as the
+`runner` account, which has no sudo and can use the Docker daemon. With
+`gh` logged in on the client, name an organization
 and `create` registers the runner after SSH is up. Without an organization,
 register it from inside the guest. See
-[Runner images](./docs/cli.md#runner-images) and
-[ADR-0015](./docs/decisions/0015-register-a-github-actions-runner-with-gh.md).
+[Runner images](./docs/cli.md#runner-images),
+[ADR-0015](./docs/decisions/0015-register-a-github-actions-runner-with-gh.md),
+and [ADR-0016](./docs/decisions/0016-install-docker-on-the-runner-image.md).
 
 ```bash
 agent-vm create ci-01 --distro ubuntu-runner

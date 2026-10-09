@@ -81,6 +81,7 @@ var buildContextFiles = []string{
 	"tmux-menu-profile.sh",
 	"github-runner.sh",
 	"github-runner-configure.sh",
+	"runner-docker.sh",
 }
 
 // Builder produces base images.

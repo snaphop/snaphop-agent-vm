@@ -18,6 +18,15 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- A runner image includes Docker. The daemon starts at boot, and a job
+  running as `runner` can use `docker`, `docker compose`, and `docker
+  buildx`. The packages are the distro's own: Ubuntu `docker.io`, Fedora
+  `moby-engine`, Arch `docker`, plus that family's compose and buildx
+  packages. The `runner` account still has no sudo. A job that can talk to
+  the Docker socket can start a privileged container. An image already
+  cached stays as it is until `agent-vm image build <family>-runner
+  --force`. Building for another CPU architecture with `docker build
+  --platform` stays on full and nix images.
 - A runner VM can join a GitHub organization when it is created, when `gh` is
   installed and logged in. `agent-vm create ci --distro ubuntu-runner
   --github-org <org>` waits until SSH works, asks GitHub for a short-lived

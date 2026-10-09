@@ -20,7 +20,7 @@ import "embed"
 //go:embed distro/toolchains.sh distro/nix.sh distro/agent-tools.nix
 //go:embed distro/user-setup.sh distro/tmux-menu.sh distro/tmux-menu-profile.sh
 //go:embed distro/codex-remote-control.sh distro/herdr-server.sh
-//go:embed distro/github-runner.sh distro/github-runner-configure.sh
+//go:embed distro/github-runner.sh distro/github-runner-configure.sh distro/runner-docker.sh
 //go:embed distro/tailscale-join.sh
 //go:embed cloud-init/*.tmpl
 var FS embed.FS
