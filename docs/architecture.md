@@ -224,7 +224,9 @@ background worker. Long waits include image builds, the guest boot wait during `
   plus the GitHub Actions self-hosted runner, installed unconfigured under
   `/opt/actions-runner` (ADR-0013), and Docker from the distro's packages,
   with the `github-runner` account in the `docker` group (ADR-0016) and
-  with passwordless sudo (ADR-0017). Ubuntu runner images also install
+  with passwordless sudo (ADR-0017). The shared section also installs `git`
+  and the GitHub CLI (`gh`; `github-cli` on Arch) and fails the build if
+  either command cannot run. Ubuntu runner images also install
   `build-essential`. `create`
   registers that guest after boot when an organization is set (ADR-0015).
   `<family>-nix.Containerfile` keeps all of

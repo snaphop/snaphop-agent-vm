@@ -82,6 +82,7 @@ var buildContextFiles = []string{
 	"github-runner.sh",
 	"github-runner-configure.sh",
 	"runner-docker.sh",
+	"runner-git.sh",
 }
 
 // Builder produces base images.
@@ -379,7 +380,7 @@ func (b *Builder) buildInto(ctx context.Context, steps reporter, work *workspace
 // Every family's full recipe COPYs the same guest dotfiles, so they are
 // written from one embedded copy rather than repeated as heredocs in three
 // Containerfiles. They are written for every variant, including a slim build
-// that COPYs none of them, a runner build that COPYs the two runner scripts,
+// that COPYs none of them, a runner build that COPYs the runner scripts,
 // and a nix build that COPYs a different subset: podman ignores what a recipe
 // does not reference, and writing the same context every time keeps the build
 // from having to know which recipe it is running.

@@ -34,6 +34,12 @@ migration or rebuild step a user has to take.
   privileged container. An image already cached stays as it is until
   `agent-vm image build <family>-runner --force`. Building for another CPU
   architecture with `docker build --platform` stays on full and nix images.
+- A runner image includes `git` and the GitHub CLI (`gh`). Ubuntu and Fedora
+  install the packages `git` and `gh`. Arch installs `git` and `github-cli`,
+  which provides the `gh` command. A workflow job can run both. The commands
+  are left logged out, and a job that calls `gh` supplies its own
+  credentials. An image already cached stays as it is until
+  `agent-vm image build <family>-runner --force`.
 - A runner VM can join a GitHub organization when it is created, when `gh` is
   installed and logged in. `agent-vm create ci --distro ubuntu-runner
   --github-org <org>` waits until SSH works, asks GitHub for a short-lived

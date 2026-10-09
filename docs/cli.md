@@ -485,7 +485,8 @@ skipped.
 Every family also has a runner variant, named by appending `-runner`:
 `agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
 ubuntu-runner`. It is that family's slim image plus the GitHub Actions
-self-hosted runner (ADR-0013) and Docker (ADR-0016). It boots the same way —
+self-hosted runner (ADR-0013), Docker (ADR-0016), `git`, and the GitHub
+CLI (`gh`). It boots the same way —
 same kernel command line, same cloud-init contract, same SSH and clock
 guarantees — and carries the same common Linux tooling. It does not carry
 the coding agents, browser, or nested virtualization stack a full image adds.
@@ -520,6 +521,14 @@ running when a job starts. A job can run `docker`, `docker compose`, and
 set up on a runner image; that setup stays on full and nix images. An image
 already cached gains Docker when it is rebuilt with `agent-vm image build
 <family>-runner --force`.
+
+A runner image installs `git` and the GitHub CLI. Ubuntu and Fedora install
+the `git` and `gh` packages. Arch installs `git` and `github-cli`, which
+provides the `gh` command. The build fails when either command is missing or
+cannot run. The commands are left logged out; a job that calls `gh`
+supplies its own credentials. `git` is also part of the slim recipe the
+runner image starts from. An image already cached gains both commands when
+it is rebuilt with `agent-vm image build <family>-runner --force`.
 
 A base image is shared by every VM built on it, so the image is not
 registered with GitHub. It contains no repository URL and no registration
@@ -692,8 +701,8 @@ changes what every script that SSHes into these VMs can assume.
 
 The table and installation details below describe **full images**. Slim
 images keep the common Linux packages but omit the agent and service tooling.
-Runner images are that slim set plus the GitHub Actions self-hosted runner
-and Docker described above. Nix images use the different sources and
+Runner images are that slim set plus the GitHub Actions self-hosted runner,
+Docker, `git`, and `gh` described above. Nix images use the different sources and
 interfaces described above. Slim and runner images include `tmux` but do not
 install the custom session menu, tmux configuration, or per-account setup
 service.
