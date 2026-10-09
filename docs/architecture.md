@@ -143,6 +143,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | cloud-init seed | `virt-make-fs --type=vfat --label=cidata seed/ seed.img` (ADR-0011) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 | Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
+| Host preparation (`setup`) | the family's package manager, `systemctl enable --now`, `usermod -aG`, and `setfacl -m u:<qemu user>:x` (ADR-0018). Firewall rules, bridges, and host confinement are not touched |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 | GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command. That command sets labels `<org>`, `<family>-latest`, and `<family>-<tag>` (for the default Ubuntu image, `ubuntu-latest` and `ubuntu-26.04`). `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
 
@@ -656,7 +657,8 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
 - The guest serial console is captured to `vms/<name>/console.log`, which is the
   primary artifact for diagnosing a VM that never became reachable.
 - `agent-vm doctor` is the health check, machine-readable with
-  `--output json`.
+  `--output json`. `agent-vm setup` is the command that installs the host
+  packages and starts libvirt on a supported release (ADR-0018).
 - There are no metrics, traces, or alerts: this is a foreground CLI, and its
   exit code is its status signal. Operational procedures live in
   [`host-setup.md`](./host-setup.md).

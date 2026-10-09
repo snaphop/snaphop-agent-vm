@@ -50,10 +50,13 @@ None of that is new virtualization machinery — it is `virt-install`, `virsh`,
   `destroy`, and by `--github-org` when a `-runner` VM is registered with a
   GitHub organization
 
-Host preparation, including bridge setup, is in
-[`docs/host-setup.md`](./docs/host-setup.md). Verify a host with:
+On Ubuntu 24.04 or 26.04, Fedora 43 or 44, or Arch Linux, prepare the host
+with `agent-vm setup`. Bridge setup, firewall rules, and the rest of host
+preparation are in [`docs/host-setup.md`](./docs/host-setup.md). Verify a host
+with:
 
 ```bash
+agent-vm setup
 agent-vm doctor
 ```
 

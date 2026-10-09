@@ -1,9 +1,23 @@
 # Host Setup
 
 How to prepare a Linux host to run SnapHop Agent VM, and how to diagnose one that
-cannot. Install packages and configure host permissions, bridges, and firewall
-rules yourself. `agent-vm` manages its own storage, domains, and libvirt NAT
-network; it does not reconfigure your existing host bridges or firewall rules.
+cannot.
+
+On Ubuntu 24.04 or 26.04, Fedora 43 or 44, or Arch Linux, `agent-vm setup`
+installs the packages, starts libvirt, adds your user to the `kvm` and
+`libvirt` groups, and grants libvirt's QEMU account search access to the state
+directory. Those are the same releases the guest images support. A derivative
+that only names one of them in `ID_LIKE` is not a supported host.
+
+```bash
+agent-vm setup
+agent-vm doctor
+```
+
+`setup` does not change firewall rules, bridges, routing, nested-virtualization
+module options, or SELinux or AppArmor. The sections below are what it runs,
+and the steps it deliberately leaves to you. `agent-vm` manages its own
+storage, domains, and libvirt NAT network.
 
 Verify a host at any point with:
 
@@ -47,38 +61,52 @@ does not fall back to it.
 
 ## 2. Packages
 
-Debian and Ubuntu on x86_64:
+`agent-vm setup` installs these. The commands are what it runs, if you would
+rather install them yourself. Ubuntu 24.04 and 26.04 use the same list.
+`qemu-kvm` is not named: on Ubuntu 26.04 it is a virtual package provided by
+both the release's emulator and the hardware-enablement build, and apt will
+not choose. `dnsmasq-base` is installed rather than `dnsmasq`, because libvirt
+starts its own dnsmasq per network and the full package would also enable a
+resolver on port 53.
+
+Ubuntu on x86_64:
 
 ```bash
-sudo apt install qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-                 virtinst podman libguestfs-tools iproute2 openssh-client
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
+    virtinst dnsmasq-base guestfs-tools podman iproute2 openssh-client acl
 ```
 
-Debian and Ubuntu on aarch64. The package that provides `qemu-system-aarch64`
-is `qemu-system-arm`:
+Ubuntu on aarch64. The package that provides `qemu-system-aarch64` is
+`qemu-system-arm`:
 
 ```bash
-sudo apt install qemu-system-arm qemu-utils libvirt-daemon-system libvirt-clients \
-                 virtinst podman libguestfs-tools iproute2 openssh-client
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    qemu-system-arm qemu-utils libvirt-daemon-system libvirt-clients \
+    virtinst dnsmasq-base guestfs-tools podman iproute2 openssh-client acl
 ```
 
-Fedora:
+Fedora 43 and 44:
 
 ```bash
-sudo dnf install qemu-kvm qemu-img libvirt libvirt-client virt-install podman \
-                 guestfs-tools iproute openssh-clients
+sudo dnf -y install qemu-kvm qemu-img libvirt libvirt-client virt-install \
+    dnsmasq guestfs-tools podman iproute openssh-clients acl
 ```
 
-Arch Linux:
+Arch Linux. `pacman -Sy` installs these packages. It does not upgrade the rest
+of the system:
 
 ```bash
-sudo pacman -S qemu-full libvirt virt-install podman libguestfs iproute2 openssh
+sudo pacman -Sy --noconfirm --needed qemu-base qemu-img libvirt virt-install \
+    iptables-nft dnsmasq guestfs-tools podman iproute2 openssh acl
 ```
 
 The package names `doctor` prints when a tool is missing are the Debian and
 Ubuntu names (`libvirt-clients`, `virtinst`, `qemu-utils`, `libguestfs-tools`,
 `iproute2`, `openssh-client`). On Fedora and Arch, install the packages in the
-commands above.
+commands above. The `guestfs-tools` package is what provides `virt-make-fs`.
 
 Optional, for `--github-ssh-key` on `create` and `destroy`, and for
 `--github-org` when creating a `-runner` VM: the GitHub CLI, `gh`
@@ -116,6 +144,9 @@ too-old tool is a hard failure with exit code `3`, naming the tool and the versi
 needed.
 
 ## 3. Service And Permissions
+
+`agent-vm setup` enables `libvirtd` when that unit exists and `virtqemud`
+otherwise, and adds your user to `kvm` and `libvirt`. The same steps by hand:
 
 ```bash
 sudo systemctl enable --now libvirtd          # or virtqemud on modular setups
@@ -214,8 +245,9 @@ ERROR    Cannot access storage file '/home/you/.local/share/agent-vm/vms/<name>/
 ```
 
 `agent-vm doctor` reports this up front as **state directory access**, naming the
-shallowest directory that blocks the path. Grant search permission — and only
-search permission, not read — to the account it names:
+shallowest directory that blocks the path. `agent-vm setup` grants that search
+permission for you. By hand, grant search permission — and only search
+permission, not read — to the account it names:
 
 ```bash
 sudo setfacl -m u:libvirt-qemu:x /home/you

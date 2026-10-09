@@ -334,6 +334,63 @@ agent-vm doctor
 agent-vm doctor --output json
 ```
 
+### `agent-vm setup`
+
+Prepares the hypervisor to run agent-vm
+([ADR-0018](./decisions/0018-set-up-a-supported-host.md)). It installs the
+packages, starts libvirt, adds the account agent-vm runs as to the `kvm` and
+`libvirt` groups (`kvm` only on a session URI), creates the state directory,
+and grants the account QEMU runs as search permission on any directory above
+the state directory that blocks it. The grant is search only
+(`setfacl -m u:<user>:x`).
+
+Supported hosts are the same releases as the guest images
+([ADR-0006](./decisions/0006-initial-guest-distro-support.md)): Ubuntu 24.04
+and 26.04, Fedora 43 and 44, and Arch Linux. A derivative that only names one
+of those in `ID_LIKE` is refused. Arch's guest tags are container images of
+the rolling release; an Arch host is supported by `ID=arch`, whatever build
+stamp `VERSION_ID` carries. Ubuntu and Fedora match `VERSION_ID` exactly, so
+an Ubuntu point release such as 26.04.1 is 26.04.
+
+`--github` also installs the GitHub CLI (`gh` on Ubuntu and Fedora,
+`github-cli` on Arch) on the machine where `agent-vm` is run. With a remote
+URI, `gh` stays on this machine and setup does not install it on the
+hypervisor.
+
+The command asks for confirmation unless `--yes` is given. `--dry-run` prints
+the package-manager, `systemctl`, `usermod`, `mkdir`, and `setfacl`
+invocations and does not run them. Privileged steps use `sudo -n`, so a
+password prompt fails instead of waiting; run `sudo -v` first when sudo
+requires a password.
+
+It does not change firewall rules, bridges, routing, nested-virtualization
+module options, or SELinux or AppArmor. Those stay in
+[host setup](./host-setup.md). A new login is required before a group added
+here is visible to the current session. Run `agent-vm doctor` afterwards.
+
+With a [remote URI](#remote-hypervisors), every step runs on the hypervisor.
+
+```bash
+agent-vm setup
+agent-vm --yes setup --github
+agent-vm --libvirt-uri qemu+ssh://kvm@hypervisor.lan/system setup --dry-run
+```
+
+`--output json` reports what setup did:
+
+| Field | Meaning |
+|---|---|
+| `family`, `version`, `name`, `arch` | The host release and architecture. `version` is empty on Arch. |
+| `user` | The account added to the groups. |
+| `packages` | Packages installed. |
+| `units` | systemd units enabled and started. |
+| `unitsAssumed` | Present when `--dry-run` could not see the units yet and planned `libvirtd`. After the packages install, `virtqemud` is used when `libvirtd` is absent. |
+| `groups`, `groupsAdded` | Groups required, and the ones that were missing. |
+| `search` | Directories granted search permission, each with `user` and `path`. |
+| `searchNote` | Why no grant was made, when that needs saying. |
+| `relogin` | A new login is required before the new groups apply. |
+| `dryRun` | Present when nothing was changed. |
+
 ### `agent-vm image build <distro>[-slim|-nix|-runner][:<tag>]`
 
 Builds (or rebuilds) the cached base image for a distro. `<distro>` is a
@@ -1841,6 +1898,7 @@ table below is the summary.
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
 | `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
+| `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, or host confinement |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

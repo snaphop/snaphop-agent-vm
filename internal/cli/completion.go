@@ -102,7 +102,7 @@ var flagValues = map[string][]string{
 var valuelessFlags = map[string]bool{
 	"verbose": true, "quiet": true, "yes": true, "dry-run": true,
 	"version": true, "help": true, "force": true, "keep-disk": true,
-	"no-start": true, "all": true,
+	"no-start": true, "all": true, "github": true,
 	"tailscale-ephemeral": true, "tailscale-ssh": true,
 }
 
@@ -161,6 +161,7 @@ func completionSpecs() map[string]*completionSpec {
 
 	return map[string]*completionSpec{
 		"doctor": {},
+		"setup":  {flags: []string{"github"}},
 		"create": {flags: []string{
 			"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge",
 			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key",
