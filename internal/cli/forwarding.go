@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // In NAT mode a guest reaches the internet only if the host forwards its
@@ -29,14 +33,15 @@ const (
 	ufwDefaultsPath = "/etc/default/ufw"
 
 	// ufwRulesPath holds the rules an operator has added. It is readable on
-	// some distributions and root-only on others, so it refines the verdict
-	// when available and is simply absent otherwise.
+	// some distributions and root-only on others. A direct read is tried
+	// first, and a permission error is retried with `sudo -n -- cat --`,
+	// which refuses a password prompt instead of waiting on one.
 	ufwRulesPath = "/etc/ufw/user.rules"
 )
 
-// ufwState is what could be learned about ufw without privileges. The live
-// ruleset needs root to read, so this deliberately reports only what the
-// configuration files say.
+// ufwState is what could be learned about ufw from its configuration files.
+// The live nftables ruleset is not consulted: these files are what ufw itself
+// would load, and reading them does not change a rule.
 type ufwState struct {
 	// Installed is whether ufw configuration exists on this host at all.
 	Installed bool
@@ -51,6 +56,12 @@ type ufwState struct {
 	InputPolicy string
 	// RulesReadable is whether the operator's own rules could be read at all.
 	RulesReadable bool
+	// RulesSudoFailed is true when the rules file denied a direct read and
+	// `sudo -n` could not read it either.
+	RulesSudoFailed bool
+	// ConfigSudoFailed is true when any of the three ufw files denied a direct
+	// read and `sudo -n` could not read it. A password prompt is never waited on.
+	ConfigSudoFailed bool
 	// ForwardAccepts are the route rules that accept forwarded traffic, with
 	// the interfaces each one is limited to.
 	ForwardAccepts []forwardRule
@@ -64,21 +75,93 @@ type ufwState struct {
 // reported as unknown rather than assumed permissive, because assuming the
 // permissive case would hide the very problem this check exists to find.
 func readUFWState(confPath, defaultsPath, rulesPath string) ufwState {
-	state := ufwState{}
+	conf, confOK := readFileIfPossible(confPath)
+	defaults, defaultsOK := readFileIfPossible(defaultsPath)
+	rules, rulesOK := readFileIfPossible(rulesPath)
+	return assembleUFWState(conf, confOK, defaults, defaultsOK, rules, rulesOK)
+}
 
-	if value, ok := readShellVar(confPath, "ENABLED"); ok {
-		state.Installed = true
-		state.Enabled = strings.EqualFold(value, "yes")
+// readHostUFW reads the fixed paths on this machine. A file that is not
+// readable is retried through sudo, so a root-only user.rules still settles
+// the check when the operator can sudo without a password prompt.
+func readHostUFW(ctx context.Context, run hostexec.Runner) ufwState {
+	return readUFWFiles(ctx, run, os.ReadFile, ufwConfPath, ufwDefaultsPath, ufwRulesPath)
+}
+
+// readUFWFiles is readHostUFW with its filesystem read and paths supplied, so
+// a test can refuse one file and answer the sudo retry without being root.
+func readUFWFiles(ctx context.Context, run hostexec.Runner, read func(string) ([]byte, error), confPath, defaultsPath, rulesPath string) ufwState {
+	conf := readConfigFile(ctx, run, read, confPath)
+	defaults := readConfigFile(ctx, run, read, defaultsPath)
+	rules := readConfigFile(ctx, run, read, rulesPath)
+	state := assembleUFWState(conf.data, conf.ok, defaults.data, defaults.ok, rules.data, rules.ok)
+	state.RulesSudoFailed = rules.sudoFailed
+	state.ConfigSudoFailed = conf.sudoFailed || defaults.sudoFailed || rules.sudoFailed
+	return state
+}
+
+// configRead is one configuration file, either read directly or through sudo.
+type configRead struct {
+	data []byte
+	ok   bool
+	// sudoFailed is a permission error that `sudo -n` did not overcome.
+	sudoFailed bool
+}
+
+// readConfigFile reads path. On a permission error it reads the same path
+// with `sudo -n -- cat --`. Any other failure, including sudo needing a
+// password, leaves the file unread.
+func readConfigFile(ctx context.Context, run hostexec.Runner, read func(string) ([]byte, error), path string) configRead {
+	data, err := read(path)
+	if err == nil {
+		return configRead{data: data, ok: true}
 	}
-	if value, ok := readShellVar(defaultsPath, "DEFAULT_FORWARD_POLICY"); ok {
-		state.Installed = true
-		state.ForwardPolicy = strings.ToUpper(value)
+	if run == nil || !os.IsPermission(err) {
+		return configRead{}
 	}
-	if value, ok := readShellVar(defaultsPath, "DEFAULT_INPUT_POLICY"); ok {
-		state.Installed = true
-		state.InputPolicy = strings.ToUpper(value)
+	res, sudoErr := run.Run(ctx, hostexec.Command{
+		Name:   "sudo",
+		Args:   []string{"-n", "--", "cat", "--", path},
+		Effect: hostexec.Read,
+	})
+	if sudoErr != nil || res == nil {
+		return configRead{sudoFailed: true}
 	}
-	state.ForwardAccepts, state.InputAccepts, state.RulesReadable = readUFWRules(rulesPath)
+	return configRead{data: res.Stdout, ok: true}
+}
+
+func readFileIfPossible(path string) ([]byte, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// assembleUFWState turns the three configuration files into a verdict. A file
+// that was not read contributes nothing, which is the unknown case rather
+// than a guessed permissive one.
+func assembleUFWState(conf []byte, confOK bool, defaults []byte, defaultsOK bool, rules []byte, rulesOK bool) ufwState {
+	state := ufwState{}
+	if confOK {
+		if value, ok := parseShellVar(bytes.NewReader(conf), "ENABLED"); ok {
+			state.Installed = true
+			state.Enabled = strings.EqualFold(value, "yes")
+		}
+	}
+	if defaultsOK {
+		if value, ok := parseShellVar(bytes.NewReader(defaults), "DEFAULT_FORWARD_POLICY"); ok {
+			state.Installed = true
+			state.ForwardPolicy = strings.ToUpper(value)
+		}
+		if value, ok := parseShellVar(bytes.NewReader(defaults), "DEFAULT_INPUT_POLICY"); ok {
+			state.Installed = true
+			state.InputPolicy = strings.ToUpper(value)
+		}
+	}
+	if rulesOK {
+		state.ForwardAccepts, state.InputAccepts, state.RulesReadable = parseUFWRules(bytes.NewReader(rules))
+	}
 	return state
 }
 
@@ -171,9 +254,14 @@ func readUFWRules(rulesPath string) (forward []forwardRule, input map[string]map
 		return nil, nil, false
 	}
 	defer func() { _ = file.Close() }()
+	return parseUFWRules(file)
+}
 
+// parseUFWRules reads the operator's rules from r. A scan error reports the
+// rules as unreadable rather than as a partial list that could pass the check.
+func parseUFWRules(r io.Reader) (forward []forwardRule, input map[string]map[string]bool, readable bool) {
 	input = map[string]map[string]bool{}
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 2 || fields[0] != "-A" || !hasFlag(fields, "-j", "ACCEPT") {
@@ -261,19 +349,12 @@ func flagValue(fields []string, flag string) (string, bool) {
 	return "", false
 }
 
-// readShellVar pulls one NAME=value assignment out of a shell-style
+// parseShellVar pulls one NAME=value assignment out of a shell-style
 // configuration file. Both files are sourced by ufw's own shell scripts, so
 // this handles the quoting they use and nothing more elaborate.
-func readShellVar(path, name string) (string, bool) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	// Nothing is written, so a failed close has nothing to report.
-	defer func() { _ = file.Close() }()
-
+func parseShellVar(r io.Reader, name string) (string, bool) {
 	prefix := name + "="
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "#") || !strings.HasPrefix(line, prefix) {
@@ -296,10 +377,10 @@ func readShellVar(path, name string) (string, bool) {
 // traffic. bridge is the device libvirt allocated for the NAT network, or empty
 // when it could not be determined.
 //
-// It warns rather than fails: the live ruleset cannot be read without root, so
-// an operator may have a route rule this check cannot see, and a false failure
-// would exit non-zero on a host that actually works.
-func checkForwarding(cfg *config.Config, conn *config.Connection, bridge string) check {
+// It warns rather than fails. A host can allow the traffic somewhere other
+// than these files, and a false failure would exit non-zero on a host that
+// actually works.
+func checkForwarding(cfg *config.Config, conn *config.Connection, bridge string, state ufwState) check {
 	if conn.Remote {
 		// The files below describe this machine's firewall, which has nothing
 		// to do with whether the hypervisor forwards its guests' packets.
@@ -311,7 +392,7 @@ func checkForwarding(cfg *config.Config, conn *config.Connection, bridge string)
 			Remedy: "Run `agent-vm doctor` on " + conn.SSHDestination + " if guests boot but their outbound connections hang.",
 		}
 	}
-	return forwardingCheck(cfg, readUFWState(ufwConfPath, ufwDefaultsPath, ufwRulesPath), bridge)
+	return forwardingCheck(cfg, state, bridge)
 }
 
 // forwardingCheck is the decision alone, separated from the fixed paths so it
@@ -383,15 +464,29 @@ func forwardingCheck(cfg *config.Config, state ufwState, bridge string) check {
 		return check{
 			Name: name, Status: statusWarn,
 			Detail: fmt.Sprintf("ufw is enabled but %s could not be read, so its forward policy is unknown", ufwDefaultsPath),
-			Remedy: forwardingRemedy(cfg),
+			Remedy: withSudoReadHint(state, forwardingRemedy(cfg)),
 		}
 	default:
+		detail := fmt.Sprintf("ufw is enabled with DEFAULT_FORWARD_POLICY=%s, and its rules are not readable without root, so forwarding could not be confirmed", state.ForwardPolicy)
+		if state.RulesSudoFailed {
+			detail = fmt.Sprintf("ufw is enabled with DEFAULT_FORWARD_POLICY=%s, and `sudo -n` could not read %s, so forwarding could not be confirmed", state.ForwardPolicy, ufwRulesPath)
+		}
 		return check{
 			Name: name, Status: statusWarn,
-			Detail: fmt.Sprintf("ufw is enabled with DEFAULT_FORWARD_POLICY=%s, and its rules are not readable without root, so forwarding could not be confirmed", state.ForwardPolicy),
-			Remedy: forwardingRemedy(cfg),
+			Detail: detail,
+			Remedy: withSudoReadHint(state, forwardingRemedy(cfg)),
 		}
 	}
+}
+
+// withSudoReadHint tells the operator how to let the next doctor read a
+// root-only rules file. sudo -n refuses a password prompt, so a cached
+// credential from `sudo -v` is what makes the retry succeed.
+func withSudoReadHint(state ufwState, remedy string) string {
+	if !state.ConfigSudoFailed {
+		return remedy
+	}
+	return "Run `sudo -v`, then `agent-vm doctor` again, so the rules can be read. " + remedy
 }
 
 // forwardingRemedy names the bridge indirectly: libvirt allocates it (virbrN)

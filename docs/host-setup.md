@@ -330,6 +330,11 @@ fail, and because the packets are dropped rather than rejected they fail by
 hanging rather than by erroring: `apt update` sits at 0% until it times out.
 
 `agent-vm doctor` reports this as the **host firewall forwarding** check.
+That check and the guest-services check below read `/etc/ufw/user.rules`,
+`/etc/ufw/ufw.conf`, and `/etc/default/ufw`. When one of those files is not
+readable, doctor reads it with `sudo -n -- cat --` and does not prompt for a
+password. Run `sudo -v` first if sudo requires one. The command does not add
+or change any rule.
 
 Forwarding is only half of it, and `agent-vm doctor` reports the other half as
 the **host firewall guest services** check. A guest also talks *to* the host —

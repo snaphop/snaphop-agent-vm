@@ -191,7 +191,7 @@ func TestCheckGuestServices_ReportsNATEvenWithADefaultBridgeConfigured(t *testin
 // files describe this one.
 func TestCheckGuestServices_SkipsARemoteHypervisor(t *testing.T) {
 	t.Parallel()
-	got := checkGuestServices(natConfig(), &config.Connection{Remote: true, SSHDestination: "kvm-host"}, "")
+	got := checkGuestServices(natConfig(), &config.Connection{Remote: true, SSHDestination: "kvm-host"}, "", ufwState{})
 	if got.Status != statusSkip {
 		t.Fatalf("status = %q, want %q", got.Status, statusSkip)
 	}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 )
 
 // write puts one configuration file in a temporary directory and returns its
@@ -384,5 +386,185 @@ func TestReadUFWRules_RecordsTheOutputInterface(t *testing.T) {
 	}
 	if want := []forwardRule{{Out: "virbr1"}}; !reflect.DeepEqual(forward, want) {
 		t.Errorf("forward = %+v, want %+v", forward, want)
+	}
+}
+
+// permissionDenied is the error os.ReadFile returns when a root-only ufw file
+// is opened by an unprivileged doctor.
+func permissionDenied(path string) error {
+	return &os.PathError{Op: "open", Path: path, Err: os.ErrPermission}
+}
+
+// TestReadUFWFiles_UsesSudoWhenTheRulesAreNotReadable is the host this check
+// used to give up on: ufw.conf and the defaults are world-readable, and
+// user.rules is root-only, so both firewall checks warned that they could not
+// look. sudo -n cat supplies the same bytes a direct read would have.
+func TestReadUFWFiles_UsesSudoWhenTheRulesAreNotReadable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := write(t, dir, "ufw", "DEFAULT_INPUT_POLICY=\"DROP\"\nDEFAULT_FORWARD_POLICY=\"DROP\"\n")
+	rules := filepath.Join(dir, "user.rules")
+
+	fake := hostexec.NewFake().Respond(
+		"sudo -n -- cat -- "+rules,
+		hostexec.FakeResponse{Stdout: allRules},
+	)
+	read := func(path string) ([]byte, error) {
+		if path == rules {
+			return nil, permissionDenied(path)
+		}
+		return os.ReadFile(path)
+	}
+
+	state := readUFWFiles(context.Background(), fake, read, conf, defaults, rules)
+	if !state.RulesReadable || state.RulesSudoFailed {
+		t.Fatalf("rules were not taken from sudo: %+v", state)
+	}
+	if len(fake.Calls()) != 1 {
+		t.Fatalf("sudo calls = %d, want 1\n%s", len(fake.Calls()), fake)
+	}
+	if fake.Calls()[0].Effect != hostexec.Read {
+		t.Errorf("sudo cat effect = %v, want read", fake.Calls()[0].Effect)
+	}
+
+	cfg := &config.Config{LibvirtURI: "qemu:///system", NATNetwork: "agent-vm-nat"}
+	forwarding := forwardingCheck(cfg, state, "virbr1")
+	if forwarding.Status != statusPass {
+		t.Errorf("forwarding = %s (%s), want pass", forwarding.Status, forwarding.Detail)
+	}
+	services := guestServicesCheck(cfg, state, "virbr1")
+	if services.Status != statusPass {
+		t.Errorf("guest services = %s (%s), want pass", services.Status, services.Detail)
+	}
+}
+
+// A file that is already readable must not be opened again through sudo.
+func TestReadUFWFiles_DoesNotUseSudoWhenTheRulesAreReadable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := write(t, dir, "ufw", "DEFAULT_FORWARD_POLICY=\"DROP\"\n")
+	rules := write(t, dir, "user.rules", allRules)
+
+	fake := hostexec.NewFake()
+	state := readUFWFiles(context.Background(), fake, os.ReadFile, conf, defaults, rules)
+	if !state.RulesReadable {
+		t.Fatalf("rules were not read: %+v", state)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("sudo ran for a readable file:\n%s", fake)
+	}
+}
+
+// A missing file is not a permission error, so sudo is not a way to find it.
+func TestReadUFWFiles_DoesNotUseSudoWhenTheRulesAreAbsent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := write(t, dir, "ufw", "DEFAULT_FORWARD_POLICY=\"DROP\"\n")
+	rules := filepath.Join(dir, "user.rules")
+
+	fake := hostexec.NewFake()
+	state := readUFWFiles(context.Background(), fake, os.ReadFile, conf, defaults, rules)
+	if state.RulesReadable || state.RulesSudoFailed {
+		t.Fatalf("absent rules = %+v, want unreadable and no sudo attempt", state)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("sudo ran for a missing file:\n%s", fake)
+	}
+}
+
+// sudo -n exits instead of prompting. The check then says so, and still does
+// not pretend the host is permissive.
+func TestReadUFWFiles_WarnsWhenSudoCannotReadTheRules(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := write(t, dir, "ufw", "DEFAULT_INPUT_POLICY=\"DROP\"\nDEFAULT_FORWARD_POLICY=\"DROP\"\n")
+	rules := filepath.Join(dir, "user.rules")
+
+	fake := hostexec.NewFake().Respond(
+		"sudo -n -- cat -- "+rules,
+		hostexec.FakeResponse{ExitCode: 1, Stderr: "sudo: a password is required\n"},
+	)
+	read := func(path string) ([]byte, error) {
+		if path == rules {
+			return nil, permissionDenied(path)
+		}
+		return os.ReadFile(path)
+	}
+
+	state := readUFWFiles(context.Background(), fake, read, conf, defaults, rules)
+	if state.RulesReadable || !state.RulesSudoFailed {
+		t.Fatalf("state = %+v, want an unread rules file after sudo failed", state)
+	}
+
+	cfg := &config.Config{LibvirtURI: "qemu:///system", NATNetwork: "agent-vm-nat"}
+	forwarding := forwardingCheck(cfg, state, "virbr1")
+	services := guestServicesCheck(cfg, state, "virbr1")
+	for _, got := range []check{forwarding, services} {
+		if got.Status != statusWarn {
+			t.Errorf("%s = %s, want warn", got.Name, got.Status)
+		}
+		if !strings.Contains(got.Detail, "sudo -n") || !strings.Contains(got.Detail, "could not be confirmed") {
+			t.Errorf("%s detail %q does not say sudo could not read the rules", got.Name, got.Detail)
+		}
+		if !strings.Contains(got.Remedy, "sudo -v") {
+			t.Errorf("%s remedy does not say to run sudo -v: %s", got.Name, got.Remedy)
+		}
+	}
+}
+
+// The defaults file is root-only on some hosts too. The same retry reads it,
+// so a forward policy of DROP is still a DROP rather than an unknown policy.
+func TestReadUFWFiles_UsesSudoWhenTheDefaultsAreNotReadable(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := filepath.Join(dir, "ufw")
+	rules := write(t, dir, "user.rules", "-A ufw-user-forward -i virbr1 -j ACCEPT\n")
+
+	fake := hostexec.NewFake().Respond(
+		"sudo -n -- cat -- "+defaults,
+		hostexec.FakeResponse{Stdout: "DEFAULT_FORWARD_POLICY=\"DROP\"\nDEFAULT_INPUT_POLICY=\"DROP\"\n"},
+	)
+	read := func(path string) ([]byte, error) {
+		if path == defaults {
+			return nil, permissionDenied(path)
+		}
+		return os.ReadFile(path)
+	}
+
+	state := readUFWFiles(context.Background(), fake, read, conf, defaults, rules)
+	if state.ForwardPolicy != "DROP" || state.InputPolicy != "DROP" {
+		t.Fatalf("policies = %q/%q, want DROP/DROP", state.ForwardPolicy, state.InputPolicy)
+	}
+	if !fake.Ran("sudo -n -- cat -- " + defaults) {
+		t.Errorf("defaults were not read with sudo:\n%s", fake)
+	}
+}
+
+// A canceled doctor must not be turned into a permissive verdict, and sudo is
+// not waited on after the context is done.
+func TestReadUFWFiles_StoppedContextDoesNotReadTheRules(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	conf := write(t, dir, "ufw.conf", "ENABLED=yes\n")
+	defaults := write(t, dir, "ufw", "DEFAULT_FORWARD_POLICY=\"DROP\"\n")
+	rules := filepath.Join(dir, "user.rules")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	read := func(path string) ([]byte, error) {
+		if path == rules {
+			return nil, permissionDenied(path)
+		}
+		return os.ReadFile(path)
+	}
+
+	state := readUFWFiles(ctx, hostexec.NewFake(), read, conf, defaults, rules)
+	if state.RulesReadable || !state.RulesSudoFailed {
+		t.Fatalf("state = %+v, want the rules unread after the context stopped", state)
 	}
 }
