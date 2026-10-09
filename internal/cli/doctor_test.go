@@ -138,6 +138,40 @@ func TestDoctor_ReportsAMissingToolAsAFailureWithItsPackage(t *testing.T) {
 	}
 }
 
+func TestDoctor_ReportsAMissingRootlessPodmanHelper(t *testing.T) {
+	t.Parallel()
+	fake := healthyHost()
+	fake.Missing["newuidmap"] = true
+
+	report, code := runDoctorWith(t, fake)
+
+	got := find(t, report, "newuidmap")
+	if got.Status != statusFail {
+		t.Errorf("check newuidmap = %s, want fail", got.Status)
+	}
+	if !strings.Contains(got.Remedy, "uidmap") {
+		t.Errorf("remedy %q does not name the package to install", got.Remedy)
+	}
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d", code, ExitHostNotReady)
+	}
+}
+
+func TestDoctor_ReportsRootlessHelpersAsInstalled(t *testing.T) {
+	t.Parallel()
+	report, code := runDoctorWith(t, healthyHost())
+
+	for _, name := range []string{"newuidmap", "pasta"} {
+		got := find(t, report, name)
+		if got.Status != statusPass || got.Detail != "installed" {
+			t.Errorf("check %s = %s (%s), want pass (installed)", name, got.Status, got.Detail)
+		}
+	}
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
 func TestDoctor_ReportsAToolBelowItsMinimumVersion(t *testing.T) {
 	t.Parallel()
 	fake := healthyHost()
@@ -552,6 +586,112 @@ func TestDoctor_ChecksTheConfiguredApplianceKernelInsteadOfTheHostKernel(t *test
 		t.Errorf("detail %q does not name the directory in use", got.Detail)
 	}
 	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestDoctor_PassesWhenBootHoldsNoVersionedKernel(t *testing.T) {
+	t.Parallel()
+	report, code := runDoctorWith(t, healthyHost())
+
+	got := find(t, report, "libguestfs kernel")
+	if got.Status != statusPass || got.Detail != "no versioned vmlinuz in /boot" {
+		t.Errorf("check = %s (%s), want pass (no versioned vmlinuz in /boot)", got.Status, got.Detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestDoctor_PassesWhenBootKernelsAreReadable(t *testing.T) {
+	t.Parallel()
+	fake := healthyHost()
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		Stdout: "/boot/vmlinuz-7.0.0-38-generic\n",
+	})
+
+	report, code := runDoctorWith(t, fake)
+
+	got := find(t, report, "libguestfs kernel")
+	if got.Status != statusPass || got.Detail != "1 kernel in /boot is readable" {
+		t.Errorf("check = %s (%s), want pass (1 kernel in /boot is readable)", got.Status, got.Detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestDoctor_FailsWhenABootKernelIsUnreadable(t *testing.T) {
+	t.Parallel()
+	fake := healthyHost()
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		Stdout: "/boot/vmlinuz-7.0.0-38-generic\n",
+	}).Respond("test -r /boot/vmlinuz-7.0.0-38-generic", hostexec.FakeResponse{ExitCode: 1})
+
+	report, code := runDoctorWith(t, fake)
+
+	got := find(t, report, "libguestfs kernel")
+	if got.Status != statusFail {
+		t.Fatalf("check = %s (%s), want fail", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "/boot/vmlinuz-7.0.0-38-generic") {
+		t.Errorf("detail %q does not name the kernel", got.Detail)
+	}
+	if !strings.Contains(got.Remedy, "chmod 0644") || !strings.Contains(got.Remedy, "initrd") {
+		t.Errorf("remedy %q does not say to chmod the kernels and leave the initrd", got.Remedy)
+	}
+	if code != ExitHostNotReady {
+		t.Errorf("exit code = %d, want %d", code, ExitHostNotReady)
+	}
+}
+
+func TestDoctor_SkipsTheBootKernelCheckWhenBootCannotBeListed(t *testing.T) {
+	t.Parallel()
+	fake := healthyHost()
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		ExitCode: 1,
+		Stderr:   "find: '/boot': Permission denied\n",
+	})
+
+	report, code := runDoctorWith(t, fake)
+
+	got := find(t, report, "libguestfs kernel")
+	if got.Status != statusSkip {
+		t.Errorf("check = %s (%s), want skip", got.Status, got.Detail)
+	}
+	if code != ExitOK {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+}
+
+func TestDoctor_SkipsTheBootKernelCheckWhenAnApplianceKernelIsConfigured(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir() + "/6.8.0-31-generic"
+	fake := healthyHost()
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		Stdout: "/boot/vmlinuz-7.0.0-38-generic\n",
+	}).Respond("test -r /boot/vmlinuz-7.0.0-38-generic", hostexec.FakeResponse{ExitCode: 1})
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name != "test" {
+			return hostexec.FakeResponse{}, false
+		}
+		want := map[string]bool{
+			dir + "/Image":               true,
+			dir + "/modules/modules.dep": true,
+		}
+		return hostexec.FakeResponse{}, want[c.Args[len(c.Args)-1]]
+	}
+
+	report, code := runDoctorWithEnv(t, fake, map[string]string{"AGENT_VM_APPLIANCE_KERNEL": dir})
+
+	got := find(t, report, "libguestfs kernel")
+	if got.Status != statusSkip || !strings.Contains(got.Detail, "appliance_kernel") {
+		t.Errorf("check = %s (%s), want skip naming appliance_kernel", got.Status, got.Detail)
+	}
+	if fake.Ran("find /boot -maxdepth 1 -name vmlinuz-* -print") {
+		t.Error("listed /boot even though appliance_kernel supplies the kernel")
+	}
+	if code != ExitOK {
 		t.Errorf("exit code = %d, want 0", code)
 	}
 }

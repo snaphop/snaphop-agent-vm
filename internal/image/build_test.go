@@ -139,6 +139,50 @@ func ubuntuRef(t *testing.T) distro.Ref {
 	return ref
 }
 
+func TestBuild_RefusesWhenARootlessPodmanHelperIsMissing(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []struct{ name, pkg string }{
+		{"newuidmap", "uidmap"},
+		{"pasta", "passt"},
+	} {
+		t.Run(tool.name, func(t *testing.T) {
+			t.Parallel()
+			fake := ubuntuHost(t)
+			fake.Missing[tool.name] = true
+			builder, _ := newBuilder(t, fake)
+
+			_, err := builder.Build(context.Background(), BuildOptions{Ref: ubuntuRef(t), Platform: "linux/amd64"})
+
+			var missing *hostexec.NotFoundError
+			if !errors.As(err, &missing) {
+				t.Fatalf("Build error = %v, want *NotFoundError", err)
+			}
+			if missing.Tool != tool.name || missing.Package != tool.pkg {
+				t.Errorf("NotFoundError = %+v, want %s from %s", missing, tool.name, tool.pkg)
+			}
+			if fake.Ran("podman pull --platform linux/amd64 docker.io/library/ubuntu:26.04") {
+				t.Error("the build pulled an image without the helper podman needs")
+			}
+		})
+	}
+}
+
+func TestBuild_CacheHitDoesNotNeedRootlessHelpers(t *testing.T) {
+	t.Parallel()
+	fake := ubuntuHost(t)
+	builder, _ := newBuilder(t, fake)
+	ref := ubuntuRef(t)
+
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ref, Platform: "linux/amd64"}); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	fake.Missing["newuidmap"] = true
+	fake.Missing["pasta"] = true
+	if _, err := builder.Build(context.Background(), BuildOptions{Ref: ref, Platform: "linux/amd64"}); err != nil {
+		t.Fatalf("cached build = %v, want the cache hit to skip the helpers", err)
+	}
+}
+
 func TestBuild_RunsTheDocumentedToolPipeline(t *testing.T) {
 	t.Parallel()
 	fake := ubuntuHost(t)

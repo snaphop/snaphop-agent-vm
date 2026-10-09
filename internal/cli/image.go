@@ -100,6 +100,12 @@ func runImageBuild(ctx context.Context, app *App, args []string) error {
 		return app.printBuildPlan(opts)
 	}
 
+	// virt-make-fs needs a readable kernel. Fail here, before podman spends
+	// minutes building an image whose disk step cannot succeed.
+	if err := app.requireReadableBootKernel(ctx); err != nil {
+		return err
+	}
+
 	builder, err := app.builder()
 	if err != nil {
 		return err

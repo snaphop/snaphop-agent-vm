@@ -211,7 +211,10 @@ Prerequisites:
 - libvirt 9.0+ (`libvirtd` or `virtqemud`, plus `virsh`) and QEMU 8.0+
 - `virt-install` 4.0+ (`virtinst` on Debian/Ubuntu)
 - `qemu-img`, `podman` 4.0+, and libguestfs 1.50+
-  (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`)
+  (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`).
+  Rootless podman also needs `newuidmap` (Ubuntu package `uidmap`; Fedora
+  `shadow-utils` and Arch `shadow` already ship it) and `pasta` (package
+  `passt` on all three)
 - `gh` 2.0+ — optional. `--github-ssh-key` on `create` and `destroy` needs
   it, and so does registering or removing an organization Actions runner
   (`--github-org` on a `-runner` image, and `destroy` of a VM that recorded
@@ -240,10 +243,12 @@ rules, bridges, or host confinement.
 
 `doctor` is the setup verification command: it checks KVM availability, the
 libvirt connection, group membership, every required tool **and its minimum
-version**, free space in the state directory, and — for bridged mode — the presence
-of the configured host bridge. It must exit non-zero (`3`) with an actionable
-message naming the tool and version when the host is not ready. Because the design
-delegates to host tools, this check is load-bearing, not a nicety.
+version**, free space in the state directory, whether a versioned kernel in
+`/boot` is readable (skipped when `appliance_kernel` is set), and — for bridged
+mode — the presence of the configured host bridge. It must exit non-zero (`3`)
+with an actionable message naming the tool and version, or the `chmod` for an
+unreadable kernel, when the host is not ready. Because the design delegates to
+host tools, this check is load-bearing, not a nicety.
 
 `--dry-run` prints planned tool invocations and skips mutations. Read-only
 queries may still run; build and create plans use placeholders for values that
@@ -371,8 +376,9 @@ Major modules and responsibilities:
   — are wrapped in `ssh` here rather than at each call site (ADR-0010). Only `gh`
   and the `ssh` into a guest stay on the client.
 
-Flow for `agent-vm create`: resolve config and validate input files → check
-required tool versions (not the full `doctor` report) → lock and check the VM
+Flow for `agent-vm create`: resolve config and validate input files → confirm
+any versioned kernel in `/boot` is readable, unless `appliance_kernel` is set →
+check required tool versions (not the full `doctor` report) → lock and check the VM
 name → ensure base image (build if the cache misses) → allocate the VM's state
 directory → generate cloud-init user-data and meta-data and build the NoCloud
 seed with `virt-make-fs` → `qemu-img create` the overlay with the base as backing

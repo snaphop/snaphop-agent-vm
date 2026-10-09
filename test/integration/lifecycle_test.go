@@ -122,7 +122,7 @@ type result struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
-	requireTools(t, "virsh", "virt-install", "qemu-img", "podman", "ssh", "ssh-keygen",
+	requireTools(t, "virsh", "virt-install", "qemu-img", "podman", "newuidmap", "pasta", "ssh", "ssh-keygen",
 		"virt-make-fs", "virt-ls", "virt-copy-out", "virt-sysprep")
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		t.Skipf("/dev/kvm is not available; skipping the lifecycle test: %v", err)

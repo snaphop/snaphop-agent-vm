@@ -75,8 +75,8 @@ Ubuntu on x86_64:
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
-    virtinst dnsmasq-base guestfish guestfs-tools podman iproute2 \
-    openssh-client acl
+    virtinst dnsmasq-base guestfish guestfs-tools podman uidmap passt \
+    iproute2 openssh-client acl
 ```
 
 Ubuntu on aarch64. The package that provides `qemu-system-aarch64` is
@@ -86,15 +86,15 @@ Ubuntu on aarch64. The package that provides `qemu-system-aarch64` is
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     qemu-system-arm qemu-utils libvirt-daemon-system libvirt-clients \
-    virtinst dnsmasq-base guestfish guestfs-tools podman iproute2 \
-    openssh-client acl
+    virtinst dnsmasq-base guestfish guestfs-tools podman uidmap passt \
+    iproute2 openssh-client acl
 ```
 
 Fedora 43 and 44:
 
 ```bash
 sudo dnf -y install qemu-kvm qemu-img libvirt libvirt-client virt-install \
-    dnsmasq guestfs-tools podman iproute openssh-clients acl
+    dnsmasq guestfs-tools podman passt iproute openssh-clients acl
 ```
 
 Arch Linux. `pacman -Sy` installs these packages. It does not upgrade the rest
@@ -102,12 +102,12 @@ of the system:
 
 ```bash
 sudo pacman -Sy --noconfirm --needed qemu-base qemu-img libvirt virt-install \
-    iptables-nft dnsmasq guestfs-tools podman iproute2 openssh acl
+    iptables-nft dnsmasq guestfs-tools podman passt iproute2 openssh acl
 ```
 
 The package names `doctor` prints when a tool is missing are the Debian and
 Ubuntu names (`libvirt-clients`, `virtinst`, `qemu-utils`, `libguestfs-tools`,
-`guestfish`, `iproute2`, `openssh-client`). On Fedora and Arch, install the
+`guestfish`, `uidmap`, `iproute2`, `openssh-client`). On Fedora and Arch, install the
 packages in the commands above. `guestfs-tools` provides `virt-make-fs`,
 `virt-ls`, and `virt-sysprep`. On Ubuntu, `virt-copy-out` is in `guestfish`,
 not in `guestfs-tools`. `guestfs-tools` only recommends the metapackage that
@@ -115,6 +115,17 @@ depends on `guestfish`, and setup installs with `--no-install-recommends`, so
 `guestfish` is named on its own. Fedora and Arch install `virt-copy-out` with
 `guestfs-tools`, through its dependency on `libguestfs`. A host already set up
 without `guestfish` needs `sudo apt-get install guestfish`.
+
+`newuidmap` and `pasta` are required for rootless `podman`. `newuidmap` applies
+the subordinate UID range in `/etc/subuid`. `pasta` is podman's default rootless
+network command, and `podman build` uses it for every `RUN` that needs the
+network. On Ubuntu both are recommendations of the `podman` package (`uidmap`
+and `passt`), and setup installs with `--no-install-recommends`, so they are
+named on their own. Fedora and Arch already install `newuidmap` with the base
+system (`shadow-utils` on Fedora, `shadow` on Arch). `pasta` comes from the
+`passt` package on all three. A host already set up without them needs
+`sudo apt-get install uidmap passt` on Ubuntu. `doctor` checks that both
+binaries are on `PATH`. It does not run them.
 
 Optional, for `--github-ssh-key` on `create` and `destroy`, and for
 `--github-org` when creating a `-runner` VM: the GitHub CLI, `gh`
@@ -133,6 +144,8 @@ not separately enforce the connected libvirt daemon or QEMU emulator version):
 | `virt-install` | 4.0 | defining and starting domains |
 | libguestfs | 1.50 | `virt-make-fs` (base images and the cloud-init seed), `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `podman` | 4.0 | OCI pull, build, flatten |
+| `newuidmap` | any | subordinate UIDs for rootless podman (`uidmap` on Ubuntu) |
+| `pasta` | any | rootless container networking during an image build (`passt`) |
 | `ip` (iproute2) | any | host bridge validation |
 | `ssh` (openssh-client) | any | reaching a guest, and a remote hypervisor |
 | `gh` (optional) | 2.0 | adding and removing a VM's SSH key on GitHub, and registering or removing an organization Actions runner |
@@ -145,6 +158,21 @@ invokes it, and `doctor` does not look for it. No separate cloud-init tooling is
 needed on the host either: the NoCloud seed is written by `virt-make-fs`, which
 libguestfs already provides for building base images
 ([ADR-0011](./decisions/0011-build-the-cloud-init-seed-and-attach-it-as-a-virtio-disk.md)).
+
+libguestfs builds its appliance by copying a kernel from `/boot`. Ubuntu
+installs `/boot/vmlinuz-*` mode `0600`, so that copy fails for anyone but root
+and `virt-make-fs` reports only that supermin exited 1. Make the kernels
+readable, and leave every initrd mode `0600` (an initrd can hold secrets):
+
+```bash
+sudo chmod 0644 /boot/vmlinuz*
+```
+
+A kernel package update restores mode `0600`. `doctor` names the file and
+prints the same command. When `appliance_kernel` is set, supermin uses that
+kernel and this check is skipped. That setting is for a host kernel that
+cannot boot the appliance
+([§8](#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance)).
 
 Because the tool orchestrates these programs rather than reimplementing them
 ([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md)), a missing or
@@ -733,6 +761,9 @@ agent-vm destroy smoke-test --yes
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
 | `the appliance closed the connection unexpectedly`, with no console output at all | The host kernel cannot boot QEMU's `virt` board, or a cached appliance was built before `appliance_kernel` was set | `agent-vm doctor` (libguestfs appliance), then [§8](#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance) |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `podman pull <ref>` by hand; the error names the registry |
+| `newuidmap`: executable file not found | Rootless podman has a subordinate UID range and no helper to apply it. On Ubuntu, `podman` only recommends `uidmap` | `sudo apt-get install uidmap`, then `agent-vm doctor` |
+| `pasta` not found during `image build` | Rootless podman has no network command for `RUN` steps | `sudo apt-get install passt`, then `agent-vm doctor` |
+| `supermin exited 1` while creating a disk, or `/boot/vmlinuz-*` is not readable | Ubuntu installed the kernel mode `0600`, so supermin cannot copy it | `sudo chmod 0644 /boot/vmlinuz*`, then `agent-vm doctor`. Leave the initrd mode `0600` |
 | `exit 6`, guest never reachable | Boot failure or cloud-init failure | `vms/<name>/console.log`, `agent-vm console <name>` |
 | VM starts, no address | DHCP or NIC problem — including a host firewall dropping the guest's DHCP request to the host (ufw defaults to `deny (incoming)` and does not allow port 67 on the bridge) | `agent-vm doctor` (host firewall guest services), `virsh net-dhcp-leases agent-vm-nat`, console log, `sudo ufw status \| grep virbr` |
 | VM boots, SSH and DNS work, but outbound connections hang (`apt update` at 0%) | A host firewall is dropping forwarded traffic — commonly `ufw` with `DEFAULT_FORWARD_POLICY="DROP"` | `agent-vm doctor` (host firewall forwarding), then [Host Firewalls And The `virbrN` Bridge](#host-firewalls-and-the-virbrn-bridge) |

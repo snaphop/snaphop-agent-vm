@@ -1224,15 +1224,15 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 		// being built; each one provides qemu-kvm.
 		distro.Ubuntu.Containerfile: {
 			"qemu-system-x86", "qemu-system-arm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
-			"dnsmasq-base", "guestfish", "guestfs-tools", "podman",
+			"dnsmasq-base", "guestfish", "guestfs-tools", "podman", "uidmap", "passt",
 		},
 		distro.Fedora.Containerfile: {
 			"qemu-kvm", "libvirt", "libvirt-client", "virt-install",
-			"dnsmasq", "guestfs-tools", "podman",
+			"dnsmasq", "guestfs-tools", "podman", "passt",
 		},
 		distro.Arch.Containerfile: {
 			"qemu-base", "libvirt", "virt-install",
-			"dnsmasq", "guestfs-tools", "podman",
+			"dnsmasq", "guestfs-tools", "podman", "passt",
 		},
 	}
 
@@ -1273,11 +1273,17 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 		}
 	}
 
-	// ubuntu-nix keeps libvirt on apt and copies this install.
-	nix := readTemplate(t, "distro/ubuntu-nix.Containerfile")
-	for _, pkg := range packages[distro.Ubuntu.Containerfile] {
-		if !strings.Contains(nix, pkg) {
-			t.Errorf("ubuntu-nix.Containerfile does not install %q, so a nix guest could not run a VM of its own", pkg)
+	// The nix recipes keep the same virtualization stack as the full image.
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		nix := readTemplate(t, "distro/"+d.NixContainerfile)
+		for _, pkg := range packages[d.Containerfile] {
+			if !strings.Contains(nix, pkg) {
+				t.Errorf("%s does not install %q, so a nix guest could not run a VM of its own", d.NixContainerfile, pkg)
+			}
 		}
 	}
 }

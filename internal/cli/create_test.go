@@ -110,6 +110,31 @@ func TestCreate_RunsTheDocumentedPipeline(t *testing.T) {
 	}
 }
 
+func TestCreate_RefusesWhenABootKernelIsUnreadable(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		Stdout: "/boot/vmlinuz-7.0.0-38-generic\n",
+	}).Respond("test -r /boot/vmlinuz-7.0.0-38-generic", hostexec.FakeResponse{ExitCode: 1})
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitHostNotReady {
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitHostNotReady, stderr)
+	}
+	if !strings.Contains(stderr, "chmod 0644") || !strings.Contains(stderr, "/boot/vmlinuz-7.0.0-38-generic") {
+		t.Errorf("stderr does not name the kernel and the chmod:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install ") || strings.HasPrefix(argv, "virt-make-fs ") {
+			t.Errorf("create ran %s before the kernel was readable", argv)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("create wrote a VM directory: %v", err)
+	}
+}
+
 func TestCreate_WritesTheVMRecordWithItsProvenance(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)

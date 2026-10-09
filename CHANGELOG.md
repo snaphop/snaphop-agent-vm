@@ -61,6 +61,31 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Rootless `podman` can pull and build after `agent-vm setup` on Ubuntu.
+  `newuidmap` applies the subordinate UID range, and `pasta` is the network
+  command a build step uses. The `podman` package only recommends `uidmap`
+  and `passt`, and setup installs with `--no-install-recommends`, so a
+  finished setup still left `podman pull` failing with `newuidmap:
+  executable file not found`. Setup now installs both. `doctor` and
+  `image build` check that the two commands are on `PATH` before a pull
+  starts, and name the package to install. They do not run `newuidmap`.
+  Fedora and Arch already provide `newuidmap` from the base system, and
+  setup installs `passt` on every family. On an Ubuntu host set up before
+  this change, run `sudo apt-get install uidmap passt` and then
+  `agent-vm doctor`. Ubuntu full and nix images install `uidmap` and
+  `passt` too, so a guest that runs agent-vm can build an image. Fedora
+  and Arch full and nix images install `passt`. An image already cached
+  stays as it is until `agent-vm image build <distro> --force`.
+- `virt-make-fs` can build a disk on Ubuntu once the kernel in `/boot` is
+  readable. Ubuntu installs `/boot/vmlinuz-*` mode 0600. supermin copies that
+  file while it builds the libguestfs appliance, the copy fails, and
+  `virt-make-fs` reports only that supermin exited 1, after the container
+  build has already finished. `doctor`, `image build`, and `create` now check
+  those files first and exit 3 with `sudo chmod 0644 /boot/vmlinuz*`. Leave
+  the initrd mode 0600. A kernel package update restores mode 0600, so run
+  `agent-vm doctor` again after one. The check is skipped when
+  `appliance_kernel` is set, because supermin then uses that kernel. Setup
+  leaves kernel file modes unchanged.
 - `agent-vm doctor` can read ufw's rules when they are not readable as the
   current user. It runs `sudo -n -- cat --` on `/etc/ufw/user.rules`, and on
   `/etc/ufw/ufw.conf` or `/etc/default/ufw` when those are not readable, then

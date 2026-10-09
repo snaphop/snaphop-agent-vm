@@ -706,6 +706,10 @@ RUN printf '%s\n' \
 # and virt-sysprep, and only recommends the metapackage that depends on
 # guestfish. --no-install-recommends would leave virt-copy-out uninstalled,
 # and a nested `agent-vm doctor` would fail the same way a host setup did.
+#
+# uidmap ships newuidmap. passt ships pasta. podman only recommends both, and
+# the same --no-install-recommends would leave a nested `agent-vm image build`
+# failing at the pull with "newuidmap: executable file not found".
 RUN case "$(uname -m)" in \
       aarch64|arm64) qemu_pkg=qemu-system-arm ;; \
       x86_64|amd64) qemu_pkg=qemu-system-x86 ;; \
@@ -722,6 +726,8 @@ RUN case "$(uname -m)" in \
       guestfish \
       guestfs-tools \
       podman \
+      uidmap \
+      passt \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

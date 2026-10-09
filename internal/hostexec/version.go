@@ -106,6 +106,16 @@ var (
 		versionArgs: []string{"--version"},
 		versionRe:   regexp.MustCompile(`podman version (\d+\.\d+(?:\.\d+)?)`),
 	}
+	// NewUIDMap and Pasta are helpers rootless podman execs. agent-vm does not
+	// run them. Ubuntu's podman package only recommends uidmap and passt, and
+	// setup installs with --no-install-recommends, so podman can be on PATH
+	// while a pull still fails with "newuidmap: executable file not found".
+	// Fedora and Arch install newuidmap with the base system (shadow-utils
+	// and shadow). passt, which ships pasta, is podman's default rootless
+	// network command on every family. Neither binary has a version to read,
+	// and running newuidmap would map another process's user namespace.
+	NewUIDMap   = Tool{Name: "newuidmap", Package: "uidmap"}
+	Pasta       = Tool{Name: "pasta", Package: "passt"}
 	VirtMakeFS  = libguestfsTool("virt-make-fs")
 	VirtLs      = libguestfsTool("virt-ls")
 	VirtCopyOut = libguestfsTool("virt-copy-out")
@@ -139,6 +149,12 @@ var (
 // VersionArgs are the arguments that ask this tool for its version. Exposed so
 // that a report about an unreadable version can name the exact command to rerun.
 func (t Tool) VersionArgs() []string { return append([]string(nil), t.versionArgs...) }
+
+// ReportsVersion reports whether this tool prints a version we compare.
+// A helper with no version flag is present or absent: LookPath is the whole
+// check, because running it would demand arguments a readiness probe must not
+// supply.
+func (t Tool) ReportsVersion() bool { return t.versionRe != nil }
 
 func libguestfsTool(name string) Tool {
 	// Debian and Ubuntu split the tools. guestfs-tools provides virt-make-fs,
@@ -175,7 +191,7 @@ func IsLibguestfsTool(name string) bool {
 // RequiredTools are checked by doctor and resolved once per run. Every one of
 // them is a thing we deliberately do not implement ourselves (ADR-0009).
 func RequiredTools() []Tool {
-	return []Tool{Virsh, VirtInstall, QemuImg, Podman, VirtMakeFS, VirtLs, VirtCopyOut, VirtSysprep, IP, SSH}
+	return []Tool{Virsh, VirtInstall, QemuImg, Podman, NewUIDMap, Pasta, VirtMakeFS, VirtLs, VirtCopyOut, VirtSysprep, IP, SSH}
 }
 
 // OptionalTools are tools only some flags need. doctor reports them so an
@@ -244,6 +260,9 @@ func (v *Versions) probe(ctx context.Context, tool Tool) (Version, error) {
 			return Version{}, &NotFoundError{Tool: nf.Tool, Package: tool.Package}
 		}
 		return Version{}, err
+	}
+	if !tool.ReportsVersion() {
+		return Version{}, nil
 	}
 
 	res, err := v.runner.Run(ctx, Command{

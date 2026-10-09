@@ -441,6 +441,9 @@ background worker. Long waits include image builds, the guest boot wait during `
   the right host. A missing or too-old tool is a host-readiness failure (exit `3`)
   naming the tool and required version. ssh failing to connect and a tool failing
   on the far side are different errors, because they need different remedies.
+  An unreadable `/boot/vmlinuz-*` is a host-readiness failure (exit `3`) naming
+  `sudo chmod 0644 /boot/vmlinuz*`: supermin copies that file while it builds
+  the libguestfs appliance, and the initrd stays mode `0600`.
 - **Compatibility constraints:** version floors live here and are surfaced by
   `doctor`. Output parsers live next to the caller that needs them, prefer
   machine-readable modes, and are tested against fixtures captured from real tools.
@@ -452,9 +455,11 @@ background worker. Long waits include image builds, the guest boot wait during `
 1. **Resolve and validate.** Merge defaults, config, env, flags. Validate the VM
    name against `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$`, parse sizes, read the SSH
    public key. Any failure exits `2` with nothing changed.
-2. **Required tools.** Check the presence and versions of `virt-install`,
-   `virsh`, and `qemu-img`. This is not the full `doctor` check; run `doctor`
-   separately to verify KVM and the rest of the host configuration.
+2. **Required tools.** Confirm any versioned kernel in `/boot` is readable,
+   unless `appliance_kernel` is set, then check the presence and versions of
+   `virt-install`, `virsh`, and `qemu-img`. An unreadable kernel exits `3`
+   before a disk is written. This is not the full `doctor` check; run
+   `doctor` separately to verify KVM and the rest of the host configuration.
 3. **Claim the name.** Take the per-VM lock, check stored records, and query
    libvirt for a domain with that name. Either existing record or domain exits
    `5` before an image is built.
@@ -605,7 +610,9 @@ token is fetched when the guest is registered and is not stored.
 | `virsh` | 9.0 | Lifecycle, inspection, addresses, NAT network | Lifecycle and query commands fail | Exit `3`; shipped with libvirt |
 | `qemu-img` | 8.0 | Overlay creation, disk facts | `create` fails before defining a domain | Retry after fixing the host; upstream QEMU |
 | `podman` | 4.0 | Pull, build, flatten OCI images | `image build` fails; cached images still work offline | Rerun `image build` once the cause is fixed; upstream |
-| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause, and a host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel` | Exit `3` with the libguestfs diagnostic; upstream |
+| `newuidmap` | any | Apply the subordinate UID range rootless podman needs. Ubuntu package `uidmap`; Fedora `shadow-utils` and Arch `shadow` already ship it | `image build` fails at the pull with `newuidmap: executable file not found` | Exit `3` naming the package; `sudo apt-get install uidmap` on Ubuntu |
+| `pasta` (`passt`) | any | Rootless network for `podman build` `RUN` steps | `image build` fails once a step needs the network | Exit `3` naming `passt`; host operator |
+| libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 | Unprivileged rootfs → qcow2, kernel extraction, generalization, cloud-init seed | `image build` fails; appliance problems are the usual cause. A host kernel that cannot boot the appliance is checked by `doctor` and worked around with `appliance_kernel`. Ubuntu installs `/boot/vmlinuz-*` mode 0600, which supermin cannot copy; `doctor`, `image build`, and `create` then exit 3 and ask for `sudo chmod 0644 /boot/vmlinuz*` (leave the initrd mode 0600). That check is skipped when `appliance_kernel` is set | Exit `3` with the libguestfs diagnostic, or with the chmod command when the kernel is unreadable; upstream, or the host operator for the mode |
 | `iproute2` (`ip -d -json`) | any | Host bridge validation | Bridged `create` fails readiness | Exit `3` with the bridge to fix; host operator |
 | `ssh` | any | Guest SSH, boot readiness, updates, and all remote-hypervisor operations | Guest connections and remote operations fail | Host operator |
 | `gh` | 2.0 | Optional: add/remove a VM's SSH key on GitHub (`--github-ssh-key`), and register or remove an organization Actions runner (`--github-org` on a `-runner` image, and `destroy` of a recorded runner) | Only those operations fail; every other command is unaffected. `doctor` does not fail a host that lacks `gh` | Exit `3` naming `gh` when an operation needs it; host operator |

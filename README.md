@@ -43,7 +43,7 @@ None of that is new virtualization machinery — it is `virt-install`, `virsh`,
 - A Linux host with hardware virtualization (`/dev/kvm`)
 - libvirt 9.0+ (`libvirtd` or `virtqemud`, plus `virsh`) and QEMU 8.0+
 - `virt-install` 4.0+, `qemu-img`, `podman` 4.0+, libguestfs 1.50+, plus `ip`
-  (iproute2) and `ssh`
+  (iproute2) and `ssh`. Rootless podman also needs `newuidmap` and `pasta`
 - Go 1.22+ to build from source (pure Go — no cgo, no libvirt headers)
 - Your user in the `kvm` and `libvirt` groups
 - Optional: `gh` 2.0+, needed by `--github-ssh-key` on `create` and
