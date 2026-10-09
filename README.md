@@ -133,7 +133,8 @@ Each family also has a **runner** variant (`ubuntu-runner`, `fedora-runner`,
 `arch-runner`): the slim image plus the GitHub Actions self-hosted runner
 and Docker. The runner is installed and not registered. Jobs run as
 `github-runner`, which has passwordless sudo and can use the Docker daemon.
-Ubuntu runner images install `build-essential`. With `gh` logged in on the
+The guest has `git` and `gh`. Ubuntu runner images install `build-essential`.
+With `gh` logged in on the
 client, name an organization and `create` registers the runner after SSH is
 up. Without an organization, register it from inside the guest. See
 [Runner images](./docs/cli.md#runner-images),

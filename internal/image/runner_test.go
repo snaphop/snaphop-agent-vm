@@ -69,7 +69,7 @@ func refuseRealRunner(t *testing.T) {
 
 func TestGitHubRunnerScripts_AreValidShell(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh"} {
+	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh"} {
 		path := writeEmbeddedScript(t, name)
 		out, err := exec.Command("sh", "-n", path).CombinedOutput()
 		if err != nil {
@@ -213,6 +213,42 @@ func TestRunnerDocker_InstallsTheDistroDaemonAndAdmitsTheRunner(t *testing.T) {
 	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
 		if strings.Contains(scrubbed, forbidden) {
 			t.Errorf("runner-docker.sh contains %q; the image build must not carry a registration or an unpinned release", forbidden)
+		}
+	}
+}
+
+func TestRunnerGit_InstallsGitAndTheGitHubCLI(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-git.sh")
+	lower := strings.ToLower(script)
+
+	for _, want := range []string{
+		"apt-get install -y --no-install-recommends \\\n        git \\\n        gh",
+		"dnf -y install \\\n        git \\\n        gh",
+		"pacman -S --noconfirm --needed \\\n        git \\\n        github-cli",
+		"for cmd in git gh; do",
+		`command -v "$cmd"`,
+		`"$cmd" --version`,
+		"no git install for this distro",
+		"is not on PATH after the package install",
+		"is installed but cannot run",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-git.sh does not contain %q", want)
+		}
+	}
+	// -Sy or -Su refreshes or upgrades every installed package. The slim
+	// recipe has already built the initramfs this image direct-boots.
+	if strings.Contains(script, "pacman -Sy") || strings.Contains(script, "pacman -Su") {
+		t.Error("runner-git.sh must install the named Arch packages only")
+	}
+	// gh auth would store a login in the shared base image.
+	if strings.Contains(script, "gh auth") || strings.Contains(script, "gh login") {
+		t.Error("runner-git.sh signs gh in during the image build")
+	}
+	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-git.sh contains %q; the image build must not carry a login or an unpinned release", forbidden)
 		}
 	}
 }
