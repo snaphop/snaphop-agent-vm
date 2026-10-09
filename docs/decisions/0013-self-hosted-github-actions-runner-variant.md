@@ -14,7 +14,13 @@ leaves registration to the operator.
 
 Extended by [ADR-0016](./0016-install-docker-on-the-runner-image.md). The
 shared section also installs Docker from the distro's packages, and the
-`runner` account is in the `docker` group.
+job account is in the `docker` group.
+
+The job account's name and its sudo are changed by
+[ADR-0017](./0017-run-the-github-actions-runner-as-github-runner.md). Jobs
+run as `github-runner`, and that account has passwordless sudo. The account
+name `runner` and the rule that the account is not in sudoers, in the
+decision below, are no longer in force.
 
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided

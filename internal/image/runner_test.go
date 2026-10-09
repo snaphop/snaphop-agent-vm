@@ -95,6 +95,14 @@ func TestGitHubRunnerInstall_PinsTheReleaseAndCarriesNoRegistration(t *testing.T
 		"/opt/actions-runner",
 		".agent-vm-runner-version",
 		"useradd --system --user-group",
+		"--no-create-home github-runner",
+		"id github-runner",
+		"github-runner ALL=(ALL) NOPASSWD:ALL",
+		"/etc/sudoers.d/github-runner",
+		"chmod 0440",
+		"visudo -c -f",
+		"build-essential",
+		"chown -R github-runner:github-runner",
 		"chmod 0750",
 		"installdependencies.sh",
 		"icu openssl krb5 zlib lttng-ust",
@@ -111,8 +119,16 @@ func TestGitHubRunnerInstall_PinsTheReleaseAndCarriesNoRegistration(t *testing.T
 	if strings.Contains(script, "pacman -Sy") || strings.Contains(script, "pacman -Su") {
 		t.Error("github-runner.sh must install the named Arch packages only")
 	}
+	for _, gone := range []string{"id runner ", "no-create-home runner", "chown -R runner:"} {
+		if strings.Contains(script, gone) {
+			t.Errorf("github-runner.sh still names the old account: %q", gone)
+		}
+	}
+	// NOPASSWD is the sudoers rule, not a credential stored in the image.
+	// Its lowercase form contains the substring "password".
+	scrubbed := strings.ReplaceAll(lower, "nopasswd", "")
 	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
-		if strings.Contains(lower, forbidden) {
+		if strings.Contains(scrubbed, forbidden) {
 			t.Errorf("github-runner.sh contains %q; the image build must not carry a registration or an unpinned release", forbidden)
 		}
 	}
@@ -123,6 +139,33 @@ func TestGitHubRunnerInstall_PinsTheReleaseAndCarriesNoRegistration(t *testing.T
 	}
 	if strings.Contains(script, "./config.sh") || strings.Contains(script, "RUNNER_ALLOW_RUNASROOT") {
 		t.Error("github-runner.sh executes config.sh during the image build")
+	}
+}
+
+// TestGitHubRunnerSudoersRule_IsAcceptedByVisudo runs the same check the image
+// build runs. A rule visudo rejects would fail every runner image build, and
+// a unit test is the place that failure shows up without a registry.
+func TestGitHubRunnerSudoersRule_IsAcceptedByVisudo(t *testing.T) {
+	t.Parallel()
+	visudo, err := exec.LookPath("visudo")
+	if err != nil {
+		t.Fatal("visudo is not installed; the runner image build checks this rule with it")
+	}
+	const rule = "github-runner ALL=(ALL) NOPASSWD:ALL\n"
+	script := readTemplate(t, "distro/github-runner.sh")
+	if !strings.Contains(script, strings.TrimRight(rule, "\n")) {
+		t.Fatalf("github-runner.sh does not grant %q", strings.TrimRight(rule, "\n"))
+	}
+	path := filepath.Join(t.TempDir(), "github-runner")
+	if err := os.WriteFile(path, []byte(rule), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(visudo, "-c", "-f", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("visudo rejected the sudoers rule: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "parsed OK") {
+		t.Fatalf("visudo output:\n%s", out)
 	}
 }
 
@@ -140,10 +183,11 @@ func TestRunnerDocker_InstallsTheDistroDaemonAndAdmitsTheRunner(t *testing.T) {
 		"docker-compose",
 		"pacman -S --noconfirm --needed",
 		"systemctl --root=/ enable docker.service containerd.service",
-		"usermod -aG docker runner",
+		"id github-runner",
+		"usermod -aG docker github-runner",
 		"command -v docker",
 		"no Docker install for this distro",
-		"the runner account is missing",
+		"the github-runner account is missing",
 		"the docker group is missing",
 	} {
 		if !strings.Contains(script, want) {
@@ -155,13 +199,19 @@ func TestRunnerDocker_InstallsTheDistroDaemonAndAdmitsTheRunner(t *testing.T) {
 	if strings.Contains(script, "pacman -Sy") || strings.Contains(script, "pacman -Su") {
 		t.Error("runner-docker.sh must install the named Arch packages only")
 	}
+	for _, gone := range []string{"id runner ", "docker runner"} {
+		if strings.Contains(script, gone) {
+			t.Errorf("runner-docker.sh still names the old account: %q", gone)
+		}
+	}
 	// Foreign-architecture builds stay on the full and nix images. Pulling
 	// qemu-user into the runner image is a different, larger decision.
 	if strings.Contains(script, "qemu-user") || strings.Contains(script, "binfmt") {
 		t.Error("runner-docker.sh installs user-mode QEMU; cross-architecture docker build is not part of the runner image")
 	}
+	scrubbed := strings.ReplaceAll(lower, "nopasswd", "")
 	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
-		if strings.Contains(lower, forbidden) {
+		if strings.Contains(scrubbed, forbidden) {
 			t.Errorf("runner-docker.sh contains %q; the image build must not carry a registration or an unpinned release", forbidden)
 		}
 	}
@@ -171,14 +221,16 @@ func TestGitHubRunnerConfigure_CarriesNoCredentialMaterial(t *testing.T) {
 	t.Parallel()
 	script := readTemplate(t, "distro/github-runner-configure.sh")
 	lower := strings.ToLower(script)
+	scrubbed := strings.ReplaceAll(lower, "nopasswd", "")
 	for _, forbidden := range []string{"ghp_", "github_pat_", "gho_", "sk-", "bearer ", "api_key", "password"} {
-		if strings.Contains(lower, forbidden) {
+		if strings.Contains(scrubbed, forbidden) {
 			t.Errorf("github-runner-configure.sh contains %q", forbidden)
 		}
 	}
 	for _, want := range []string{
-		"run_svc install runner",
-		"runuser -u runner --",
+		"run_svc install github-runner",
+		"runuser -u github-runner --",
+		"sudo --user github-runner --",
 		"config.sh",
 		"--runnergroup",
 		"remove --local",
@@ -194,6 +246,11 @@ func TestGitHubRunnerConfigure_CarriesNoCredentialMaterial(t *testing.T) {
 			t.Errorf("github-runner-configure.sh contains %q", forbidden)
 		}
 	}
+	for _, gone := range []string{"runuser -u runner --", "sudo --user runner --", "run_svc install runner\n"} {
+		if strings.Contains(script, gone) {
+			t.Errorf("github-runner-configure.sh still names the old account: %q", gone)
+		}
+	}
 }
 
 func TestGitHubRunnerConfigure_HelpSucceedsAndPrintsTheRegistrationFlags(t *testing.T) {
@@ -203,7 +260,7 @@ func TestGitHubRunnerConfigure_HelpSucceedsAndPrintsTheRegistrationFlags(t *test
 	if code != 0 {
 		t.Fatalf("exit %d, want 0\n%s", code, stderr)
 	}
-	for _, want := range []string{"--url", "--token", "configure", "ephemeral", "registration token", "removal token"} {
+	for _, want := range []string{"--url", "--token", "configure", "ephemeral", "registration token", "removal token", "github-runner", "sudo without a prompt"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help does not mention %q:\n%s", want, stdout)
 		}
@@ -332,9 +389,9 @@ exit 0
 `
 
 const stubRunuser = `#!/bin/sh
-# The configure script switches to the runner account through runuser. This
-# host has no such account; record nothing and run the command as we are.
-if [ "$1" != "-u" ] || [ "$3" != "--" ]; then
+# The configure script switches to github-runner through runuser. This host
+# has no such account; record nothing and run the command as we are.
+if [ "$1" != "-u" ] || [ "$2" != "github-runner" ] || [ "$3" != "--" ]; then
   printf '%s\n' "runuser stub: unexpected invocation" >&2
   exit 99
 fi
@@ -475,7 +532,7 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 			{"svc", "uninstall"},
 			{"config", "remove", "--local"},
 			{"config", "--unattended", "--url", "https://github.com/org/repo", "--name", "runner1", "--token", registration, "--replace"},
-			{"svc", "install", "runner"},
+			{"svc", "install", "github-runner"},
 			{"svc", "start"},
 		}
 		if !reflect.DeepEqual(got, want) {
@@ -513,7 +570,7 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 		assertRegistrationHidden(t, stdout, stderr)
 		want := [][]string{
 			{"config", "--unattended", "--url", "https://github.com/org/repo", "--name", "runner1", "--token", registration},
-			{"svc", "install", "runner"},
+			{"svc", "install", "github-runner"},
 			{"svc", "start"},
 		}
 		if !reflect.DeepEqual(got, want) {

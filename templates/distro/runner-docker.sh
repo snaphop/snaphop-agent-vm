@@ -2,10 +2,11 @@
 # Install Docker into a runner image and let the runner account use it.
 #
 # Runs as root during the image build, after github-runner.sh has created
-# the runner account. A workflow job runs as that account. The account has
-# no sudo, so it has to be in the docker group or every docker step fails.
-# Membership in that group can start a privileged container, which is root
-# inside the guest (ADR-0016). The account stays out of sudoers.
+# the github-runner account. A workflow job runs as that account. The
+# account may sudo without a prompt (ADR-0017). It is also in the docker
+# group, so a job can use the daemon without sudo. Membership in that group
+# can start a privileged container, which is root inside the guest
+# (ADR-0016).
 #
 # Packages come from the distro, the same ones a full image installs.
 # Docker's convenience script would add another registry and a GPG key.
@@ -55,12 +56,12 @@ fi
 # from inside a job, like a job that cannot find a daemon.
 systemctl --root=/ enable docker.service containerd.service
 
-if ! id runner >/dev/null 2>&1; then
-    echo "runner-docker: the runner account is missing; install the runner first" >&2
+if ! id github-runner >/dev/null 2>&1; then
+    echo "runner-docker: the github-runner account is missing; install the runner first" >&2
     exit 1
 fi
 if ! getent group docker >/dev/null 2>&1; then
     echo "runner-docker: the docker group is missing after the package install" >&2
     exit 1
 fi
-usermod -aG docker runner
+usermod -aG docker github-runner

@@ -558,7 +558,9 @@ func TestAgentConfigs_CarryNoCredentials(t *testing.T) {
 	secretish := []string{"api_key", "apikey", "api-key", "token", "secret", "password", "sk-", "bearer"}
 
 	for _, name := range buildContextFiles {
-		contents := strings.ToLower(readTemplate(t, "distro/"+name))
+		// NOPASSWD is the github-runner sudoers rule, not a stored credential.
+		// Its lowercase form contains the substring "password".
+		contents := strings.ReplaceAll(strings.ToLower(readTemplate(t, "distro/"+name)), "nopasswd", "")
 		for _, needle := range secretish {
 			// github-runner-configure.sh is the operator's registration
 			// command, so its flag is the word "token". It still has to pass

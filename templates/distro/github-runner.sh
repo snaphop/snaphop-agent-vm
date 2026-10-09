@@ -43,9 +43,20 @@ nologin=$(command -v nologin) || {
     echo "github-runner: nologin is not installed" >&2
     exit 1
 }
-if ! id runner >/dev/null 2>&1; then
-    useradd --system --user-group --home-dir "$prefix" --shell "$nologin" --no-create-home runner
+# Jobs run as github-runner. The shell stays nologin, so the account is not
+# an SSH login. sudo comes from the drop-in below (ADR-0017).
+if ! id github-runner >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir "$prefix" --shell "$nologin" --no-create-home github-runner
 fi
+sudoers=/etc/sudoers.d/github-runner
+printf '%s\n' 'github-runner ALL=(ALL) NOPASSWD:ALL' > "$sudoers"
+chown root:root "$sudoers"
+chmod 0440 "$sudoers"
+if ! command -v visudo >/dev/null 2>&1; then
+    echo "github-runner: visudo is not installed" >&2
+    exit 1
+fi
+visudo -c -f "$sudoers"
 
 mkdir -p "$prefix"
 tar -xzf "$tmp" -C "$prefix"
@@ -69,6 +80,16 @@ else
     exit 1
 fi
 
+# Jobs compile C and C++. build-essential is the Debian package for gcc,
+# g++, make, and the headers. Fedora and Arch already install that toolchain
+# in the slim recipe (gcc/make and base-devel). A second package transaction
+# there could upgrade the kernel after the initramfs this image direct-boots
+# was built.
+if [ -e /etc/debian_version ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential
+fi
+
 if [ -e /etc/debian_version ]; then
     rm -rf /var/lib/apt/lists/*
 elif [ -e /etc/fedora-release ]; then
@@ -78,5 +99,5 @@ elif [ -f /etc/arch-release ]; then
 fi
 
 printf '%s\n' "$version" > "$prefix/.agent-vm-runner-version"
-chown -R runner:runner "$prefix"
+chown -R github-runner:github-runner "$prefix"
 chmod 0750 "$prefix"

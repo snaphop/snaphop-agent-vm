@@ -434,12 +434,22 @@ guarantees — and carries the same common Linux tooling. It does not carry
 the coding agents, browser, or nested virtualization stack a full image adds.
 
 The runner is installed under `/opt/actions-runner`, owned by a system
-account named `runner`. That account has no sudo and its shell is `nologin`.
-Workflow jobs run as `runner`. The account is in the `docker` group, so a
-job can use the daemon. A job that can talk to the Docker socket can start
-a privileged container. The `agent` account is unchanged and still has
-passwordless sudo, which is how the operator registers the guest and manages
-the service.
+account named `github-runner` (ADR-0017). That account's shell is `nologin`,
+so it is not an SSH login. It has passwordless sudo
+(`github-runner ALL=(ALL) NOPASSWD:ALL` in `/etc/sudoers.d/github-runner`),
+so a workflow job can install packages and run commands as root inside the
+guest. Workflow jobs run as `github-runner`. The account is in the `docker`
+group, so a job can use the daemon. A job can also become root with `sudo`,
+and a job that can talk to the Docker socket can start a privileged
+container. The `agent` account is unchanged and still has passwordless sudo,
+which is how the operator registers the guest and manages the service.
+
+Ubuntu runner images install `build-essential` (gcc, g++, make, and the
+headers). Fedora runner images include `gcc`, `gcc-c++`, and `make` from the
+slim recipe, and Arch runner images include `base-devel`. An image already
+cached keeps the old `runner` account, which cannot sudo, until
+`agent-vm image build <family>-runner --force`. Create the VM again from
+that image.
 
 Docker comes from the distro's own packages, the same ones a full image
 uses. Ubuntu installs `docker.io`, `docker-compose-v2`, and `docker-buildx`.
@@ -495,8 +505,9 @@ it in the GitHub UI.
 
 The command is `/usr/local/sbin/agent-vm-github-runner`, linked from
 `/usr/sbin` so `sudo` finds it on every family. It runs GitHub's `config.sh`
-as the `runner` user — `config.sh` refuses to run as root — and then GitHub's
-`svc.sh install runner` and `svc.sh start` as root, from the runner directory.
+as the `github-runner` user — `config.sh` refuses to run as root — and then
+GitHub's `svc.sh install github-runner` and `svc.sh start` as root, from the
+runner directory.
 `config.sh` writes `svc.sh` when a guest is registered. The image does not
 contain `svc.sh` before that.
 

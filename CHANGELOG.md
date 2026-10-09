@@ -19,14 +19,13 @@ migration or rebuild step a user has to take.
 ### Added
 
 - A runner image includes Docker. The daemon starts at boot, and a job
-  running as `runner` can use `docker`, `docker compose`, and `docker
-  buildx`. The packages are the distro's own: Ubuntu `docker.io`, Fedora
-  `moby-engine`, Arch `docker`, plus that family's compose and buildx
-  packages. The `runner` account still has no sudo. A job that can talk to
-  the Docker socket can start a privileged container. An image already
-  cached stays as it is until `agent-vm image build <family>-runner
-  --force`. Building for another CPU architecture with `docker build
-  --platform` stays on full and nix images.
+  running as `github-runner` can use `docker`, `docker compose`, and
+  `docker buildx`. The packages are the distro's own: Ubuntu `docker.io`,
+  Fedora `moby-engine`, Arch `docker`, plus that family's compose and
+  buildx packages. A job that can talk to the Docker socket can start a
+  privileged container. An image already cached stays as it is until
+  `agent-vm image build <family>-runner --force`. Building for another CPU
+  architecture with `docker build --platform` stays on full and nix images.
 - A runner VM can join a GitHub organization when it is created, when `gh` is
   installed and logged in. `agent-vm create ci --distro ubuntu-runner
   --github-org <org>` waits until SSH works, asks GitHub for a short-lived
@@ -48,6 +47,14 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- Jobs on a runner image run as `github-runner`. That account can `sudo`
+  without a password, and its shell is still `nologin`, so it is not an SSH
+  login. Ubuntu runner images install `build-essential`. Fedora and Arch
+  runner images already include a compiler from the slim image (`gcc` and
+  `make`, and `base-devel`). An image already cached keeps the old `runner`
+  account, which cannot sudo, until `agent-vm image build <family>-runner
+  --force`. Create the VM again from that image. A VM that already exists
+  does not pick this up.
 - mise no longer waits a day before it will install a release. It skips
   anything published in the last 24 hours unless `MISE_MINIMUM_RELEASE_AGE`
   is `0s`. Image builds set that on every `mise use` and on the mise
