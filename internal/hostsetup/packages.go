@@ -46,6 +46,13 @@ func Packages(family, version, arch string, github bool) ([]string, error) {
 			// per network, and the full package would also enable a resolver
 			// on port 53.
 			"dnsmasq-base",
+			// guestfish ships virt-copy-out. guestfs-tools ships virt-make-fs,
+			// virt-ls, and virt-sysprep, and only recommends the metapackage
+			// that depends on guestfish. --no-install-recommends therefore
+			// leaves virt-copy-out off PATH, and doctor fails after setup.
+			// Fedora and Arch pull the same command in through guestfs-tools'
+			// dependency on libguestfs, so they do not name guestfish.
+			"guestfish",
 			"guestfs-tools",
 			"podman",
 			"iproute2",

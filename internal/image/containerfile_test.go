@@ -1224,7 +1224,7 @@ func TestContainerfiles_InstallTheVirtualizationStack(t *testing.T) {
 		// being built; each one provides qemu-kvm.
 		distro.Ubuntu.Containerfile: {
 			"qemu-system-x86", "qemu-system-arm", "libvirt-daemon-system", "libvirt-clients", "virtinst",
-			"dnsmasq-base", "guestfs-tools", "podman",
+			"dnsmasq-base", "guestfish", "guestfs-tools", "podman",
 		},
 		distro.Fedora.Containerfile: {
 			"qemu-kvm", "libvirt", "libvirt-client", "virt-install",
@@ -1357,7 +1357,7 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		}
 		for _, check := range []string{
 			"virsh --version", "virt-install --version", "qemu-img --version",
-			"virt-make-fs --version", "podman --version", "dnsmasq --version",
+			"virt-make-fs --version", "virt-copy-out --version", "podman --version", "dnsmasq --version",
 		} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %q at build time", d.Containerfile, check)

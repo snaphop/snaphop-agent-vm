@@ -141,8 +141,16 @@ var (
 func (t Tool) VersionArgs() []string { return append([]string(nil), t.versionArgs...) }
 
 func libguestfsTool(name string) Tool {
+	// Debian and Ubuntu split the tools. guestfs-tools provides virt-make-fs,
+	// virt-ls, and virt-sysprep. virt-copy-out is a guestfish wrapper and
+	// ships in the guestfish package. libguestfs-tools is a metapackage that
+	// depends on guestfish; it does not contain the binary.
+	pkg := "libguestfs-tools"
+	if name == "virt-copy-out" {
+		pkg = "guestfish"
+	}
 	return Tool{
-		Name: name, Package: "libguestfs-tools", Minimum: Version{Major: 1, Minor: 50},
+		Name: name, Package: pkg, Minimum: Version{Major: 1, Minor: 50},
 		versionArgs: []string{"--version"},
 		versionRe:   regexp.MustCompile(regexp.QuoteMeta(name) + ` (\d+\.\d+(?:\.\d+)?)`),
 	}

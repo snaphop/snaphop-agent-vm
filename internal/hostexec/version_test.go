@@ -148,6 +148,22 @@ func TestVersionsGet_ReportsMissingToolWithItsPackage(t *testing.T) {
 	}
 }
 
+func TestVersionsGet_ReportsVirtCopyOutAsGuestfish(t *testing.T) {
+	t.Parallel()
+	fake := NewFake()
+	fake.Missing["virt-copy-out"] = true
+
+	_, err := NewVersions(fake).Get(context.Background(), VirtCopyOut)
+
+	var nf *NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("got %v, want *NotFoundError", err)
+	}
+	if nf.Package != "guestfish" {
+		t.Errorf("NotFoundError.Package = %q, want %q", nf.Package, "guestfish")
+	}
+}
+
 func TestVersionsGet_ProbesEachToolOnce(t *testing.T) {
 	t.Parallel()
 	fake := NewFake().Respond("virsh --version", FakeResponse{Stdout: "12.6.0\n"})

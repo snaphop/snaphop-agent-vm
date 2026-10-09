@@ -106,8 +106,19 @@ func TestPackages_FollowTheGuestReleasesAndArchitectures(t *testing.T) {
 	if slices.Contains(x86, "qemu-kvm") || slices.Contains(x86, "dnsmasq") {
 		t.Errorf("ubuntu packages name a virtual or conflicting package: %v", x86)
 	}
-	if !slices.Contains(x86, "dnsmasq-base") || !slices.Contains(x86, "guestfs-tools") {
+	if !slices.Contains(x86, "dnsmasq-base") || !slices.Contains(x86, "guestfs-tools") || !slices.Contains(x86, "guestfish") {
 		t.Errorf("ubuntu packages = %v", x86)
+	}
+	// guestfish is the Debian package name. dnf and pacman have no such
+	// package; those families get virt-copy-out from libguestfs.
+	for _, family := range []struct{ name, version string }{{"fedora", "43"}, {"arch", ""}} {
+		got, err := Packages(family.name, family.version, "x86_64", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(got, "guestfish") {
+			t.Errorf("%s packages name guestfish, which that family does not publish: %v", family.name, got)
+		}
 	}
 
 	for _, name := range []string{"ubuntu", "fedora"} {
