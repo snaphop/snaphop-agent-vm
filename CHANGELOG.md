@@ -61,6 +61,12 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `agent-vm doctor` can read ufw's rules when they are not readable as the
+  current user. It runs `sudo -n -- cat --` on `/etc/ufw/user.rules`, and on
+  `/etc/ufw/ufw.conf` or `/etc/default/ufw` when those are not readable, then
+  applies the same forwarding and guest-service checks. A password prompt is
+  refused. Run `sudo -v` first when sudo requires a password, then run
+  `agent-vm doctor` again. The command still never changes a firewall rule.
 - `agent-vm setup` on Ubuntu also installs `guestfish`. That package provides
   `virt-copy-out`. `guestfs-tools` provides `virt-make-fs`, `virt-ls`, and
   `virt-sysprep`, and only recommends the package that pulls `guestfish` in.

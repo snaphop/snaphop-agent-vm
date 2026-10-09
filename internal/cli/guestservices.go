@@ -27,8 +27,10 @@ const guestServicesCheckName = "host firewall guest services"
 
 // checkGuestServices reports a host firewall that will drop the guest's DHCP
 // and DNS requests to the host. bridge is the device libvirt allocated for the
-// NAT network, or empty when it could not be determined.
-func checkGuestServices(cfg *config.Config, conn *config.Connection, bridge string) check {
+// NAT network, or empty when it could not be determined. state is the ufw
+// configuration already read for the forwarding check, so a root-only rules
+// file is opened once.
+func checkGuestServices(cfg *config.Config, conn *config.Connection, bridge string, state ufwState) check {
 	if conn.Remote {
 		// As with forwarding: these files describe this machine's firewall,
 		// not the hypervisor's.
@@ -38,7 +40,7 @@ func checkGuestServices(cfg *config.Config, conn *config.Connection, bridge stri
 			Remedy: "Run `agent-vm doctor` on " + conn.SSHDestination + " if a guest boots but never gets an address.",
 		}
 	}
-	return guestServicesCheck(cfg, readUFWState(ufwConfPath, ufwDefaultsPath, ufwRulesPath), bridge)
+	return guestServicesCheck(cfg, state, bridge)
 }
 
 // guestServicesCheck is the decision alone, separated from the fixed paths so
@@ -72,10 +74,14 @@ func guestServicesCheck(cfg *config.Config, state ufwState, bridge string) check
 			Detail: "ufw is enabled and accepts incoming traffic by default",
 		}
 	case !state.RulesReadable:
+		detail := fmt.Sprintf("ufw is enabled and %s is not readable without root, so the guest's DHCP and DNS could not be confirmed", ufwRulesPath)
+		if state.RulesSudoFailed {
+			detail = fmt.Sprintf("ufw is enabled and `sudo -n` could not read %s, so the guest's DHCP and DNS could not be confirmed", ufwRulesPath)
+		}
 		return check{
 			Name: name, Status: statusWarn,
-			Detail: fmt.Sprintf("ufw is enabled and %s is not readable without root, so the guest's DHCP and DNS could not be confirmed", ufwRulesPath),
-			Remedy: guestServicesRemedy(cfg, bridge, []string{dhcpServerPort, dnsPort}),
+			Detail: detail,
+			Remedy: withSudoReadHint(state, guestServicesRemedy(cfg, bridge, []string{dhcpServerPort, dnsPort})),
 		}
 	}
 

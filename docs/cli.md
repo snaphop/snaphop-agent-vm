@@ -277,7 +277,11 @@ it prints the lookup instead of guessing `virbr0`. It is skipped in bridged
 mode, where the guest gets its lease and resolver from the LAN.
 
 Both checks read `ufw`'s configuration only; neither ever runs `ufw` and
-neither ever changes a rule. They report `pass` when `ufw` is absent, disabled, permissive by
+neither ever changes a rule. When `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or
+`/etc/ufw/user.rules` is not readable, `doctor` reads that file with
+`sudo -n -- cat --`. The `-n` refuses a password prompt instead of waiting;
+run `sudo -v` first when sudo requires a password, then run `agent-vm doctor`
+again. They report `pass` when `ufw` is absent, disabled, permissive by
 default on the hook in question, or carries rules covering it (naming the
 interfaces those rules cover, so you can confirm the right bridge is among
 them). Only the IPv4 rules are read: the IPv6 twins `ufw` writes alongside
@@ -288,9 +292,10 @@ a VPN, or one limited to traffic going out toward the bridge does not let the
 guest out. Before the first `create` the bridge does not exist yet, so a rule
 on any input interface is accepted and the detail says it could not be matched
 to the bridge. They report
-`warn` — never `fail` — when `ufw` is enabled and dropping, because the live
-ruleset cannot be read without root and a false failure would exit non-zero on a
-working host. Both are skipped for a
+`warn` — never `fail` — when `ufw` is enabled and dropping. A false failure
+would exit non-zero on a host that forwards by some other means, and only
+`ufw`'s saved rules are visible. When `sudo -n` cannot read those rules, the
+check warns that it could not confirm them. Both are skipped for a
 [remote hypervisor](#remote-hypervisors), whose firewall is the one that matters
 and is not this machine's, and both ask about
 the network *mode*, not whether a bridge is configured, so a host that sets a
@@ -1906,7 +1911,7 @@ table below is the summary.
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link` |
+| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file. The firewall checks never run `ufw` and never change a rule |
 | `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, or host confinement |
 
 Because these are the same commands documented in every libvirt guide, anything

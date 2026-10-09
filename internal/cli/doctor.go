@@ -101,8 +101,15 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	// Both firewall checks must name the bridge the guest's traffic arrives
 	// on, so it is looked up once for the two of them.
 	natBridge := app.natBridge(ctx, cfg, libvirt.Status == statusPass)
-	report.Checks = append(report.Checks, checkForwarding(cfg, conn, natBridge))
-	report.Checks = append(report.Checks, checkGuestServices(cfg, conn, natBridge))
+	// Both checks judge the same files. Read them once, and only on this
+	// machine: a remote hypervisor's firewall is not these files, and reading
+	// them here would sudo for a verdict the checks then refuse to give.
+	var firewall ufwState
+	if !conn.Remote {
+		firewall = readHostUFW(ctx, app.runner)
+	}
+	report.Checks = append(report.Checks, checkForwarding(cfg, conn, natBridge, firewall))
+	report.Checks = append(report.Checks, checkGuestServices(cfg, conn, natBridge, firewall))
 	report.Checks = append(report.Checks, checkBridge(ctx, app, cfg)...)
 
 	return app.reportDoctor(report)

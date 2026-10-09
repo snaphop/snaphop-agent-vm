@@ -111,15 +111,21 @@ func TestDoctor_RemoteGroupsAreTheHypervisorsAccount(t *testing.T) {
 // wrong, so the checks say they did not run instead.
 func TestDoctor_LocalOnlyChecksAreSkippedForARemoteHypervisor(t *testing.T) {
 	t.Parallel()
-	report, _ := runRemoteDoctor(t, remoteHost())
+	fake := remoteHost()
+	report, _ := runRemoteDoctor(t, fake)
 
-	for _, name := range []string{"host firewall forwarding", "state directory access"} {
+	for _, name := range []string{"host firewall forwarding", "host firewall guest services", "state directory access"} {
 		got := checkNamed(t, report, name)
 		if got.Status != statusSkip {
 			t.Errorf("%s = %s (%s), want skip", name, got.Status, got.Detail)
 		}
 		if got.Remedy == "" {
 			t.Errorf("%s skipped without saying what to do instead", name)
+		}
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "sudo ") {
+			t.Errorf("remote doctor ran sudo for this machine's firewall: %s", argv)
 		}
 	}
 }
