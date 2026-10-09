@@ -11,6 +11,7 @@ import (
 
 	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostsetup"
 	"github.com/snaphop/snaphop-agent-vm/internal/network"
 )
 
@@ -98,6 +99,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, libvirt)
 	report.Checks = append(report.Checks, checkStateDir(app, cfg))
 	report.Checks = append(report.Checks, checkStateDirTraversal(app, cfg))
+	report.Checks = append(report.Checks, checkVirtAAHelper(ctx, app, cfg))
 	report.Checks = append(report.Checks, checkNATNetwork(ctx, app, cfg, libvirt.Status == statusPass))
 	// Both firewall checks must name the bridge the guest's traffic arrives
 	// on, so it is looked up once for the two of them.
@@ -569,6 +571,87 @@ func checkStateDirTraversal(app *App, cfg *config.Config) check {
 		Name: name, Status: statusPass,
 		Detail: fmt.Sprintf("%s can reach %s", identity.Name, cfg.StateDir),
 	}
+}
+
+// checkVirtAAHelper reports whether virt-aa-helper can read a state directory
+// that the shipped AppArmor profile denies. Without that read, the helper
+// never adds the base image to the per-VM profile, and QEMU then fails to
+// open it. The profile QEMU itself runs under is not what this reads.
+func checkVirtAAHelper(ctx context.Context, app *App, cfg *config.Config) check {
+	const name = "virt-aa-helper"
+
+	if !hostsetup.StateDirUnderHiddenHome(cfg.StateDir) {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "the state directory is not under a hidden home directory, which is the path virt-aa-helper denies",
+		}
+	}
+	if cfg.RemoteHypervisor() {
+		where := app.runner.HypervisorHost()
+		if where == "" {
+			where = "the hypervisor"
+		}
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "not checked for a remote hypervisor: the AppArmor profile that matters is on that machine",
+			Remedy: "Run `agent-vm doctor` on " + where + ".",
+		}
+	}
+
+	profile, present, err := readHostText(ctx, app.runner, hostsetup.VirtAAHelperProfile)
+	if err != nil {
+		return check{Name: name, Status: statusWarn, Detail: err.Error()}
+	}
+	if !present {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "virt-aa-helper's AppArmor profile is not installed",
+		}
+	}
+	if !hostsetup.VirtAAHelperProfileDeniesHiddenHome(profile) {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "the installed virt-aa-helper profile does not deny hidden home directories",
+		}
+	}
+	rule, err := hostsetup.VirtAAHelperRule(cfg.StateDir)
+	if err != nil {
+		return check{Name: name, Status: statusFail, Detail: err.Error()}
+	}
+	local, _, err := readHostText(ctx, app.runner, hostsetup.VirtAAHelperLocal)
+	if err != nil {
+		return check{Name: name, Status: statusWarn, Detail: err.Error()}
+	}
+	if hostsetup.VirtAAHelperLocalAllows(local, rule) {
+		return check{
+			Name: name, Status: statusPass,
+			Detail: fmt.Sprintf("can read %s", cfg.StateDir),
+		}
+	}
+	return check{
+		Name: name, Status: statusFail,
+		Detail: fmt.Sprintf("virt-aa-helper cannot read %s, so a VM fails at virt-install with Permission denied on the base image", cfg.StateDir),
+		Remedy: "Run `agent-vm setup`. It adds one local AppArmor rule so virt-aa-helper can read the state directory, then reloads the profile. QEMU stays confined.",
+	}
+}
+
+// readHostText reads path on the machine host tools run on. present is false
+// when the file is not there. Any other failure is returned.
+func readHostText(ctx context.Context, run hostexec.Runner, path string) (string, bool, error) {
+	res, err := run.Run(ctx, hostexec.Command{
+		Name: "cat", Args: []string{path}, Effect: hostexec.Read,
+	})
+	if err == nil {
+		if res == nil {
+			return "", true, nil
+		}
+		return string(res.Stdout), true, nil
+	}
+	var tool *hostexec.ToolError
+	if errors.As(err, &tool) && tool.ExitCode == 1 && strings.Contains(tool.Stderr, "No such file") {
+		return "", false, nil
+	}
+	return "", false, err
 }
 
 // checkNATNetwork reports whether the NAT network is ready. A network that does

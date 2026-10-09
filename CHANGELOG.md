@@ -23,9 +23,19 @@ migration or rebuild step a user has to take.
   `libvirt` groups. On a system connection it also lets libvirt's QEMU account
   search the state directory, without granting read. It accepts the same
   releases as the guest images: Ubuntu 24.04 and 26.04, Fedora 43 and 44, and
-  Arch Linux. `--github` also installs the GitHub CLI. Firewall rules,
-  bridges, and SELinux or AppArmor are left alone. A new login is needed
+  Arch Linux. `--github` also installs the GitHub CLI. When the state
+  directory is under a hidden home directory, such as `~/.local`, and
+  virt-aa-helper's AppArmor profile denies that path, setup allows the
+  helper to read the state directory and reloads the profile. Without that,
+  `create` fails with `Permission denied` on the base image even though the
+  QEMU account can already search the path. QEMU stays confined. Firewall
+  rules, bridges, and SELinux are left alone. A new login is needed
   before the new groups apply. Run `agent-vm doctor` afterwards.
+- `agent-vm doctor` reports **virt-aa-helper** when that helper cannot read
+  a state directory under a hidden home directory, and tells you to run
+  `agent-vm setup`. The check is skipped when the path is not one the
+  shipped profile denies, when the profile is not installed, and on a
+  remote hypervisor.
 - A runner image includes Docker. The daemon starts at boot, and a job
   running as `github-runner` can use `docker`, `docker compose`, and
   `docker buildx`. The packages are the distro's own: Ubuntu `docker.io`,

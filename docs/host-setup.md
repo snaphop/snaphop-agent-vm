@@ -15,9 +15,12 @@ agent-vm doctor
 ```
 
 `setup` does not change firewall rules, bridges, routing, nested-virtualization
-module options, or SELinux or AppArmor. The sections below are what it runs,
-and the steps it deliberately leaves to you. `agent-vm` manages its own
-storage, domains, and libvirt NAT network.
+module options, or SELinux. It does not turn AppArmor off or change the
+profile QEMU runs under. When the state directory is under a hidden home
+directory and virt-aa-helper's profile denies that path, setup allows the
+helper to read the state directory and reloads the profile. The sections
+below are what it runs, and the steps it deliberately leaves to you.
+`agent-vm` manages its own storage, domains, and libvirt NAT network.
 
 Verify a host at any point with:
 
@@ -568,6 +571,45 @@ directory](#letting-the-hypervisor-reach-the-state-directory), and run
 `agent-vm doctor`, which tests exactly that. Relabelling will not fix a missing
 `x` bit.
 
+On Ubuntu, virt-aa-helper has a second, separate refusal. Its shipped profile
+allows image files anywhere and then denies everything under a hidden
+directory in a home directory (`@{HOME}/.*/**`, which is `/home/<user>/.*`
+and `/root/.*`). The default state directory is `~/.local/share/agent-vm`,
+so the helper cannot open the overlay, never learns that `base.qcow2` is its
+backing file, and leaves that path out of the per-VM profile. QEMU then
+fails while connecting to the monitor:
+
+```text
+Could not open '/home/you/.local/share/agent-vm/images/<distro>/<tag>/base.qcow2': Permission denied
+```
+
+`dmesg` shows `apparmor="DENIED"` for profile `virt-aa-helper` on the
+overlay and the seed. The QEMU account's search permission is already
+sufficient; another `setfacl` does not fix this. `agent-vm doctor` reports
+it as **virt-aa-helper**. `agent-vm setup` writes one higher-priority allow
+for the state directory only into
+`/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` and reloads the
+profile with `apparmor_parser -r`. The rule is read and lock (`rk`), not
+write, and it does not change the profile QEMU runs under. A state directory
+outside a hidden home directory, such as `/var/lib/agent-vm`, needs no rule:
+the shipped profile already allows it.
+
+By hand, the same rule is:
+
+```text
+priority=1 /home/you/.local/share/agent-vm/** rk,
+```
+
+Reload with:
+
+```bash
+sudo apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper
+```
+
+`priority=1` overrides the shipped deny, which has the default priority of
+0, and only where the two paths overlap. Do not put the profile in complain
+mode and do not set libvirt's security driver to `none`.
+
 If `doctor` passes and a VM still cannot open its disk, then look for a denial:
 
 ```bash
@@ -758,6 +800,7 @@ agent-vm destroy smoke-test --yes
 | `the tls transport is not supported` | A remote URI that gives no shell on the hypervisor | Use `qemu+ssh://`; see [§10](#10-driving-this-host-from-another-machine) |
 | `exit 3`, `/dev/kvm` unusable | Virtualization disabled, or user not in `kvm` | firmware settings, `ls -l /dev/kvm` |
 | `Cannot access storage file ... Permission denied` on create | The hypervisor's account cannot search a directory above the state directory | `agent-vm doctor` (state directory access), then `setfacl -m u:<qemu user>:x` on the directory it names |
+| `Could not open '…/base.qcow2': Permission denied` while virt-install connects to the monitor | virt-aa-helper cannot read a state directory under a hidden home directory, so the per-VM profile never names the backing file | `agent-vm doctor` (virt-aa-helper), then `agent-vm setup` |
 | `image build` fails in libguestfs | Broken appliance, or no `/dev/kvm` for the appliance | `libguestfs-test-tool` |
 | `the appliance closed the connection unexpectedly`, with no console output at all | The host kernel cannot boot QEMU's `virt` board, or a cached appliance was built before `appliance_kernel` was set | `agent-vm doctor` (libguestfs appliance), then [§8](#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance) |
 | `image build` fails pulling | Registry unreachable, proxy, or rate limit | `podman pull <ref>` by hand; the error names the registry |

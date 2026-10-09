@@ -148,7 +148,10 @@ section named here.
   mechanism — mount, seed, environment, or metadata service.
 - The tool MUST NOT disable or relax host confinement of QEMU (SELinux,
   AppArmor, seccomp) or grant a domain host devices, host PCI passthrough, or
-  privileged QEMU options to work around a permission error.
+  privileged QEMU options to work around a permission error. The one AppArmor
+  edit `agent-vm setup` may make is the virt-aa-helper state-directory rule
+  in [Destructive Operations And Host State](#destructive-operations-and-host-state).
+  That rule does not change the profile QEMU runs under.
 - Guests MUST NOT be given a channel to the host beyond the standard virtio
   devices the tool's `virt-install` argument vector asks for (disk, NIC, RNG,
   serial console, guest agent). Adding a device that crosses the boundary —
@@ -250,7 +253,15 @@ section named here.
   when the operator asks for it (ADR-0018). That command installs packages,
   enables the libvirt service, adds the operator to groups, and may grant the
   QEMU account search permission, and only search permission, on a directory
-  above the state directory. It MUST NOT grant read or write. A path escaping
+  above the state directory. It MUST NOT grant that account read or write.
+  When the state directory lies under a hidden directory in a home directory
+  (`/home/<user>/.*` or `/root/.*`) and the installed virt-aa-helper profile
+  denies `@{HOME}/.*/**`, setup may write one local AppArmor rule granting
+  that helper read and lock (`rk`) on the state directory only, then reload
+  the profile with `apparmor_parser`. That lets the helper name backing files
+  in the per-VM profile. Setup MUST NOT disable AppArmor, put a profile in
+  complain mode, change QEMU's confinement, or allow the helper to read any
+  other path. A path escaping
   the state directory from any other command is a fatal error, never a warning.
 - The tool MUST NOT stop, undefine, or delete a libvirt domain, network,
   volume, or storage pool that it did not create and does not have a record of

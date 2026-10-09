@@ -237,9 +237,12 @@ go run ./cmd/agent-vm doctor
 
 `agent-vm setup` installs the host packages, starts libvirt, adds the operator
 to the required groups, and grants the QEMU account search access to the state
-directory (ADR-0018). It accepts the same releases as the guest images: Ubuntu
-24.04 and 26.04, Fedora 43 and 44, and Arch Linux. It does not change firewall
-rules, bridges, or host confinement.
+directory (ADR-0018). When that directory is under a hidden home directory and
+virt-aa-helper's AppArmor profile denies it, setup also allows that helper to
+read the state directory so it can name backing files in the per-VM profile.
+It accepts the same releases as the guest images: Ubuntu 24.04 and 26.04,
+Fedora 43 and 44, and Arch Linux. It does not change firewall rules, bridges,
+SELinux, or the profile QEMU runs under.
 
 `doctor` is the setup verification command: it checks KVM availability, the
 libvirt connection, group membership, every required tool **and its minimum
@@ -355,8 +358,10 @@ Major modules and responsibilities:
   guest. The registration token is not written into the image, the seed,
   `vm.json`, a log, or an argument vector.
 - `internal/hostsetup` — prepares a supported host to run agent-vm: the
-  family's package manager, `systemctl`, `usermod`, and a search-only ACL for
-  the QEMU account (ADR-0018). `internal/cli` decides when to run it.
+  family's package manager, `systemctl`, `usermod`, a search-only ACL for
+  the QEMU account, and, when virt-aa-helper would deny the state directory,
+  one local AppArmor rule letting that helper read it (ADR-0018).
+  `internal/cli` decides when to run it.
 - `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
   when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth
   key is read from that file and passed on the guest's stdin. It is not a

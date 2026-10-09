@@ -57,7 +57,7 @@ func runSetup(ctx context.Context, app *App, args []string) error {
 		app.out.Warn("gh runs on this machine, not on %s. Install it here; setup does not install it on the hypervisor.\n", conn.SSHDestination)
 	}
 	if !app.dryRun {
-		confirmed, err := app.confirm(setupPrompt(host, groups, installGitHub))
+		confirmed, err := app.confirm(setupPrompt(host, groups, installGitHub, stateDir))
 		if err != nil {
 			return err
 		}
@@ -85,10 +85,13 @@ func runSetup(ctx context.Context, app *App, args []string) error {
 	return app.renderSetup(report)
 }
 
-func setupPrompt(host hostsetup.Host, groups []string, github bool) string {
+func setupPrompt(host hostsetup.Host, groups []string, github bool, stateDir string) string {
 	extra := ""
 	if github {
 		extra = " It also installs the GitHub CLI."
+	}
+	if hostsetup.StateDirUnderHiddenHome(stateDir) {
+		extra += " If virt-aa-helper denies hidden home directories, it allows that helper to read the state directory."
 	}
 	return fmt.Sprintf(
 		"Set up this %s (%s) host to run agent-vm? This installs QEMU, libvirt, podman, and libguestfs, starts libvirt, and adds %s to %s.%s",
@@ -129,6 +132,9 @@ func (a *App) renderSetup(report *hostsetup.Report) error {
 	if report.SearchNote != "" {
 		a.out.Warn("%s\n", report.SearchNote)
 	}
+	if report.AppArmorNote != "" {
+		a.out.Warn("%s\n", report.AppArmorNote)
+	}
 	if a.dryRun {
 		return nil
 	}
@@ -142,11 +148,18 @@ func (a *App) renderSetup(report *hostsetup.Report) error {
 	for _, grant := range report.Search {
 		a.out.Printf("  access    %s can search %s\n", grant.User, grant.Path)
 	}
+	if report.AppArmor != "" {
+		a.out.Printf("  apparmor  virt-aa-helper can read %s\n", report.AppArmor)
+	}
 	if report.Relogin {
 		a.out.Printf("\nStart a new login so the new groups apply, then run `agent-vm doctor`.\n")
 	} else {
 		a.out.Printf("\nRun `agent-vm doctor` to confirm this host.\n")
 	}
-	a.out.Printf("Firewall rules, bridges, and host confinement were not changed. See docs/host-setup.md.\n")
+	confinement := "SELinux and AppArmor were not changed."
+	if report.AppArmor != "" {
+		confinement = "SELinux was not changed. QEMU stays confined by AppArmor."
+	}
+	a.out.Printf("Firewall rules and bridges were not changed. %s See docs/host-setup.md.\n", confinement)
 	return nil
 }

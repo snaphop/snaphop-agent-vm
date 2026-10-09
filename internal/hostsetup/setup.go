@@ -57,8 +57,12 @@ type Report struct {
 	GroupsAdded  []string `json:"groupsAdded"`
 	Search       []Grant  `json:"search"`
 	SearchNote   string   `json:"searchNote,omitempty"`
-	Relogin      bool     `json:"relogin"`
-	DryRun       bool     `json:"dryRun,omitempty"`
+	// AppArmor is the state directory virt-aa-helper was allowed to read.
+	// Empty means setup did not change AppArmor.
+	AppArmor     string `json:"appArmor,omitempty"`
+	AppArmorNote string `json:"appArmorNote,omitempty"`
+	Relogin      bool   `json:"relogin"`
+	DryRun       bool   `json:"dryRun,omitempty"`
 }
 
 // PathError is a state directory setup cannot place on the hypervisor.
@@ -121,7 +125,9 @@ func Detect(ctx context.Context, run hostexec.Runner) (Host, error) {
 }
 
 // Apply installs packages, starts libvirt, adds groups, creates the state
-// directory, and grants search access. A command marked Mutate is printed and
+// directory, and grants search access. When virt-aa-helper's profile would
+// deny a state directory under a hidden home directory, it also allows that
+// helper to read the state directory. A command marked Mutate is printed and
 // skipped under --dry-run; the read-only probes still run.
 func Apply(ctx context.Context, run hostexec.Runner, host Host, opt Options) (*Report, error) {
 	if !filepath.IsAbs(opt.StateDir) {
@@ -195,15 +201,24 @@ func Apply(ctx context.Context, run hostexec.Runner, host Host, opt Options) (*R
 
 	if opt.Session {
 		report.SearchNote = "a session connection runs QEMU as " + host.User + ", so no search grant is needed"
-		return report, nil
+	} else {
+		say(opt, "Checking whether QEMU can reach the state directory")
+		grants, note, err := ex.grantSearch(ctx, resolved, skipped)
+		if err != nil {
+			return nil, err
+		}
+		report.Search = grants
+		report.SearchNote = note
 	}
-	say(opt, "Checking whether QEMU can reach the state directory")
-	grants, note, err := ex.grantSearch(ctx, resolved, skipped)
+	if StateDirUnderHiddenHome(resolved) {
+		say(opt, "Checking whether virt-aa-helper can read the state directory")
+	}
+	allowed, aaNote, err := ex.allowVirtAAHelper(ctx, resolved, skipped)
 	if err != nil {
 		return nil, err
 	}
-	report.Search = grants
-	report.SearchNote = note
+	report.AppArmor = allowed
+	report.AppArmorNote = aaNote
 	return report, nil
 }
 

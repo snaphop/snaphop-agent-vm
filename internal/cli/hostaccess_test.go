@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
+	"github.com/snaphop/snaphop-agent-vm/internal/hostsetup"
 )
 
 // otherUser is an identity that owns nothing the tests create, so a directory
@@ -416,4 +417,116 @@ func TestDoctor_StateDirectoryAccessRunsUnderDryRun(t *testing.T) {
 	if !strings.Contains(got.Detail, blocked) {
 		t.Errorf("detail does not name the blocking directory %s: %s", blocked, got.Detail)
 	}
+}
+
+func TestDoctor_VirtAAHelperIsSkippedOutsideAHiddenHome(t *testing.T) {
+	t.Parallel()
+	_, leaf := tree(t, 0o755, 0o755)
+
+	report := runDoctorAs(t, leaf, func() (*hypervisorIdentity, error) { return otherUser(), nil })
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusSkip {
+		t.Errorf("virt-aa-helper = %s (%s), want skip", got.Status, got.Detail)
+	}
+}
+
+func TestDoctor_VirtAAHelperFailsWhenTheStateDirectoryIsDenied(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	fake := apparmorDoctorHost(t, "  audit deny @{HOME}/.*/** mrwkl,\n", "", false)
+
+	report := runDoctorOn(t, fake, stateDir)
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusFail {
+		t.Fatalf("virt-aa-helper = %s (%s), want fail", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, stateDir) || !strings.Contains(got.Remedy, "agent-vm setup") {
+		t.Errorf("detail = %s\nremedy = %s", got.Detail, got.Remedy)
+	}
+}
+
+func TestDoctor_VirtAAHelperPassesWhenSetupHasAllowedTheStateDirectory(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	rule, err := hostsetup.VirtAAHelperRule(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := apparmorDoctorHost(t, "  audit deny @{HOME}/.*/** mrwkl,\n", rule+"\n", true)
+
+	report := runDoctorOn(t, fake, stateDir)
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusPass {
+		t.Fatalf("virt-aa-helper = %s (%s), want pass", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, stateDir) {
+		t.Errorf("detail = %s", got.Detail)
+	}
+}
+
+func TestDoctor_VirtAAHelperIsSkippedForARemoteHypervisor(t *testing.T) {
+	t.Parallel()
+	fake := healthyHost()
+	fake.Hypervisor = "kvm@hv.example.com"
+
+	report := runDoctorOn(t, fake, "/home/operator/.local/share/agent-vm", "--libvirt-uri", remoteURI)
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusSkip {
+		t.Fatalf("virt-aa-helper = %s (%s), want skip", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Remedy, "kvm@hv.example.com") {
+		t.Errorf("remedy = %s", got.Remedy)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "apparmor") {
+			t.Errorf("doctor read this machine's AppArmor profile for a remote hypervisor: %s", argv)
+		}
+	}
+}
+
+func runDoctorOn(t *testing.T, fake *hostexec.Fake, stateDir string, extraArgs ...string) doctorReport {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	app := &App{
+		Stdout: &stdout, Stderr: &stderr,
+		Env:                func(string) string { return "" },
+		Runner:             fake,
+		HypervisorIdentity: undeterminableHypervisor,
+		KVMAccess:          allowKVM,
+	}
+	args := append([]string{
+		"--state-dir", stateDir,
+		"--config", filepath.Join(t.TempDir(), "absent.toml"),
+		"--output", "json",
+	}, extraArgs...)
+	_ = app.run(context.Background(), append(args, "doctor"))
+
+	var report doctorReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor --output json produced unparseable output: %v\n%s", err, stdout.String())
+	}
+	return report
+}
+
+func apparmorDoctorHost(t *testing.T, profile, local string, localPresent bool) *hostexec.Fake {
+	t.Helper()
+	fake := healthyHost()
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		switch strings.Join(c.Argv(), " ") {
+		case "cat " + hostsetup.VirtAAHelperProfile:
+			return hostexec.FakeResponse{Stdout: profile}, true
+		case "cat " + hostsetup.VirtAAHelperLocal:
+			if !localPresent {
+				return hostexec.FakeResponse{ExitCode: 1, Stderr: "cat: " + hostsetup.VirtAAHelperLocal + ": No such file or directory\n"}, true
+			}
+			return hostexec.FakeResponse{Stdout: local}, true
+		default:
+			return hostexec.FakeResponse{}, false
+		}
+	}
+	return fake
 }

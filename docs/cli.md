@@ -334,6 +334,18 @@ skipped for a [remote hypervisor](#remote-hypervisors), whose accounts and
 directory permissions cannot be judged from here. Because it only
 inspects the filesystem it still runs under `--dry-run`.
 
+The **virt-aa-helper** check is the AppArmor half of the same failure. Ubuntu's
+shipped profile denies `@{HOME}/.*/**`, so a state directory under a hidden
+home directory (the default `~/.local/share/agent-vm` is one) cannot be read
+by virt-aa-helper. The helper then leaves the overlay's backing file out of
+the per-VM profile, and `virt-install` fails with `Permission denied` on
+`base.qcow2` even when the QEMU account can already search the path. The
+check fails when that deny is present and the local override does not allow
+the state directory, and the remedy is `agent-vm setup`. It is skipped when
+the path is not under a hidden home directory, when the profile is not
+installed or does not carry the deny, and for a remote hypervisor. It reads
+the profile with `cat` and still runs under `--dry-run`.
+
 It checks helper versions against the floors below. `virsh --version` and
 `qemu-img --version` are the version probes for libvirt and QEMU; the
 connection check runs `virsh version` but does not separately enforce the
@@ -363,7 +375,14 @@ packages, starts libvirt, adds the account agent-vm runs as to the `kvm` and
 `libvirt` groups (`kvm` only on a session URI), creates the state directory,
 and grants the account QEMU runs as search permission on any directory above
 the state directory that blocks it. The grant is search only
-(`setfacl -m u:<user>:x`).
+(`setfacl -m u:<user>:x`). When the state directory is under a hidden home
+directory and virt-aa-helper's AppArmor profile denies `@{HOME}/.*/**`, setup
+also writes one local rule so that helper can read the state directory, then
+reloads the profile with `apparmor_parser -r`. The rule is read and lock on
+that directory only. QEMU's own profile is unchanged. A host without the
+profile, a profile that does not carry the deny, and a state directory the
+shipped profile already allows (for example `/var/lib/agent-vm`) are left
+alone. An existing copy of the same rule is not rewritten.
 
 Supported hosts are the same releases as the guest images
 ([ADR-0006](./decisions/0006-initial-guest-distro-support.md)): Ubuntu 24.04
@@ -379,13 +398,16 @@ URI, `gh` stays on this machine and setup does not install it on the
 hypervisor.
 
 The command asks for confirmation unless `--yes` is given. `--dry-run` prints
-the package-manager, `systemctl`, `usermod`, `mkdir`, and `setfacl`
-invocations and does not run them. Privileged steps use `sudo -n`, so a
+the package-manager, `systemctl`, `usermod`, `mkdir`, `setfacl`, `tee`, and
+`apparmor_parser` invocations and does not run them. The text `tee` would
+write is on its standard input. Privileged steps use `sudo -n`, so a
 password prompt fails instead of waiting; run `sudo -v` first when sudo
 requires a password.
 
 It does not change firewall rules, bridges, routing, nested-virtualization
-module options, or SELinux or AppArmor. Those stay in
+module options, or SELinux, and it does not disable AppArmor or change the
+profile QEMU runs under. The virt-aa-helper exception above is the only
+AppArmor edit. The rest of host preparation stays in
 [host setup](./host-setup.md). A new login is required before a group added
 here is visible to the current session. Run `agent-vm doctor` afterwards.
 
@@ -1927,8 +1949,8 @@ table below is the summary.
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool that has one (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), a `PATH` check for `newuidmap` and `pasta` (neither is executed), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped when `appliance_kernel` is set), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file. The firewall checks never run `ufw` and never change a rule |
-| `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, or host confinement |
+| `doctor` | `virsh version`, plus `--version` on every required tool that has one (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), a `PATH` check for `newuidmap` and `pasta` (neither is executed), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped when `appliance_kernel` is set), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file, and — when the state directory is under a hidden home directory — `cat` of `/etc/apparmor.d/usr.lib.libvirt.virt-aa-helper` and, when that profile denies `@{HOME}/.*/**`, `cat` of `/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` (skipped for a remote hypervisor). The firewall checks never run `ufw` and never change a rule |
+| `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. When the state directory is under a hidden home directory, `test -f` and `cat` of `/etc/apparmor.d/usr.lib.libvirt.virt-aa-helper` and, when that profile denies `@{HOME}/.*/**` and the local rule is missing, `sudo -n -- tee /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` (the snippet on stdin) and `sudo -n -- apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper`. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, SELinux, or the profile QEMU runs under |
 
 Because these are the same commands documented in every libvirt guide, anything
 this CLI does not expose can still be done directly: `--virt-install-arg` passes

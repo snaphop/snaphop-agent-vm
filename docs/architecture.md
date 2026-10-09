@@ -143,7 +143,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | cloud-init seed | `virt-make-fs --type=vfat --label=cidata seed/ seed.img` (ADR-0011) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
 | Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
-| Host preparation (`setup`) | the family's package manager, `systemctl enable --now`, `usermod -aG`, and `setfacl -m u:<qemu user>:x` (ADR-0018). Firewall rules, bridges, and host confinement are not touched |
+| Host preparation (`setup`) | the family's package manager, `systemctl enable --now`, `usermod -aG`, `setfacl -m u:<qemu user>:x`, and, when virt-aa-helper denies a hidden home state directory, `tee` of one local AppArmor rule plus `apparmor_parser -r` (ADR-0018). Firewall rules, bridges, SELinux, and QEMU's profile are not touched |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 | GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command. That command sets labels `<org>`, `<family>-latest`, and `<family>-<tag>` (for the default Ubuntu image, `ubuntu-latest` and `ubuntu-26.04`). `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
 

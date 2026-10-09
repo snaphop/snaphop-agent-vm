@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -136,6 +137,67 @@ func TestSetup_GitHubCLIInstallsOnTheLocalHostOnly(t *testing.T) {
 	}
 }
 
+func TestSetupPrompt_NamesVirtAAHelperForAHiddenHome(t *testing.T) {
+	t.Parallel()
+	host := hostsetup.Host{Release: hostsetup.Release{Name: "Ubuntu 26.04.1 LTS"}, Arch: "x86_64", User: "operator"}
+
+	hidden := setupPrompt(host, []string{"kvm", "libvirt"}, false, "/home/operator/.local/share/agent-vm")
+	if !strings.Contains(hidden, "virt-aa-helper") || !strings.Contains(hidden, "state directory") {
+		t.Errorf("prompt = %q", hidden)
+	}
+	plain := setupPrompt(host, []string{"kvm", "libvirt"}, false, "/var/lib/agent-vm")
+	if strings.Contains(plain, "virt-aa-helper") {
+		t.Errorf("prompt mentioned virt-aa-helper for a path the profile already allows: %q", plain)
+	}
+}
+
+func TestSetup_AllowsVirtAAHelperAndSaysSo(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	fake := newSetupFake(ubuntuRelease, "  audit deny @{HOME}/.*/** mrwkl,\n")
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, "--yes", "setup")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "virt-aa-helper can read "+stateDir) {
+		t.Errorf("stdout does not report the allow:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "QEMU stays confined") {
+		t.Errorf("stdout does not say QEMU stays confined:\n%s", stdout)
+	}
+	if !strings.Contains(argvText(fake), "apparmor_parser -r "+hostsetup.VirtAAHelperProfile) {
+		t.Errorf("commands:\n%s", argvText(fake))
+	}
+	var body string
+	for _, call := range fake.Calls() {
+		if commandName(call) != "tee" || call.Stdin == nil {
+			continue
+		}
+		b, err := io.ReadAll(call.Stdin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = string(b)
+	}
+	rule := "priority=1 " + stateDir + "/** rk,"
+	if !strings.Contains(body, rule) || strings.Contains(body, "priority=1 /home/operator/**") {
+		t.Errorf("local profile =\n%s", body)
+	}
+}
+
+func commandName(c hostexec.Command) string {
+	argv := c.Argv()
+	if c.Name == "sudo" {
+		for i, arg := range argv {
+			if arg == "--" && i+1 < len(argv) {
+				return argv[i+1]
+			}
+		}
+	}
+	return c.Name
+}
+
 func TestSetup_UsesTheSameQEMUAccountsAsDoctor(t *testing.T) {
 	t.Parallel()
 	if strings.Join(qemuUserCandidates, ",") != strings.Join(hostsetup.QEMUUserCandidates, ",") {
@@ -154,6 +216,10 @@ func TestComplete_OffersTheSetupFlag(t *testing.T) {
 const ubuntuRelease = "PRETTY_NAME=\"Ubuntu 26.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nID=ubuntu\n"
 
 func setupFake(osRelease string) *hostexec.Fake {
+	return newSetupFake(osRelease, "")
+}
+
+func newSetupFake(osRelease, apparmorProfile string) *hostexec.Fake {
 	fake := hostexec.NewFake()
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
 		argv := strings.Join(c.Argv(), " ")
@@ -183,6 +249,15 @@ func setupFake(osRelease string) *hostexec.Fake {
 				return hostexec.FakeResponse{Stdout: "libvirt-qemu:x:64055:64055::/:/usr/sbin/nologin\n"}, true
 			}
 			return hostexec.FakeResponse{ExitCode: 2}, true
+		case argv == "test -f "+hostsetup.VirtAAHelperProfile:
+			if apparmorProfile == "" {
+				return hostexec.FakeResponse{ExitCode: 1}, true
+			}
+			return hostexec.FakeResponse{}, true
+		case argv == "cat "+hostsetup.VirtAAHelperProfile:
+			return hostexec.FakeResponse{Stdout: apparmorProfile}, true
+		case argv == "test -f "+hostsetup.VirtAAHelperLocal:
+			return hostexec.FakeResponse{ExitCode: 1}, true
 		case c.Name == "test":
 			return hostexec.FakeResponse{}, true
 		case strings.Contains(argv, "/usr/bin/test -x"):

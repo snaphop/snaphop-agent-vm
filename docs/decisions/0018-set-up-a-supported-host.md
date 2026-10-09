@@ -28,7 +28,7 @@ Installing packages, starting a service, changing group membership, and
 granting an ACL outside the state directory are host changes the rest of the
 tool is forbidden to make. They belong on one command the operator asks for,
 and they stop at the boundary the host-setup guide already draws: no firewall
-edits, no bridges, no confinement changes.
+edits, no bridges, and no change to the profile QEMU runs under.
 
 ## Decision
 
@@ -45,10 +45,20 @@ edits, no bridges, no confinement changes.
 - Privileged commands run under `sudo -n`. A password prompt fails with the
   command to run first. `--yes` skips the confirmation. `--dry-run` prints the
   plan.
+- When the state directory is under a hidden home directory
+  (`/home/<user>/.*` or `/root/.*`) and virt-aa-helper's AppArmor profile
+  denies `@{HOME}/.*/**`, it writes one local rule granting that helper read
+  and lock on the state directory only, then reloads the profile with
+  `apparmor_parser`. The rule is what lets the helper add a qcow2 backing
+  file to the per-VM profile. A state directory the shipped profile already
+  allows, a host without that profile, and a profile that does not carry the
+  deny are left untouched. An existing copy of the same rule is left in place.
 - It does not change firewall rules, bridges, routing, nested-virtualization
-  module options, or SELinux or AppArmor. `--github` is the only way it
-  installs the optional GitHub CLI, and it installs that on the client.
-  A remote hypervisor does not get `gh`, because `gh` does not run there.
+  module options, or SELinux. It does not disable AppArmor, put a profile in
+  complain mode, or change the profile QEMU runs under. `--github` is the
+  only way it installs the optional GitHub CLI, and it installs that on the
+  client. A remote hypervisor does not get `gh`, because `gh` does not run
+  there.
 
 The package lists live in `internal/hostsetup`, next to the guest releases in
 `internal/image/distro`. A new supported tag is a host release as well as a
@@ -72,3 +82,17 @@ Harder:
 - Ubuntu 26.04's virtual `qemu-kvm` package cannot be installed by that name.
   The command installs `qemu-system-x86` or `qemu-system-arm`, which is also
   what the guest image installs.
+- The virt-aa-helper rule is a real AppArmor change, limited to one helper
+  and one directory. It exists because the shipped deny hides the default
+  state directory, and a Unix search grant does not fix that. QEMU's own
+  profile stays the one libvirt generates for the domain.
+
+## Amendment
+
+2026-10-09. The original decision left AppArmor completely alone. On Ubuntu
+the shipped virt-aa-helper profile denies `@{HOME}/.*/**`, so a state
+directory under `~/.local` cannot be read by the helper. The helper then
+omits the overlay's backing file from the per-VM profile, and QEMU reports
+`Permission denied` on `base.qcow2` even when the QEMU account can search
+every directory on the path. Setup now writes the one local override
+described above. SELinux and QEMU's profile stay out of reach.
