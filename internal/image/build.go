@@ -152,6 +152,14 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (built *state.Ma
 		}
 	}
 
+	// A cache hit returned above. A real build pulls and runs containers as
+	// this user, which rootless podman cannot do without these helpers. Failing
+	// here is exit 3 with the package name, before a pull starts and reports
+	// only that newuidmap is missing from PATH.
+	if err := b.requirePodmanHelpers(ctx); err != nil {
+		return nil, err
+	}
+
 	sourceRef := opts.Ref.SourceRef()
 	if opts.From != "" {
 		sourceRef = opts.From
@@ -645,6 +653,17 @@ func (b *Builder) writeManifest(ctx context.Context, work *workspace, opts Build
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// requirePodmanHelpers checks the commands rootless podman execs before a
+// build pulls anything. A cache hit does not call this.
+func (b *Builder) requirePodmanHelpers(ctx context.Context) error {
+	for _, tool := range []hostexec.Tool{hostexec.NewUIDMap, hostexec.Pasta} {
+		if _, err := b.Versions.Require(ctx, tool); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // toolVersions records what built this image, so an artifact produced by a

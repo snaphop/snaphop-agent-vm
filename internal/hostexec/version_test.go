@@ -164,6 +164,38 @@ func TestVersionsGet_ReportsVirtCopyOutAsGuestfish(t *testing.T) {
 	}
 }
 
+func TestVersionsRequire_DoesNotRunAHelperThatHasNoVersion(t *testing.T) {
+	t.Parallel()
+	fake := NewFake()
+
+	got, err := NewVersions(fake).Require(context.Background(), NewUIDMap)
+	if err != nil {
+		t.Fatalf("Require: %v", err)
+	}
+	if !got.IsZero() {
+		t.Errorf("version = %s, want none", got)
+	}
+	if calls := fake.Calls(); len(calls) != 0 {
+		t.Errorf("newuidmap was executed: %v", calls)
+	}
+}
+
+func TestVersionsGet_ReportsAMissingRootlessHelperWithItsPackage(t *testing.T) {
+	t.Parallel()
+	fake := NewFake()
+	fake.Missing["pasta"] = true
+
+	_, err := NewVersions(fake).Get(context.Background(), Pasta)
+
+	var nf *NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("got %v, want *NotFoundError", err)
+	}
+	if nf.Package != "passt" {
+		t.Errorf("NotFoundError.Package = %q, want %q", nf.Package, "passt")
+	}
+}
+
 func TestVersionsGet_ProbesEachToolOnce(t *testing.T) {
 	t.Parallel()
 	fake := NewFake().Respond("virsh --version", FakeResponse{Stdout: "12.6.0\n"})

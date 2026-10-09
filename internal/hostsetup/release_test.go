@@ -106,18 +106,22 @@ func TestPackages_FollowTheGuestReleasesAndArchitectures(t *testing.T) {
 	if slices.Contains(x86, "qemu-kvm") || slices.Contains(x86, "dnsmasq") {
 		t.Errorf("ubuntu packages name a virtual or conflicting package: %v", x86)
 	}
-	if !slices.Contains(x86, "dnsmasq-base") || !slices.Contains(x86, "guestfs-tools") || !slices.Contains(x86, "guestfish") {
+	if !slices.Contains(x86, "dnsmasq-base") || !slices.Contains(x86, "guestfs-tools") || !slices.Contains(x86, "guestfish") || !slices.Contains(x86, "uidmap") || !slices.Contains(x86, "passt") {
 		t.Errorf("ubuntu packages = %v", x86)
 	}
-	// guestfish is the Debian package name. dnf and pacman have no such
-	// package; those families get virt-copy-out from libguestfs.
+	// guestfish and uidmap are Debian package names. dnf and pacman have no
+	// such packages; those families get virt-copy-out from libguestfs and
+	// newuidmap from the base system. passt is the package name on all three.
 	for _, family := range []struct{ name, version string }{{"fedora", "43"}, {"arch", ""}} {
 		got, err := Packages(family.name, family.version, "x86_64", false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if slices.Contains(got, "guestfish") {
-			t.Errorf("%s packages name guestfish, which that family does not publish: %v", family.name, got)
+		if slices.Contains(got, "guestfish") || slices.Contains(got, "uidmap") {
+			t.Errorf("%s packages name a Debian-only package: %v", family.name, got)
+		}
+		if !slices.Contains(got, "passt") {
+			t.Errorf("%s packages omit passt: %v", family.name, got)
 		}
 	}
 

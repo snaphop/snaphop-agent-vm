@@ -167,6 +167,7 @@ func TestExitCodeFor_MapsErrorsToTheDocumentedCodes(t *testing.T) {
 		{"unknown schema", &state.SchemaError{File: "vm.json", Found: 99, Known: 1}, ExitUsage},
 		{"missing tool", &hostexec.NotFoundError{Tool: "virt-install"}, ExitHostNotReady},
 		{"tool too old", &hostexec.VersionError{Tool: "virsh"}, ExitHostNotReady},
+		{"unreadable boot kernel", &hostexec.UnreadableKernelError{Path: "/boot/vmlinuz-7.0.0-38-generic"}, ExitHostNotReady},
 		{"bridge not ready", &network.BridgeError{Interface: "br0"}, ExitHostNotReady},
 		{"unknown VM", &state.NotFoundError{Kind: "VM", Name: "agent-01"}, ExitNotFound},
 		{"already exists", &state.ExistsError{Kind: "VM", Name: "agent-01"}, ExitConflict},

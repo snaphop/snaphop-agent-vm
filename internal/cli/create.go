@@ -197,6 +197,12 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join)
 	}
 
+	// The cloud-init seed is a virt-make-fs image, so an unreadable kernel
+	// fails the create before a VM directory exists.
+	if err := app.requireReadableBootKernel(ctx); err != nil {
+		return err
+	}
+
 	// virt-make-fs writes the cloud-init seed, so its floor is checked here with
 	// the others rather than discovered once the VM directory exists.
 	tools := []hostexec.Tool{hostexec.VirtInstall, hostexec.Virsh, hostexec.QemuImg, hostexec.VirtMakeFS}

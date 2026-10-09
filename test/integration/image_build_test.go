@@ -88,7 +88,7 @@ func newBuilder(t *testing.T) (*image.Builder, *state.Store) {
 // supported, regardless of whether code for it exists — this is the test that
 // makes that claim true.
 func TestImageBuild_ProducesABootableBaseImage(t *testing.T) {
-	requireTools(t, "podman", "virt-make-fs", "virt-ls", "virt-copy-out", "virt-sysprep")
+	requireTools(t, "podman", "newuidmap", "pasta", "virt-make-fs", "virt-ls", "virt-copy-out", "virt-sysprep")
 
 	for _, name := range strings.Split(*distros, ",") {
 		name = strings.TrimSpace(name)

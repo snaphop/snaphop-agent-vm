@@ -69,6 +69,48 @@ func TestImage_RejectsAnUnknownSubcommand(t *testing.T) {
 	}
 }
 
+func TestImageBuild_RefusesWhenNewuidmapIsMissing(t *testing.T) {
+	t.Parallel()
+	fake := imageHost()
+	fake.Missing["newuidmap"] = true
+
+	code, _, stderr := cliRun(t, fake, t.TempDir(), "image", "build", "ubuntu")
+
+	if code != ExitHostNotReady {
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitHostNotReady, stderr)
+	}
+	if !strings.Contains(stderr, "uidmap") {
+		t.Errorf("stderr does not name the package:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "podman pull") {
+			t.Errorf("pulled without newuidmap: %s", argv)
+		}
+	}
+}
+
+func TestImageBuild_RefusesWhenABootKernelIsUnreadable(t *testing.T) {
+	t.Parallel()
+	fake := imageHost()
+	fake.Respond("find /boot -maxdepth 1 -name vmlinuz-* -print", hostexec.FakeResponse{
+		Stdout: "/boot/vmlinuz-7.0.0-38-generic\n",
+	}).Respond("test -r /boot/vmlinuz-7.0.0-38-generic", hostexec.FakeResponse{ExitCode: 1})
+
+	code, _, stderr := cliRun(t, fake, t.TempDir(), "image", "build", "ubuntu-runner")
+
+	if code != ExitHostNotReady {
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitHostNotReady, stderr)
+	}
+	if !strings.Contains(stderr, "chmod 0644") || !strings.Contains(stderr, "initrd") {
+		t.Errorf("stderr does not say to chmod the kernels and leave the initrd:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "podman ") || strings.HasPrefix(argv, "virt-make-fs ") {
+			t.Errorf("built without a readable kernel: %s", argv)
+		}
+	}
+}
+
 func TestImageBuild_RejectsAnUnsupportedDistro(t *testing.T) {
 	t.Parallel()
 	code, _, stderr := cliRun(t, imageHost(), t.TempDir(), "image", "build", "alpine")

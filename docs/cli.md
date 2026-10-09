@@ -27,7 +27,7 @@ agent-vm [global flags] <command> [subcommand] [arguments] [flags]
 | `--yes` | off | Skip interactive confirmation for destructive operations. |
 | `--dry-run` | off | Print planned invocations without mutations; values that require execution use placeholders. Input validation and read-only checks can still fail. |
 | `--help` | — | Print usage and exit `0`. After a command — `agent-vm create --help` — print that command's invocation and its own flags instead. |
-| `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. |
+| `--version` | — | Print the `agent-vm` version, plus the detected version of every required tool: `virsh` (which reports libvirt's version), `virt-install`, `qemu-img`, `podman`, the libguestfs tools, `ip`, and `ssh`. `newuidmap` and `pasta` are reported as `installed`: they have no version flag, and `newuidmap` maps another process, so the check is that the binary is on `PATH`. |
 
 Human-readable progress and logs go to **stderr**. Command results go to
 **stdout**, so `--output json` can be piped safely.
@@ -185,7 +185,8 @@ warnings and skipped checks do not establish that every prerequisite is met.
 Checks: `/dev/kvm` present and writable; libvirt connection succeeds; user is in
 the `kvm` group, and in the `libvirt` group when the URI is not a `/session` one;
 state directory writable with sufficient free space; state directory reachable by
-the account the hypervisor runs as; libguestfs can boot its appliance;
+the account the hypervisor runs as; libguestfs can boot its appliance; a versioned
+kernel in `/boot` is readable, unless `appliance_kernel` supplies one;
 the configured NAT network is definable; the
 host firewall does not drop the guest's forwarded traffic, nor its DHCP and DNS
 requests to the host; and, when a bridge is
@@ -229,6 +230,20 @@ publishes no configuration. When `appliance_kernel` *is* set, the host kernel
 stops mattering and the check confirms instead that the configured directory
 holds the kernel and module tree supermin will be pointed at. See
 [`docs/host-setup.md`](./host-setup.md#8-hosts-whose-kernel-cannot-boot-the-libguestfs-appliance).
+
+The **libguestfs kernel** check is the other way that appliance build fails
+before QEMU ever starts. `supermin` copies a versioned kernel from `/boot`
+(`vmlinuz-*` directly in that directory). Ubuntu installs those files mode
+`0600`, so the copy fails and `virt-make-fs` reports only that supermin
+exited 1. The check lists them with `find` and asks `test -r` of each. An
+unreadable file fails the report and prints `sudo chmod 0644 /boot/vmlinuz*`.
+Leave the initrd mode `0600`. A kernel package update restores mode `0600`
+on the vmlinuz files, so run `doctor` again after one. No versioned kernel
+in `/boot` is a pass: supermin then looks under `/lib/modules`. When
+`appliance_kernel` is set the check is skipped, because supermin uses that
+kernel. `find` itself failing is a skip. `image build` and `create` make
+the same check before they write a disk, including when the base image is
+already cached, and `--dry-run` does not.
 
 `gh` is checked too, but never fails the report: it is needed by
 `--github-ssh-key` and by `--github-org` on a `-runner` image, so a host
@@ -332,6 +347,7 @@ floors too. An unreadable helper version is reported as a warning.
 | `virt-install` | 4.0 |
 | libguestfs (`virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`) | 1.50 |
 | `podman` | 4.0 |
+| `newuidmap`, `pasta` | any (presence) |
 | `ip` (iproute2), `ssh` | any |
 
 ```bash
@@ -733,7 +749,7 @@ instead of on every first boot, and a VM works the same way offline.
 | JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
 | Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
-| Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `guestfish` on Ubuntu (it provides `virt-copy-out`; Fedora and Arch get that command from `libguestfs`), `dnsmasq`, `podman` |
+| Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `guestfish` on Ubuntu (it provides `virt-copy-out`; Fedora and Arch get that command from `libguestfs`), `dnsmasq`, `podman`, `pasta` (package `passt`). Ubuntu also installs `uidmap`, which provides `newuidmap`; Fedora and Arch already have that command from the base system |
 
 Package names differ per family — Ubuntu takes `docker.io`, Fedora takes
 `moby-engine`, Arch takes `docker` — but the commands above are present on all
@@ -1894,14 +1910,14 @@ table below is the summary.
 
 | Operation | Tools invoked |
 |---|---|
-| `image build` | `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
+| `image build` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a pull, including when the image is already cached), then a `PATH` check for `newuidmap` and `pasta` before a pull (neither is executed; a cached image skips that check), then `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --labels <org>,<family>-latest,<family>-<tag> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |
@@ -1911,7 +1927,7 @@ table below is the summary.
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
 | any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
-| `doctor` | `virsh version`, plus `--version` on every required tool (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file. The firewall checks never run `ufw` and never change a rule |
+| `doctor` | `virsh version`, plus `--version` on every required tool that has one (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), a `PATH` check for `newuidmap` and `pasta` (neither is executed), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped when `appliance_kernel` is set), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file. The firewall checks never run `ufw` and never change a rule |
 | `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, or host confinement |
 
 Because these are the same commands documented in every libvirt guide, anything

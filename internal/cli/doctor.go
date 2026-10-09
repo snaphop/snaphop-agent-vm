@@ -92,6 +92,7 @@ func runDoctor(ctx context.Context, app *App, args []string) error {
 	report.Checks = append(report.Checks, checkTools(ctx, app)...)
 	report.Checks = append(report.Checks, checkOptionalTools(ctx, app)...)
 	report.Checks = append(report.Checks, checkAppliance(ctx, app, cfg))
+	report.Checks = append(report.Checks, checkLibguestfsKernel(ctx, app, cfg))
 
 	libvirt := checkLibvirt(ctx, app, cfg)
 	report.Checks = append(report.Checks, libvirt)
@@ -390,9 +391,12 @@ func checkTools(ctx context.Context, app *App) []check {
 		case err != nil:
 			checks = append(checks, check{Name: tool.Name, Status: statusFail, Detail: err.Error()})
 		default:
-			detail := version.String()
-			if !tool.Minimum.IsZero() {
-				detail += fmt.Sprintf(" (minimum %s)", tool.Minimum)
+			detail := "installed"
+			if tool.ReportsVersion() {
+				detail = version.String()
+				if !tool.Minimum.IsZero() {
+					detail += fmt.Sprintf(" (minimum %s)", tool.Minimum)
+				}
 			}
 			checks = append(checks, check{Name: tool.Name, Status: statusPass, Detail: detail})
 		}
@@ -725,6 +729,64 @@ func checkAppliance(ctx context.Context, app *App, cfg *config.Config) check {
 		}
 	}
 	return check{Name: name, Status: statusPass, Detail: "the host kernel can boot the appliance"}
+}
+
+// checkLibguestfsKernel reports whether supermin can copy a kernel out of
+// /boot. Ubuntu installs /boot/vmlinuz-* mode 0600, and the copy then fails
+// inside virt-make-fs with nothing but "supermin exited 1". A configured
+// appliance kernel is the one supermin uses, so /boot is not the question.
+func checkLibguestfsKernel(ctx context.Context, app *App, cfg *config.Config) check {
+	const name = "libguestfs kernel"
+	if cfg.ApplianceKernel != "" {
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "appliance_kernel supplies the kernel libguestfs builds from",
+		}
+	}
+
+	n, err := hostexec.CheckBootKernels(ctx, app.runner)
+	if err != nil {
+		var unread *hostexec.UnreadableKernelError
+		if errors.As(err, &unread) {
+			return check{
+				Name: name, Status: statusFail,
+				Detail: unread.Path + " is not readable. supermin copies a kernel from /boot to build the libguestfs appliance, and Ubuntu installs that file mode 0600.",
+				Remedy: unread.Remedy(),
+			}
+		}
+		// find failing is not the same fact as an unreadable kernel. Say so
+		// and let the later libguestfs error speak if a build is attempted.
+		return check{
+			Name: name, Status: statusSkip,
+			Detail: "cannot list the kernels in /boot: " + err.Error(),
+		}
+	}
+	if n == 0 {
+		return check{Name: name, Status: statusPass, Detail: "no versioned vmlinuz in /boot"}
+	}
+	return check{Name: name, Status: statusPass, Detail: readableKernelsDetail(n)}
+}
+
+func readableKernelsDetail(n int) string {
+	if n == 1 {
+		return "1 kernel in /boot is readable"
+	}
+	return fmt.Sprintf("%d kernels in /boot are readable", n)
+}
+
+// requireReadableBootKernel refuses a build or create whose virt-make-fs step
+// would copy an unreadable kernel. It runs on the hypervisor, through the
+// runner, and it runs before any disk is written.
+func (a *App) requireReadableBootKernel(ctx context.Context) error {
+	cfg, err := a.Config()
+	if err != nil {
+		return err
+	}
+	if cfg.ApplianceKernel != "" {
+		return nil
+	}
+	_, err = hostexec.CheckBootKernels(ctx, a.runner)
+	return err
 }
 
 // checkApplianceKernelDir confirms the configured directory holds what

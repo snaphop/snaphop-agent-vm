@@ -55,6 +55,13 @@ func Packages(family, version, arch string, github bool) ([]string, error) {
 			"guestfish",
 			"guestfs-tools",
 			"podman",
+			// uidmap ships newuidmap. passt ships pasta. podman only recommends
+			// both, and --no-install-recommends would leave a rootless pull
+			// failing with "newuidmap: executable file not found". Fedora and
+			// Arch install newuidmap with the base system. passt is named on
+			// every family: it is podman's default rootless network command.
+			"uidmap",
+			"passt",
 			"iproute2",
 			"openssh-client",
 			"acl",
@@ -72,6 +79,9 @@ func Packages(family, version, arch string, github bool) ([]string, error) {
 			"dnsmasq",
 			"guestfs-tools",
 			"podman",
+			// passt ships pasta, podman's default rootless network command.
+			// newuidmap is already in shadow-utils, which the base system has.
+			"passt",
 			"iproute",
 			"openssh-clients",
 			"acl",
@@ -86,6 +96,9 @@ func Packages(family, version, arch string, github bool) ([]string, error) {
 			"dnsmasq",
 			"guestfs-tools",
 			"podman",
+			// passt ships pasta, podman's default rootless network command.
+			// newuidmap is already in shadow, which the base system has.
+			"passt",
 			"iproute2",
 			"openssh",
 			"acl",

@@ -656,7 +656,10 @@ func (a *App) printVersions(ctx context.Context) error {
 
 	for _, tool := range hostexec.RequiredTools() {
 		version, err := a.versions.Get(ctx, tool)
-		entry := toolVersion{Tool: tool.Name, Version: version.String()}
+		entry := toolVersion{Tool: tool.Name, Version: "installed"}
+		if tool.ReportsVersion() {
+			entry.Version = version.String()
+		}
 		if err != nil {
 			entry.Version = ""
 			entry.Error = err.Error()

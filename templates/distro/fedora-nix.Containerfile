@@ -679,6 +679,10 @@ RUN printf '%s\n' \
 # a guest can run agent-vm, or virt-install and virsh directly. libvirt starts
 # its own dnsmasq per network; the package is not enabled as a system-wide
 # resolver here and must not be, or it would fight with those instances.
+#
+# passt ships pasta, podman's default rootless network command. newuidmap is
+# already in shadow-utils. Naming passt keeps a nested image build working
+# when weak dependencies are off.
 RUN dnf -y install \
       qemu-kvm \
       qemu-img \
@@ -688,6 +692,7 @@ RUN dnf -y install \
       dnsmasq \
       guestfs-tools \
       podman \
+      passt \
  && dnf clean all
 
 # Nested virtualization, the guest half of it.

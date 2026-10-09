@@ -664,6 +664,10 @@ RUN printf '%s\n' \
 # a guest can run agent-vm, or virt-install and virsh directly. libvirt starts
 # its own dnsmasq per network; the package is not enabled as a system-wide
 # resolver here and must not be, or it would fight with those instances.
+#
+# passt ships pasta, podman's default rootless network command. newuidmap is
+# already in shadow. Naming passt keeps a nested image build working when
+# optional dependencies are off.
 RUN pacman -Syu --noconfirm --needed \
       qemu-base \
       qemu-img \
@@ -673,6 +677,7 @@ RUN pacman -Syu --noconfirm --needed \
       dnsmasq \
       guestfs-tools \
       podman \
+      passt \
  && pacman -Scc --noconfirm
 
 # Arch's own python scripts, pinned to Arch's python.

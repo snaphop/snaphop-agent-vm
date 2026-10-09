@@ -107,6 +107,7 @@ func exitCodeFor(err error) int {
 		record     *state.RecordError
 		missing    *hostexec.NotFoundError
 		tooOld     *hostexec.VersionError
+		unreadable *hostexec.UnreadableKernelError
 		timeout    *hostexec.TimeoutError
 		waitedOut  *domain.TimeoutError
 		bridge     *network.BridgeError
@@ -115,7 +116,7 @@ func exitCodeFor(err error) int {
 	switch {
 	case errors.As(err, &validation), errors.As(err, &schema):
 		return ExitUsage
-	case errors.As(err, &missing), errors.As(err, &tooOld), errors.As(err, &bridge):
+	case errors.As(err, &missing), errors.As(err, &tooOld), errors.As(err, &unreadable), errors.As(err, &bridge):
 		return ExitHostNotReady
 	case errors.As(err, &notFound):
 		return ExitNotFound
