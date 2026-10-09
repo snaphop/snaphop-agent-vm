@@ -10,6 +10,11 @@ Extends [ADR-0013](./0013-self-hosted-github-actions-runner-variant.md). The
 runner variant stays the slim recipe plus one shared section. That section
 also installs Docker.
 
+The account name and the no-sudo rule below are changed by
+[ADR-0017](./0017-run-the-github-actions-runner-as-github-runner.md). The
+job account is `github-runner`. It is in the `docker` group and it has
+passwordless sudo.
+
 ## Context
 
 A GitHub Actions job on a self-hosted runner commonly runs `docker`. ADR-0013

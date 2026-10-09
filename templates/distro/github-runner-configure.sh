@@ -3,8 +3,10 @@
 #
 # The image build installs the runner and stops there. The value that
 # registers it is supplied here, by the operator, after boot (ADR-0013).
-# config.sh refuses to run as root, so registration runs as the runner
-# account; svc.sh is GitHub's own service installer and runs as root.
+# config.sh refuses to run as root, so registration runs as github-runner.
+# svc.sh is GitHub's own service installer and runs as root. The service
+# user has to be passed explicitly: omitted, svc.sh falls back to SUDO_USER,
+# which on these guests is agent (ADR-0013, ADR-0017).
 set -eu
 
 # Tests point this at a fake tree. It is not a configuration setting: sudo
@@ -30,9 +32,9 @@ configure options:
   --replace           Replace a runner already registered under this name.
                       A local configuration is cleared first, without a token.
 
-The runner account has no sudo. Jobs run as that account. --token-file may
-be - to read the value from stdin, and a file must be readable only by its
-owner. Destroying the VM does not unregister the runner.
+Jobs run as github-runner. That account may sudo without a prompt.
+--token-file may be - to read the value from stdin, and a file must be
+readable only by its owner. Destroying the VM does not unregister the runner.
 EOF
 }
 
@@ -113,9 +115,9 @@ require_runner() {
 
 run_as_runner() {
     if command -v runuser >/dev/null 2>&1; then
-        runuser -u runner -- "$@"
+        runuser -u github-runner -- "$@"
     else
-        sudo --user runner -- "$@"
+        sudo --user github-runner -- "$@"
     fi
 }
 
@@ -317,5 +319,5 @@ run_as_runner "$prefix/config.sh" "$@"
 if [ ! -x "$prefix/svc.sh" ]; then
     die "config.sh did not write svc.sh"
 fi
-run_svc install runner
+run_svc install github-runner
 run_svc start

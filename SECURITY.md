@@ -215,10 +215,13 @@ section named here.
   is the short-lived registration token. A create that names no organization
   does not fetch a token; the operator registers that guest by running
   `agent-vm-github-runner configure` inside it. `config.sh` stores the runner
-  credential on the guest. The `runner` account is not in sudoers and its
-  shell is `nologin`. It is a member of the `docker` group so a job can use
-  the daemon (ADR-0016). A job that can open the Docker socket can start a
-  privileged container and act as root inside the guest. Destroying a VM
+  credential on the guest. Jobs run as the `github-runner` account. That
+  account's shell is `nologin`, so it is not an SSH login. It has
+  passwordless sudo (`github-runner ALL=(ALL) NOPASSWD:ALL`), so a job can
+  act as root inside the guest (ADR-0017). It is a member of the `docker`
+  group so a job can use the daemon (ADR-0016). A job that can open the
+  Docker socket can start a privileged container and act as root inside the
+  guest. Destroying a VM
   whose record names a runner deletes that runner at GitHub before the domain
   is undefined. A runner registered by hand, which has no record, stays at
   GitHub; unregister it with `agent-vm-github-runner remove` or in the GitHub

@@ -46,7 +46,8 @@ type Distro struct {
 	// podman has no way to skip a block.
 	NixContainerfile string
 	// RunnerContainerfile is the slim recipe plus the GitHub Actions
-	// self-hosted runner (ADR-0013) and Docker (ADR-0016). The runner section
+	// self-hosted runner (ADR-0013) and Docker (ADR-0016). Jobs run as
+	// github-runner with passwordless sudo (ADR-0017). The runner section
 	// is the same on every family; the copy of the slim recipe is not, so
 	// each family has its own file.
 	RunnerContainerfile string

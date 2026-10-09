@@ -34,7 +34,8 @@ Requirements that shape the design:
 The full base images include guest-side agent tooling; slim images omit it, and
 nix images install it from one shared nix expression rather than from the
 family's package manager (ADR-0012). Runner images are that slim image plus an
-unconfigured GitHub Actions runner (ADR-0013) and Docker (ADR-0016). When an
+unconfigured GitHub Actions runner (ADR-0013) and Docker (ADR-0016). Jobs
+run as `github-runner`, which has passwordless sudo (ADR-0017). When an
 organization is named, `create` registers that guest after it boots
 (ADR-0015). cloud-init can customize any variant. Deliberately outside
 this repository:
@@ -221,7 +222,9 @@ background worker. Long waits include image builds, the guest boot wait during `
   virtualization stack. `<family>-runner.Containerfile` is that slim recipe
   plus the GitHub Actions self-hosted runner, installed unconfigured under
   `/opt/actions-runner` (ADR-0013), and Docker from the distro's packages,
-  with the `runner` account in the `docker` group (ADR-0016). `create`
+  with the `github-runner` account in the `docker` group (ADR-0016) and
+  with passwordless sudo (ADR-0017). Ubuntu runner images also install
+  `build-essential`. `create`
   registers that guest after boot when an organization is set (ADR-0015).
   `<family>-nix.Containerfile` keeps all of
   it but takes the tooling from the shared `templates/distro/agent-tools.nix`
