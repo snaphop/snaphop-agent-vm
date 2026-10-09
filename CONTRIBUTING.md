@@ -16,8 +16,10 @@ symlinks these workflows; edit only the canonical files under `.agents/skills/`.
 - `golangci-lint`
 - Membership in the `kvm` and `libvirt` groups
 
-Host preparation is documented in [`docs/host-setup.md`](./docs/host-setup.md);
-`agent-vm doctor` verifies it. See [`AGENTS.md`](./AGENTS.md) for complete setup
+On Ubuntu 24.04 or 26.04, Fedora 43 or 44, or Arch Linux, `agent-vm setup`
+installs the host packages and starts libvirt. Host preparation beyond that
+is documented in [`docs/host-setup.md`](./docs/host-setup.md); `agent-vm doctor`
+verifies it. See [`AGENTS.md`](./AGENTS.md) for complete setup
 and command reference, and [`README.md`](./README.md) for the project overview.
 
 You can build, unit-test, and lint without KVM — tools are faked at the process

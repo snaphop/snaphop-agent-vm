@@ -18,6 +18,14 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm setup` prepares a host to run agent-vm. It installs QEMU, libvirt,
+  podman, and libguestfs, starts libvirt, and adds you to the `kvm` and
+  `libvirt` groups. On a system connection it also lets libvirt's QEMU account
+  search the state directory, without granting read. It accepts the same
+  releases as the guest images: Ubuntu 24.04 and 26.04, Fedora 43 and 44, and
+  Arch Linux. `--github` also installs the GitHub CLI. Firewall rules,
+  bridges, and SELinux or AppArmor are left alone. A new login is needed
+  before the new groups apply. Run `agent-vm doctor` afterwards.
 - A runner image includes Docker. The daemon starts at boot, and a job
   running as `github-runner` can use `docker`, `docker compose`, and
   `docker buildx`. The packages are the distro's own: Ubuntu `docker.io`,

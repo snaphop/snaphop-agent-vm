@@ -34,6 +34,12 @@ holds the output of `virsh --version`.
 | `virsh-net-dumpxml.xml` | `virsh -c qemu:///system net-dumpxml agent-vm-nat` | libvirt 12.6.0 (Arch Linux) | 2026-08-31 |
 | `qemu-img-info-json-overlay.json` | `qemu-img info --output=json` on a fresh overlay | QEMU 11.1.0 (Arch Linux) | 2026-08-17 |
 | `posix-acl-access-search-grant.bin` | `getxattr(dir, "system.posix_acl_access")` after `setfacl -m u:libvirt-qemu:x` | Linux 7.1.8, Btrfs, acl 2.3.2 (Arch Linux) | 2026-08-17 |
+| `systemctl-show-LoadState-loaded.txt` | `systemctl show -p LoadState --value systemd-journald.service` | systemd 262 (262-1-arch) | 2026-10-08 |
+| `systemctl-show-LoadState-not-found.txt` | `systemctl show -p LoadState --value nosuch-agent-vm.service` | systemd 262 (262-1-arch) | 2026-10-08 |
+| `os-release-ubuntu-26.04.txt` | `podman run --rm docker.io/library/ubuntu:26.04 cat /etc/os-release` | podman 6.1.3, ubuntu:26.04 | 2026-10-08 |
+| `os-release-ubuntu-24.04.txt` | `podman run --rm docker.io/library/ubuntu:24.04 cat /etc/os-release` | podman 6.1.3, ubuntu:24.04 | 2026-10-08 |
+| `os-release-arch.txt` | `podman run --rm docker.io/library/archlinux:base cat /etc/os-release` | podman 6.1.3, archlinux:base | 2026-10-08 |
+| `os-release-omarchy.txt` | `cat /etc/os-release` | Omarchy 4.0.4 (`ID=omarchy`, `ID_LIKE=arch`) | 2026-10-08 |
 
 The bridge listing is captured with `-d` because that is the only way `ip`
 reports a bridge's `stp_state` and `forward_delay`, and those decide whether

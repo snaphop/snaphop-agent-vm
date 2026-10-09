@@ -37,7 +37,8 @@ profile, adding a supported distro
 family, adding a base image variant or changing where guest tooling comes from
 (ADR-0012, ADR-0013, ADR-0016), the Actions runner account (ADR-0017),
 joining a guest to an overlay network (ADR-0014),
-registering a guest as a GitHub Actions runner (ADR-0015), and
+registering a guest as a GitHub Actions runner (ADR-0015),
+preparing a host with `agent-vm setup` (ADR-0018), and
 implementing in our own code something a standard host tool
 already does (ADR-0009).
 

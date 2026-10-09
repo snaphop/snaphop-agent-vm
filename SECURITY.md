@@ -246,7 +246,12 @@ section named here.
 
 - Every filesystem path the tool writes to or deletes MUST be resolved
   (symlinks included) and verified to be inside the configured state directory
-  before the operation. A path escaping it is a fatal error, never a warning.
+  before the operation, except the host preparation `agent-vm setup` performs
+  when the operator asks for it (ADR-0018). That command installs packages,
+  enables the libvirt service, adds the operator to groups, and may grant the
+  QEMU account search permission, and only search permission, on a directory
+  above the state directory. It MUST NOT grant read or write. A path escaping
+  the state directory from any other command is a fatal error, never a warning.
 - The tool MUST NOT stop, undefine, or delete a libvirt domain, network,
   volume, or storage pool that it did not create and does not have a record of
   in state.

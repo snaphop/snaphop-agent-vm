@@ -66,6 +66,35 @@ func TestParseRef_RejectsTagsThatWouldEscapeTheStateDirectory(t *testing.T) {
 	}
 }
 
+func TestSupportedTags_AreTheMaintainedReleases(t *testing.T) {
+	t.Parallel()
+	// Host setup accepts these same releases (ADR-0018). The default tag is
+	// one of them. Arch tags are container images of the rolling release.
+	want := map[string]string{
+		"ubuntu": "26.04,24.04",
+		"fedora": "44,43",
+		"arch":   "base-20260927.0.600689,base",
+	}
+	for _, name := range Names() {
+		d, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("Names() returned %q, which Lookup does not know", name)
+		}
+		if strings.Join(d.SupportedTags, ",") != want[name] {
+			t.Errorf("%s supported tags = %v, want %s", name, d.SupportedTags, want[name])
+		}
+		found := false
+		for _, tag := range d.SupportedTags {
+			if tag == d.DefaultTag {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s default tag %s is not a supported tag", name, d.DefaultTag)
+		}
+	}
+}
+
 func TestDefault_IsUbuntu(t *testing.T) {
 	t.Parallel()
 	if Default.Name != "ubuntu" {

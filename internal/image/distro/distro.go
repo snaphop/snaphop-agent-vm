@@ -22,6 +22,13 @@ type Distro struct {
 	Repo string
 	// DefaultTag is the tag used when the operator names no tag.
 	DefaultTag string
+	// SupportedTags are the releases this family is maintained against. The
+	// default tag is one of them. Host setup accepts an Ubuntu or Fedora host
+	// whose os-release VERSION_ID is one of these (ADR-0018). Arch tags name
+	// container images of the rolling release, not a host VERSION_ID, so an
+	// Arch host is identified by ID=arch rather than by one of these tags.
+	// Adding a tag here supports that release for a guest and for a host.
+	SupportedTags []string
 	// KernelPackage and Initramfs document what the family's Containerfile
 	// installs, so `image inspect` and docs can state it without reading the
 	// build recipe.
@@ -129,6 +136,7 @@ var (
 		Name:                "ubuntu",
 		Repo:                "docker.io/library/ubuntu",
 		DefaultTag:          "26.04",
+		SupportedTags:       []string{"26.04", "24.04"},
 		KernelPackage:       "linux-image-virtual",
 		Initramfs:           "initramfs-tools",
 		Containerfile:       "ubuntu.Containerfile",
@@ -157,6 +165,7 @@ var (
 		Name:                "fedora",
 		Repo:                "registry.fedoraproject.org/fedora",
 		DefaultTag:          "44",
+		SupportedTags:       []string{"44", "43"},
 		KernelPackage:       "kernel-core",
 		Initramfs:           "dracut",
 		Containerfile:       "fedora.Containerfile",
@@ -174,6 +183,7 @@ var (
 		Name:                "arch",
 		Repo:                "docker.io/library/archlinux",
 		DefaultTag:          "base-20260927.0.600689",
+		SupportedTags:       []string{"base-20260927.0.600689", "base"},
 		KernelPackage:       "linux",
 		Initramfs:           "mkinitcpio",
 		Containerfile:       "arch.Containerfile",

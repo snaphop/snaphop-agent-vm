@@ -93,6 +93,7 @@ type command struct {
 func commands() map[string]*command {
 	list := []*command{
 		doctorCommand(),
+		setupCommand(),
 		imageCommand(),
 		createCommand(),
 		listCommand(),

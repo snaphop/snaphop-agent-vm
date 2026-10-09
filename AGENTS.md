@@ -64,7 +64,7 @@ describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
 `Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
-`internal/tailscale`, `internal/progress`, and the `doctor`, `image`, `create`, `list`, `info`,
+`internal/tailscale`, `internal/progress`, `internal/hostsetup`, and the `doctor`, `setup`, `image`, `create`, `list`, `info`,
 `start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `licenses`,
 `completion`, `--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
 documented contract. What remains is hardening: the integration
@@ -126,6 +126,7 @@ Ordinary focused work continues to follow this file directly.
 │   ├── state/              # state directory, vm.json, locking
 │   ├── github/             # gh on the client: SSH keys and Actions runner registration
 │   ├── tailscale/          # guest Tailscale join; the auth key travels on stdin
+│   ├── hostsetup/          # prepare a supported host: packages, libvirt, groups
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── notices/            # LICENSE and NOTICE, embedded in the release binary
 │   ├── golden/             # golden-file comparison helper, used only by tests
@@ -181,7 +182,7 @@ Where new code belongs:
   `templates/distro/agent-tools.nix` instead of the family's package manager
   (ADR-0012).
 - A new tool invocation: the package that owns the concern (`internal/image`,
-  `internal/domain`, `internal/network`), always executed through
+  `internal/domain`, `internal/network`, `internal/hostsetup`), always executed through
   `internal/hostexec` and behind an interface so tests can substitute a fake at the
   process boundary. Nothing else may call `os/exec`.
 - A parser for a tool's output: next to its caller, using the tool's
@@ -230,6 +231,12 @@ cp .env.example .env          # optional; source it into your shell to override
 go build ./...
 go run ./cmd/agent-vm doctor
 ```
+
+`agent-vm setup` installs the host packages, starts libvirt, adds the operator
+to the required groups, and grants the QEMU account search access to the state
+directory (ADR-0018). It accepts the same releases as the guest images: Ubuntu
+24.04 and 26.04, Fedora 43 and 44, and Arch Linux. It does not change firewall
+rules, bridges, or host confinement.
 
 `doctor` is the setup verification command: it checks KVM availability, the
 libvirt connection, group membership, every required tool **and its minimum
@@ -342,6 +349,9 @@ Major modules and responsibilities:
   operator's existing login. The operator's `gh` credential never enters a
   guest. The registration token is not written into the image, the seed,
   `vm.json`, a log, or an argument vector.
+- `internal/hostsetup` — prepares a supported host to run agent-vm: the
+  family's package manager, `systemctl`, `usermod`, and a search-only ACL for
+  the QEMU account (ADR-0018). `internal/cli` decides when to run it.
 - `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
   when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth
   key is read from that file and passed on the guest's stdin. It is not a
@@ -427,7 +437,8 @@ adding a supported distro family, adding a base image variant or changing where
 guest tooling comes from (ADR-0012, ADR-0013, ADR-0016), the Actions runner
 account (ADR-0017), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
-(ADR-0015), or **implementing something a standard host
+(ADR-0015), preparing a host with `agent-vm setup` (ADR-0018), or
+**implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
 Document observable or operational effects in `CHANGELOG.md` under
