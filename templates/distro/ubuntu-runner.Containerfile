@@ -1,15 +1,17 @@
 # Ubuntu runner base image for agent-vm.
 #
-# The slim recipe plus the GitHub Actions self-hosted runner (ADR-0013).
+# The slim recipe plus the GitHub Actions self-hosted runner (ADR-0013)
+# and Docker (ADR-0016).
 # From ARG BASE_IMAGE through the end of the slim recipe, this file is that
-# recipe. The section after it installs the runner, unconfigured, and the
-# command that registers a guest after boot.
+# recipe. The section after it installs the runner, unconfigured, the
+# command that registers a guest after boot, and Docker.
 # TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner requires the slim
 # body to stay byte-identical and the runner section to stay the same on
 # every family.
 #
 # The runner is a system account named runner, with no sudo and a nologin
-# shell. A workflow job runs as that account. The agent account is unchanged.
+# shell. A workflow job runs as that account, and that account is in the
+# docker group so the job can use the daemon. The agent account is unchanged.
 # This recipe contains no GitHub URL and no registration value: a base image
 # is shared by every VM built on it (SECURITY.md).
 #
@@ -350,12 +352,17 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 
 # agent-vm-runner-section
 #
-# GitHub Actions self-hosted runner (ADR-0013). The blocks above are the slim
-# recipe. This section installs the runner and the command that registers it
-# after boot. Nothing in this section is a credential.
+# GitHub Actions self-hosted runner (ADR-0013) and Docker (ADR-0016). The
+# blocks above are the slim recipe. This section installs the runner,
+# unconfigured, the command that registers it after boot, and Docker from
+# the distro's own packages. Nothing in this section is a credential.
+# Docker is installed after the runner account exists, because the account
+# has to join the docker group and the group arrives with the packages.
 COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh
 COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner
-RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner \
+COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh
+RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh \
  && ln -sf /usr/local/sbin/agent-vm-github-runner /usr/sbin/agent-vm-github-runner \
  && /tmp/agent-vm-github-runner-install.sh \
- && rm /tmp/agent-vm-github-runner-install.sh
+ && /tmp/agent-vm-runner-docker.sh \
+ && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh

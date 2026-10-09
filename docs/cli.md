@@ -428,16 +428,31 @@ skipped.
 Every family also has a runner variant, named by appending `-runner`:
 `agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
 ubuntu-runner`. It is that family's slim image plus the GitHub Actions
-self-hosted runner (ADR-0013). It boots the same way — same kernel command
-line, same cloud-init contract, same SSH and clock guarantees — and carries
-the same common Linux tooling, and none of the agent tooling a full image
-adds.
+self-hosted runner (ADR-0013) and Docker (ADR-0016). It boots the same way —
+same kernel command line, same cloud-init contract, same SSH and clock
+guarantees — and carries the same common Linux tooling. It does not carry
+the coding agents, browser, or nested virtualization stack a full image adds.
 
 The runner is installed under `/opt/actions-runner`, owned by a system
 account named `runner`. That account has no sudo and its shell is `nologin`.
-Workflow jobs run as `runner`. The `agent` account is unchanged and still has
+Workflow jobs run as `runner`. The account is in the `docker` group, so a
+job can use the daemon. A job that can talk to the Docker socket can start
+a privileged container. The `agent` account is unchanged and still has
 passwordless sudo, which is how the operator registers the guest and manages
 the service.
+
+Docker comes from the distro's own packages, the same ones a full image
+uses. Ubuntu installs `docker.io`, `docker-compose-v2`, and `docker-buildx`.
+Fedora installs `moby-engine`, `containerd`, `docker-compose`, and
+`docker-buildx`. Arch installs `docker`, `docker-compose`, and
+`docker-buildx` with `pacman -S --needed` against the databases the slim
+layers already synced, and does not upgrade the rest of the system.
+`docker.service` and `containerd.service` are enabled, so the daemon is
+running when a job starts. A job can run `docker`, `docker compose`, and
+`docker buildx`. `docker build --platform` for another architecture is not
+set up on a runner image; that setup stays on full and nix images. An image
+already cached gains Docker when it is rebuilt with `agent-vm image build
+<family>-runner --force`.
 
 A base image is shared by every VM built on it, so the image is not
 registered with GitHub. It contains no repository URL and no registration
@@ -499,12 +514,13 @@ A runner image is its own base image: its own cache directory
 `image list`, `image inspect`, `image rm`, and `vm.json`, so it can be cached
 beside `ubuntu` and `ubuntu-slim` and is built and removed on its own. It is
 larger than the slim image it starts from, because the Actions runner ships
-its own Node.js and .NET runtime. On Arch the image build installs `icu`,
-`openssl`, `krb5`, `zlib`, and `lttng-ust` with `pacman -S --needed`, and only
-those packages. The slim recipe has already built the initramfs this image
-direct-boots, and upgrading the rest of the system in this step could replace
-the kernel without rebuilding it. A missing package database fails the build.
-GitHub's dependency script has no Arch path.
+its own Node.js and .NET runtime and because Docker is installed. On Arch the
+image build installs `icu`, `openssl`, `krb5`, `zlib`, and `lttng-ust`, and
+the Docker packages, with `pacman -S --needed`, and only those packages. The
+slim recipe has already built the initramfs this image direct-boots, and
+upgrading the rest of the system in this step could replace the kernel
+without rebuilding it. A missing package database fails the build. GitHub's
+dependency script has no Arch path.
 
 #### Nix images
 
@@ -609,9 +625,10 @@ changes what every script that SSHes into these VMs can assume.
 The table and installation details below describe **full images**. Slim
 images keep the common Linux packages but omit the agent and service tooling.
 Runner images are that slim set plus the GitHub Actions self-hosted runner
-described above. Nix images use the different sources and interfaces described
-above. Slim and runner images include `tmux` but do not install the custom
-session menu, tmux configuration, or per-account setup service.
+and Docker described above. Nix images use the different sources and
+interfaces described above. Slim and runner images include `tmux` but do not
+install the custom session menu, tmux configuration, or per-account setup
+service.
 
 Beyond the packages that make a container image boot as a VM, a full image
 carries the tools an agent working inside the guest expects to find already

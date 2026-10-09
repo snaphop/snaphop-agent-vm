@@ -2009,8 +2009,11 @@ func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
 		for _, want := range []string{
 			"COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh",
 			"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner",
+			"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh",
 			"/usr/sbin/agent-vm-github-runner",
 			"/tmp/agent-vm-github-runner-install.sh",
+			// The account has to exist before it can join the docker group.
+			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-docker.sh",
 		} {
 			if !strings.Contains(rest, want) {
 				t.Errorf("%s runner section does not contain %q", d.RunnerContainerfile, want)
@@ -2046,13 +2049,15 @@ func TestRunnerContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
 }
 
 // TestRunnerContainerfiles_LeaveOutTheAgentTooling keeps the variant on the
-// slim promise. The two runner scripts are the only files it copies in.
+// slim promise for everything except Docker, which the shared section
+// installs (ADR-0016). The runner scripts are the only files it copies in.
 func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 	t.Parallel()
-	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "docker", "libvirt", "codex", "herdr", "npm"}
+	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "libvirt", "codex", "herdr", "npm"}
 	allowedCopy := map[string]bool{
 		"COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh":           true,
 		"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner": true,
+		"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh":                   true,
 	}
 
 	for runnerName, pair := range variantRecipes(t, distro.Runner) {

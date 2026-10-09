@@ -46,9 +46,9 @@ type Distro struct {
 	// podman has no way to skip a block.
 	NixContainerfile string
 	// RunnerContainerfile is the slim recipe plus the GitHub Actions
-	// self-hosted runner (ADR-0013). The runner section is the same on every
-	// family; the copy of the slim recipe is not, so each family has its own
-	// file.
+	// self-hosted runner (ADR-0013) and Docker (ADR-0016). The runner section
+	// is the same on every family; the copy of the slim recipe is not, so
+	// each family has its own file.
 	RunnerContainerfile string
 
 	// PackageUpdate is what `agent-vm update` runs inside a guest of this
