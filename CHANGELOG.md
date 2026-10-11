@@ -69,6 +69,18 @@ migration or rebuild step a user has to take.
   `ubuntu-26.04`). A workflow can require any one of them. GitHub still
   adds its own `self-hosted`, operating system, and architecture labels.
 
+### Changed
+
+- Full base images install the current Eclipse Temurin JDK LTS. The build
+  asks mise which major `java@lts` names and installs `java@temurin-<major>`
+  (Temurin 25 with mise 2026.10.5). `java@temurin` was the newest Temurin
+  build of any major, including a six-month feature release. `agent-vm
+  update` stays on that LTS line and takes its newer builds. An image
+  already cached keeps the JDK it was built with until `agent-vm image
+  build <distro> --force`. Nix images still take `temurin-bin` from the
+  pinned nixpkgs. On `nixos-25.05` that is Temurin 21, the newest LTS that
+  release publishes.
+
 ### Fixed
 
 - Rootless `podman` can pull and build after `agent-vm setup` on Ubuntu.

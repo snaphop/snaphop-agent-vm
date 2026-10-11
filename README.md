@@ -164,7 +164,7 @@ A base image is not a bare distro: it carries the tools an agent expects to
 find already installed, so `create` stays fast and a guest works offline.
 Beyond what makes a container image boot as a VM (kernel, `systemd`,
 `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every full image ships
-`git`, a C toolchain, Python, Node.js, Go, Rust, a JDK with Maven (via mise),
+`git`, a C toolchain, Python, Node.js, Go, Rust, the current Eclipse Temurin JDK LTS with Maven (via mise),
 Docker, `gh` and `tea`, `wrangler` and `cf`, Playwright with a headless
 Chromium, `tmux` with a session menu at login, the
 [Herdr](https://herdr.dev) terminal workspace, and six coding agents —

@@ -907,11 +907,20 @@ func TestContainerfiles_InstallTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, "MISE_DATA_DIR=/usr/local/lib/mise") {
 			t.Errorf("%s does not install the mise toolchain into the shared store; a per-account copy costs every first boot about nine seconds and 1.7 GiB of overlay writes", d.Containerfile)
 		}
-		// java@temurin, not java@latest: mise names a distribution by prefix,
-		// and an unprefixed version gets an Oracle build of OpenJDK instead of
-		// the Temurin one docs/cli.md promises.
-		if !strings.Contains(recipe, "mise use --global --yes java@temurin maven@latest") {
-			t.Errorf("%s does not install a Temurin JDK and Maven with mise; a guest would come up with `mise` and no Java, or with the wrong JDK", d.Containerfile)
+		// The current Eclipse Temurin LTS, not the newest Temurin of any major.
+		// java@temurin is a six-month feature release once one exists.
+		// java@lts names the major; the install prefixes temurin so the
+		// vendor does not follow mise's shorthand default. The recorded
+		// request stays the temurin-<major> prefix, so a later upgrade
+		// takes newer builds of that LTS.
+		if !strings.Contains(recipe, "mise latest java@lts") {
+			t.Errorf("%s does not ask mise which major the current LTS is; the JDK would be pinned to a major or would follow every Temurin release", d.Containerfile)
+		}
+		if !strings.Contains(recipe, `mise use --global --yes "java@temurin-${major}" maven@latest`) {
+			t.Errorf("%s does not install the Temurin build of that LTS major with mise; a guest would come up with `mise` and no Java, or with a feature release", d.Containerfile)
+		}
+		if strings.Contains(recipe, "mise use --global --yes java@temurin maven@latest") {
+			t.Errorf("%s still installs java@temurin, which is the newest Temurin of any major, not the current LTS", d.Containerfile)
 		}
 		// Every account reaches the store through a symlink at the path mise
 		// looks in by default. /etc/skel is what useradd copies into a new
@@ -1356,9 +1365,14 @@ func TestContainerfiles_SmokeTestTheDevTooling(t *testing.T) {
 		if !strings.Contains(recipe, `bash -lc 'command -v java'`) {
 			t.Errorf("%s does not check that java resolves in a login shell; the profile script could be missing and the shim check would still pass", d.Containerfile)
 		}
-		for _, check := range []string{`bash -lc 'java -version'`, `bash -lc 'mvn -version'`} {
+		for _, check := range []string{`bash -lc 'java -version'`, `bash -lc 'mvn -version'`, `bash -lc 'javac -version'`} {
 			if !strings.Contains(recipe, check) {
 				t.Errorf("%s does not run %s at build time; a JDK or Maven that did not install would only surface inside a VM", d.Containerfile, check)
+			}
+		}
+		for _, check := range []string{"java is not Eclipse Temurin:", "java is not an LTS release:"} {
+			if !strings.Contains(recipe, check) {
+				t.Errorf("%s does not fail the build when %s; a feature release or another vendor would ship", d.Containerfile, check)
 			}
 		}
 		for _, check := range []string{
@@ -1809,6 +1823,8 @@ func TestNixContainerfiles_InstallTheToolingFromNix(t *testing.T) {
 		{"COPY nix.sh /etc/profile.d/agent-vm-nix.sh", "a login shell would not find the tools"},
 		{"PATH=/nix/var/nix/profiles/default/bin:", "`ssh <vm> go build`, which reads no profile, would not find the tools"},
 		{"-A browsers", "Playwright would have no browser and `chromium` would not run"},
+		{"java is not Eclipse Temurin:", "a nix guest could ship a JDK that is not Temurin"},
+		{"java is not an LTS release:", "a nix guest could ship a feature-release JDK"},
 	}
 
 	for nixName, pair := range nixRecipes(t) {

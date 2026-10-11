@@ -439,7 +439,11 @@ RUN set -eu; \
     golangci-lint --version >/dev/null || { echo "golangci-lint installed but cannot run" >&2; exit 1; }; \
     node --version >/dev/null || { echo "node installed but cannot run" >&2; exit 1; }; \
     python3 --version >/dev/null || { echo "python3 installed but cannot run" >&2; exit 1; }; \
-    java -version >/dev/null 2>&1 || { echo "the JDK installed but java cannot run" >&2; exit 1; }; \
+    java_banner=$(java -version 2>&1) || { echo "the JDK installed but java cannot run" >&2; exit 1; }; \
+    printf '%s\n' "$java_banner" | grep -q Temurin \
+      || { echo "java is not Eclipse Temurin:" >&2; printf '%s\n' "$java_banner" >&2; exit 1; }; \
+    printf '%s\n' "$java_banner" | grep -q LTS \
+      || { echo "java is not an LTS release:" >&2; printf '%s\n' "$java_banner" >&2; exit 1; }; \
     mvn --version >/dev/null || { echo "maven installed but cannot run" >&2; exit 1; }; \
     rustc --version >/dev/null || { echo "the Rust toolchain installed but rustc cannot run" >&2; exit 1; }; \
     cargo --version >/dev/null || { echo "cargo installed but cannot run" >&2; exit 1; }; \
