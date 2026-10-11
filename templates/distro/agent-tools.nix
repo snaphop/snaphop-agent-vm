@@ -132,6 +132,10 @@ let
     "clippy"
     "nodejs_22"
     "python3"
+    # Eclipse Temurin. The unversioned attribute is the newest LTS this
+    # nixpkgs release publishes. On nixos-25.05 that is Temurin 21; the
+    # release has no JDK 25. Full images install the current LTS through
+    # mise instead, because mise's java@lts alias tracks it.
     "temurin-bin"
     "maven"
     "golangci-lint"

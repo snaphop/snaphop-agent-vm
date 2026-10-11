@@ -242,16 +242,23 @@ RUN set -eu; \
       mise use --global --yes herdr; \
     rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
-# The JVM toolchain itself: the newest Temurin JDK mise offers, and Maven.
+# The JVM toolchain itself: the current Eclipse Temurin JDK LTS, and Maven.
 #
-# Neither version is pinned, like every other package here -- a pinned one would
-# be a release behind before the image was rebuilt. The manifest records only
-# the source image's digest, not these versions, so a rebuild is not
-# reproducible (ADR-0006).
-# The JDK is `java@temurin` and not `java@latest`, which is an Oracle build of
-# OpenJDK: mise names a distribution by prefix, and an unprefixed version takes
-# whichever one it defaults to. A version mise cannot resolve or install fails
-# the build rather than silently shipping a guest with no JDK.
+# `java@lts` is mise's alias for the current long-term-support major. The
+# install names Temurin and that major (`java@temurin-25` while the alias is
+# 25) rather than `java@temurin`, which is the newest Temurin build of any
+# major, including a six-month feature release. The patch is not pinned: the
+# recorded request is the `temurin-<major>` prefix, so `agent-vm update` takes
+# newer builds of that LTS and does not jump to a feature release. A later
+# image build picks up a new LTS major when mise moves the alias. Maven is
+# unpinned for the same reason. The manifest records only the source image's
+# digest, not these versions, so a rebuild is not reproducible (ADR-0006). A
+# version mise cannot resolve or install fails the build rather than silently
+# shipping a guest with no JDK.
+#
+# `mise latest` prints either a shorthand such as `25.0.4+101.0.LTS` or a
+# vendor-prefixed `temurin-25.0.4+101.0.LTS`. The major is the integer after a
+# vendor prefix, before the first dot.
 #
 # This writes into the shared store, so the JDK and Maven are in place before
 # anyone logs in instead of being downloaded per account inside a guest that may
@@ -263,12 +270,18 @@ RUN set -eu; \
 # downloaded archives, which are of no use once they have been extracted, and
 # shipping them would be wasted space in every guest.
 RUN set -eu; \
-    MISE_DATA_DIR=/usr/local/lib/mise \
-    MISE_CONFIG_DIR=/etc/skel/.config/mise \
-    MISE_STATE_DIR=/etc/skel/.local/state/mise \
-    MISE_CACHE_DIR=/tmp/mise-cache \
-    MISE_MINIMUM_RELEASE_AGE=0s \
-      mise use --global --yes java@temurin maven@latest; \
+    export MISE_DATA_DIR=/usr/local/lib/mise \
+           MISE_CONFIG_DIR=/etc/skel/.config/mise \
+           MISE_STATE_DIR=/etc/skel/.local/state/mise \
+           MISE_CACHE_DIR=/tmp/mise-cache \
+           MISE_MINIMUM_RELEASE_AGE=0s; \
+    lts=$(mise latest java@lts) || { echo "could not resolve the current Temurin LTS (java@lts)" >&2; exit 1; }; \
+    version=${lts##*-}; \
+    major=${version%%.*}; \
+    case "$major" in
+      ''|*[!0-9]*) echo "mise latest java@lts returned '${lts}', which is not an LTS major" >&2; exit 1 ;;
+    esac; \
+    mise use --global --yes "java@temurin-${major}" maven@latest; \
     rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads
 
 # The Go toolchain and golangci-lint, both from mise.
@@ -592,8 +605,14 @@ RUN set -eu; \
       || { echo "/etc/skel/.local/share/mise is not a symlink to the shared store; every account cloud-init creates would copy the whole toolchain at first boot" >&2; exit 1; }; \
     bash -lc 'command -v java' >/dev/null 2>&1 \
       || { echo "no java on the path of a login shell; the shims are not on PATH or the mise java install did not take" >&2; exit 1; }; \
-    bash -lc 'java -version' >/dev/null 2>&1 \
+    java_banner=$(bash -lc 'java -version' 2>&1) \
       || { echo "java is on the path of a login shell but cannot run; the mise java install did not take" >&2; exit 1; }; \
+    printf '%s\n' "$java_banner" | grep -q Temurin \
+      || { echo "java is not Eclipse Temurin:" >&2; printf '%s\n' "$java_banner" >&2; exit 1; }; \
+    printf '%s\n' "$java_banner" | grep -q LTS \
+      || { echo "java is not an LTS release:" >&2; printf '%s\n' "$java_banner" >&2; exit 1; }; \
+    bash -lc 'javac -version' >/dev/null 2>&1 \
+      || { echo "javac is missing; the mise install is not a JDK" >&2; exit 1; }; \
     bash -lc 'mvn -version' >/dev/null 2>&1 \
       || { echo "no Maven on the path of a login shell; the mise maven install did not take" >&2; exit 1; }
 

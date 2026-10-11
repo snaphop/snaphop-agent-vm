@@ -661,7 +661,9 @@ distros.
 
 A nix guest carries the common Linux tooling, the language toolchains (Go,
 Rust, Node.js, Python, the JDK and Maven, `golangci-lint`), `gh`, `tea`,
-`wrangler`, Chromium and Playwright's browsers, and `nix` itself. Rust is the
+`wrangler`, Chromium and Playwright's browsers, and `nix` itself. The JDK is nixpkgs `temurin-bin`, the newest Eclipse Temurin LTS that the
+pinned nixpkgs release publishes. On `nixos-25.05` that is Temurin 21. Full
+images install the current Temurin LTS through mise instead. Rust is the
 one toolchain whose interface differs from a full image: `rustc`, `cargo`,
 `rustfmt` and `clippy` come from nixpkgs and there is no `rustup`, so a guest
 that wants a second toolchain uses `nix` rather than `rustup toolchain
@@ -768,7 +770,7 @@ instead of on every first boot, and a VM works the same way offline.
 | Forge CLIs | `gh` (GitHub), `tea` (Gitea) |
 | Cloud CLIs | `wrangler` and `cf` (both Cloudflare), managed by `mise` |
 | Browser automation | `playwright`, managed by `mise`, with a headless `chromium` |
-| JVM toolchain | `mise` with the latest Temurin JDK and Maven (`java`, `mvn`) |
+| JVM toolchain | `mise` with the current Eclipse Temurin JDK LTS and Maven (`java`, `mvn`) |
 | Go toolchain | `mise` with `go`, `gofmt`, and `golangci-lint` |
 | Rust toolchain | `rustup` with the stable toolchain: `rustc`, `cargo`, `rustfmt`, `clippy` |
 | Virtualization | QEMU's system emulator (`qemu-system-x86` or `qemu-system-arm`; both provide `qemu-kvm`), `libvirt` (started at boot), `virsh`, `virt-install`, `guestfs-tools`, `guestfish` on Ubuntu (it provides `virt-copy-out`; Fedora and Arch get that command from `libguestfs`), `dnsmasq`, `podman`, `pasta` (package `passt`). Ubuntu also installs `uidmap`, which provides `newuidmap`; Fedora and Arch already have that command from the base system |
@@ -966,12 +968,16 @@ during the image build sets it too, because a build step does not read
 `/etc/environment`. An image already cached does not pick this up until it is
 rebuilt.
 
-The newest Temurin JDK mise offers and Maven are installed into that store
+The current Eclipse Temurin JDK LTS and Maven are installed into that store
 during the build, so every account has `java` and `mvn` without downloading anything —
-which also works when the guest cannot reach download servers. Neither version is pinned:
-they are whatever was current when the image was built. The JDK is requested as
-`java@temurin` rather than `java@latest`, which would be an Oracle build of
-OpenJDK: mise names a distribution by prefix.
+which also works when the guest cannot reach download servers. The LTS patch
+and the Maven release are not pinned: they are whatever was current when the
+image was built. The build asks mise which major `java@lts` names and installs
+`java@temurin-<major>`. That is the current long-term-support release from
+Eclipse Temurin (25, as of mise 2026.10.5). `java@temurin` would be the newest
+Temurin build of any major, including a six-month feature release.
+`agent-vm update` stays on that LTS line and takes its newer builds. A later
+image build picks up a new LTS major when mise's alias moves.
 
 `java` and `mvn` are reached through mise's shims in
 `~/.local/share/mise/shims`, which `/etc/profile.d/agent-vm-mise.sh` puts on the
