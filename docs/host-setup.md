@@ -586,29 +586,47 @@ Could not open '/home/you/.local/share/agent-vm/images/<distro>/<tag>/base.qcow2
 `dmesg` shows `apparmor="DENIED"` for profile `virt-aa-helper` on the
 overlay and the seed. The QEMU account's search permission is already
 sufficient; another `setfacl` does not fix this. `agent-vm doctor` reports
-it as **virt-aa-helper**. `agent-vm setup` writes one higher-priority allow
-for the state directory only into
-`/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` and reloads the
-profile with `apparmor_parser -r`. The rule is read and lock (`rk`), not
-write, and it does not change the profile QEMU runs under. A state directory
-outside a hidden home directory, such as `/var/lib/agent-vm`, needs no rule:
-the shipped profile already allows it.
+it as **virt-aa-helper**. `agent-vm setup` grants the helper read and lock
+(`rk`) on the state directory only and reloads the profile with
+`apparmor_parser -r`. It does not change the profile QEMU runs under. A
+state directory outside a hidden home directory, such as
+`/var/lib/agent-vm`, needs no rule: the shipped profile already allows it.
 
-By hand, the same rule is:
+Setup asks the parser whether `priority=` is accepted. On AppArmor 4.1
+(Ubuntu 26.04) it is, and the local file
+`/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` gets one rule:
 
 ```text
 priority=1 /home/you/.local/share/agent-vm/** rk,
 ```
 
-Reload with:
+`priority=1` overrides the shipped deny, which has the default priority of
+0, and only where the two paths overlap. Reload with:
 
 ```bash
 sudo apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper
 ```
 
-`priority=1` overrides the shipped deny, which has the default priority of
-0, and only where the two paths overlap. Do not put the profile in complain
-mode and do not set libvirt's security driver to `none`.
+Ubuntu 24.04 ships AppArmor 4.0.1. That parser rejects `priority=` as a
+syntax error, and on it a later allow does not override a deny. Putting the
+plain rule in the local file and leaving the shipped deny in place does not
+let the helper open the image. Setup replaces these three lines in
+`/etc/apparmor.d/usr.lib.libvirt.virt-aa-helper`:
+
+```text
+  audit deny @{HOME}/.* mrwkl,
+  audit deny @{HOME}/.*/ rw,
+  audit deny @{HOME}/.*/** mrwkl,
+```
+
+with a marker, and writes the same denies into the local include with the
+state directory left out, plus `<state-dir>/** rk,`. `@{HOME}` is
+`/home/*/` and `/root/`, from `/etc/apparmor.d/tunables/home`. Every other
+hidden path stays denied: other home directories, `/root`, `~/.ssh`, and
+the neighbours of the state directory. A libvirt package update restores
+the three lines. Run `agent-vm setup` again; `agent-vm doctor` fails until
+you do. Do not put the profile in complain mode and do not set libvirt's
+security driver to `none`.
 
 If `doctor` passes and a VM still cannot open its disk, then look for a denial:
 

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -100,7 +101,9 @@ func TestGoTestsCallParallelUnlessTheyTouchProcessGlobalState(t *testing.T) {
 
 // parallelProblems reports tests in one directory that disagree with the rule:
 // a unit test calls t.Parallel unless it touches process-global state, and an
-// integration test does not call it.
+// integration test does not call it. Process-global state is t.Setenv, a
+// package variable the test swaps, the default slog logger, os.Chdir, or
+// loading or unloading an AppArmor profile.
 func parallelProblems(t *testing.T, dir string, testFiles []string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -262,9 +265,34 @@ func callTouchesProcessGlobal(call *ast.CallExpr) bool {
 		return recv != nil && recv.Name == "os"
 	case "SetDefault":
 		return recv != nil && recv.Name == "slog"
+	case "Command", "CommandContext":
+		// apparmor_parser -r and -R replace kernel policy. -Q only parses.
+		return recv != nil && recv.Name == "exec" && commandLoadsAppArmor(call)
 	default:
 		return false
 	}
+}
+
+func commandLoadsAppArmor(call *ast.CallExpr) bool {
+	hasParser := false
+	loads := false
+	for _, arg := range call.Args {
+		lit, ok := arg.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		value, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			continue
+		}
+		if value == "apparmor_parser" {
+			hasParser = true
+		}
+		if value == "-r" || value == "-R" {
+			loads = true
+		}
+	}
+	return hasParser && loads
 }
 
 func exprWritesPackageVar(expr ast.Expr, pkgVars map[string]bool) bool {

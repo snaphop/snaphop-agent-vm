@@ -467,6 +467,65 @@ func TestDoctor_VirtAAHelperPassesWhenSetupHasAllowedTheStateDirectory(t *testin
 	}
 }
 
+func TestDoctor_VirtAAHelperPassesWhenTheDenyWasNarrowed(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	plain, err := hostsetup.VirtAAHelperPlainRule(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := "  # BEGIN agent-vm setup deny\n  # END agent-vm setup deny\n  @{HOME}/** r,\n"
+	fake := apparmorDoctorHost(t, profile, plain+"\n", true)
+
+	report := runDoctorOn(t, fake, stateDir)
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusPass {
+		t.Fatalf("virt-aa-helper = %s (%s), want pass", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, stateDir) {
+		t.Errorf("detail = %s", got.Detail)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "apparmor_parser") {
+			t.Errorf("doctor ran apparmor_parser: %s", argv)
+		}
+	}
+}
+
+func TestDoctor_VirtAAHelperFailsWhenAPlainAllowSitsUnderTheShippedDeny(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	plain, err := hostsetup.VirtAAHelperPlainRule(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := apparmorDoctorHost(t, "  audit deny @{HOME}/.*/** mrwkl,\n", plain+"\n", true)
+
+	report := runDoctorOn(t, fake, stateDir)
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusFail {
+		t.Fatalf("virt-aa-helper = %s (%s), want fail", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, stateDir) || !strings.Contains(got.Remedy, "agent-vm setup") {
+		t.Errorf("detail = %s\nremedy = %s", got.Detail, got.Remedy)
+	}
+}
+
+func TestDoctor_VirtAAHelperSkipsANarrowedProfileWithoutTheLocalAllow(t *testing.T) {
+	t.Parallel()
+	profile := "  # BEGIN agent-vm setup deny\n  # END agent-vm setup deny\n"
+	fake := apparmorDoctorHost(t, profile, "", false)
+
+	report := runDoctorOn(t, fake, "/home/operator/.local/share/agent-vm")
+
+	got := find(t, report, "virt-aa-helper")
+	if got.Status != statusSkip {
+		t.Fatalf("virt-aa-helper = %s (%s), want skip", got.Status, got.Detail)
+	}
+}
+
 func TestDoctor_VirtAAHelperIsSkippedForARemoteHypervisor(t *testing.T) {
 	t.Parallel()
 	fake := healthyHost()

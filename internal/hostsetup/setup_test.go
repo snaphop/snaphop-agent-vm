@@ -319,6 +319,9 @@ type fakeHostOptions struct {
 	apparmorLocal        string
 	apparmorLocalPresent bool
 	parserFails          bool
+	noPriority           bool
+	probeExit            int
+	profileRestoreFails  bool
 }
 
 func newFakeHost(t *testing.T, opt fakeHostOptions) *hostexec.Fake {
@@ -329,6 +332,7 @@ func newFakeHost(t *testing.T, opt fakeHostOptions) *hostexec.Fake {
 	loaded := strings.TrimSpace(toolout(t, "systemctl-show-LoadState-loaded.txt"))
 	missing := strings.TrimSpace(toolout(t, "systemctl-show-LoadState-not-found.txt"))
 	fake := hostexec.NewFake()
+	profileTees := 0
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
 		argv := strings.Join(c.Argv(), " ")
 		switch {
@@ -377,8 +381,23 @@ func newFakeHost(t *testing.T, opt fakeHostOptions) *hostexec.Fake {
 		case argv == "cat "+VirtAAHelperLocal:
 			return hostexec.FakeResponse{Stdout: opt.apparmorLocal}, true
 		case strings.Contains(argv, "apparmor_parser"):
+			if strings.Contains(argv, "-Q") {
+				if opt.noPriority {
+					return hostexec.FakeResponse{ExitCode: 1, Stderr: "AppArmor parser error for /dev/stdin in profile /dev/stdin at line 2: syntax error, unexpected TOK_CONDID, expecting TOK_ID or TOK_MODE or TOK_SET_VAR\n"}, true
+				}
+				if opt.probeExit != 0 {
+					return hostexec.FakeResponse{ExitCode: opt.probeExit, Stderr: "apparmor_parser: failed\n"}, true
+				}
+				return hostexec.FakeResponse{}, true
+			}
 			if opt.parserFails {
 				return hostexec.FakeResponse{ExitCode: 1, Stderr: "AppArmor parser error for the profile\n"}, true
+			}
+			return hostexec.FakeResponse{}, true
+		case strings.Contains(argv, "tee "+VirtAAHelperProfile):
+			profileTees++
+			if opt.profileRestoreFails && profileTees > 1 {
+				return hostexec.FakeResponse{ExitCode: 1, Stderr: "tee: write error\n"}, true
 			}
 			return hostexec.FakeResponse{}, true
 		case strings.Contains(argv, "/usr/bin/test -x"):
@@ -405,6 +424,16 @@ func ubuntuHost() Host {
 }
 
 const shippedVirtAADeny = "  audit deny @{HOME}/.*/** mrwkl,\n"
+
+const shippedVirtAAProfile = "" +
+	"  # for backingstore -- allow access to non-hidden files in @{HOME} as well\n" +
+	"  audit deny @{HOME}/.* mrwkl,\n" +
+	"  audit deny @{HOME}/.*/ rw,\n" +
+	"  audit deny @{HOME}/.*/** mrwkl,\n" +
+	"  audit deny @{HOME}/bin/ rw,\n" +
+	"  audit deny @{HOME}/bin/** mrwkl,\n" +
+	"  @{HOME}/ r,\n" +
+	"  @{HOME}/** r,\n"
 
 func TestStateDirUnderHiddenHome_MatchesTheShippedDeny(t *testing.T) {
 	t.Parallel()
@@ -505,8 +534,12 @@ func TestApply_DoesNotRewriteAVirtAAHelperRuleThatIsAlreadyPresent(t *testing.T)
 	if report.AppArmor != "" {
 		t.Errorf("AppArmor = %q, want nothing changed", report.AppArmor)
 	}
-	if strings.Contains(argvJoined(fake), "tee") || strings.Contains(argvJoined(fake), "apparmor_parser") {
-		t.Errorf("setup rewrote a rule that was already present:\n%s", argvJoined(fake))
+	joined := argvJoined(fake)
+	if strings.Contains(joined, "tee") || strings.Contains(joined, "apparmor_parser -r") {
+		t.Errorf("setup rewrote a rule that was already present:\n%s", joined)
+	}
+	if !strings.Contains(joined, "apparmor_parser -Q -K /dev/stdin") {
+		t.Errorf("setup did not ask the parser whether priority= is accepted:\n%s", joined)
 	}
 }
 
@@ -724,8 +757,12 @@ func TestApply_DryRunPrintsTheVirtAAHelperRuleWithoutWritingIt(t *testing.T) {
 	if !strings.Contains(plan, "tee "+VirtAAHelperLocal) || !strings.Contains(plan, "apparmor_parser -r "+VirtAAHelperProfile) {
 		t.Errorf("plan =\n%s", plan)
 	}
-	if strings.Contains(argvJoined(inner), "tee") || strings.Contains(argvJoined(inner), "apparmor_parser") {
-		t.Errorf("dry run wrote the profile:\n%s", argvJoined(inner))
+	innerArgv := argvJoined(inner)
+	if strings.Contains(innerArgv, "tee") || strings.Contains(innerArgv, "apparmor_parser -r") {
+		t.Errorf("dry run wrote the profile:\n%s", innerArgv)
+	}
+	if !strings.Contains(innerArgv, "apparmor_parser -Q -K /dev/stdin") {
+		t.Errorf("dry run skipped the parser probe:\n%s", innerArgv)
 	}
 }
 
@@ -775,4 +812,407 @@ func argvJoined(fake *hostexec.Fake) string {
 		lines = append(lines, strings.Join(call.Argv(), " "))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func TestApply_CarvesTheHiddenHomeDenyWhenPriorityIsRejected(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/wensington/.local/share/agent-vm"
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: shippedVirtAAProfile,
+		noPriority:      true,
+	})
+
+	report, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if report.AppArmor != stateDir {
+		t.Errorf("AppArmor = %q, want %s", report.AppArmor, stateDir)
+	}
+	got := stdins(t, fake, "tee")
+	if len(got) != 2 {
+		t.Fatalf("tee calls = %d, want the local carve and the narrowed profile\n%s", len(got), argvJoined(fake))
+	}
+	allow, err := VirtAAHelperPlainRule(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(got[0], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "priority=") {
+			t.Errorf("local profile has a priority= rule:\n%s", got[0])
+		}
+	}
+	if !strings.Contains(got[0], allow) || !strings.Contains(got[0], virtAABegin) || !strings.Contains(got[0], virtAAEnd) {
+		t.Errorf("local profile =\n%s", got[0])
+	}
+	if strings.Contains(got[0], virtAADenyBegin) {
+		t.Errorf("local profile contains the main-profile marker:\n%s", got[0])
+	}
+	if !strings.Contains(got[0], "audit deny /root/.* mrwkl,") {
+		t.Errorf("local profile does not keep /root hidden:\n%s", got[0])
+	}
+	if strings.Contains(got[1], "deny @{HOME}/.*/**") || !strings.Contains(got[1], virtAADenyBegin) || !strings.Contains(got[1], virtAADenyEnd) {
+		t.Errorf("main profile =\n%s", got[1])
+	}
+	if !strings.Contains(got[1], "audit deny @{HOME}/bin/** mrwkl,") || !strings.Contains(got[1], "@{HOME}/** r,") {
+		t.Errorf("main profile dropped a rule it should have kept:\n%s", got[1])
+	}
+	text := argvJoined(fake)
+	probe := strings.Index(text, "apparmor_parser -Q")
+	local := strings.Index(text, "tee "+VirtAAHelperLocal)
+	profile := strings.Index(text, "tee "+VirtAAHelperProfile)
+	reload := strings.Index(text, "apparmor_parser -r")
+	if probe < 0 || local < 0 || profile < 0 || reload < 0 || probe >= local || local >= profile || profile >= reload {
+		t.Fatalf("command order:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "apparmor_parser -Q") && strings.Contains(line, "sudo") {
+			t.Errorf("probe ran under sudo: %s", line)
+		}
+	}
+}
+
+func TestApply_RestoresTheProfileBeforeTheLocalFileWhenReloadFails(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/wensington/.local/share/agent-vm"
+	previous := "# site keep\n"
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:           true,
+		groups:               "operator kvm libvirt",
+		apparmorProfile:      shippedVirtAAProfile,
+		apparmorLocalPresent: true,
+		apparmorLocal:        previous,
+		noPriority:           true,
+		parserFails:          true,
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "apparmor_parser") {
+		t.Fatalf("error = %v, want the parser failure", err)
+	}
+	got := stdins(t, fake, "tee")
+	if len(got) != 4 {
+		t.Fatalf("tee calls = %d, want the write, the narrowed profile, and both restores", len(got))
+	}
+	if got[2] != shippedVirtAAProfile {
+		t.Errorf("restored profile =\n%s", got[2])
+	}
+	if got[3] != previous {
+		t.Errorf("restored local =\n%s\nwant\n%s", got[3], previous)
+	}
+	text := argvJoined(fake)
+	reload := strings.Index(text, "apparmor_parser -r")
+	if reload < 0 {
+		t.Fatalf("profile was not reloaded:\n%s", text)
+	}
+	rest := text[reload:]
+	profile := strings.Index(rest, "tee "+VirtAAHelperProfile)
+	local := strings.Index(rest, "tee "+VirtAAHelperLocal)
+	if profile < 0 || local < 0 || profile > local {
+		t.Fatalf("restore order:\n%s", text)
+	}
+}
+
+func TestApply_RemovesACarveItCreatedWhenReloadFails(t *testing.T) {
+	t.Parallel()
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: shippedVirtAAProfile,
+		noPriority:      true,
+		parserFails:     true,
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: "/home/wensington/.local/share/agent-vm",
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "apparmor_parser") {
+		t.Fatalf("error = %v", err)
+	}
+	got := stdins(t, fake, "tee")
+	if len(got) != 3 {
+		t.Fatalf("tee calls = %d, want the local carve, the narrowed profile, and the profile restore", len(got))
+	}
+	if got[2] != shippedVirtAAProfile {
+		t.Errorf("restored profile =\n%s", got[2])
+	}
+	text := argvJoined(fake)
+	reload := strings.Index(text, "apparmor_parser -r")
+	rest := text[reload:]
+	profile := strings.Index(rest, "tee "+VirtAAHelperProfile)
+	remove := strings.Index(rest, "rm -f "+VirtAAHelperLocal)
+	if profile < 0 || remove < 0 || profile > remove {
+		t.Fatalf("the local carve was removed before the profile was restored:\n%s", text)
+	}
+}
+
+func TestApply_KeepsTheLocalCarveWhenTheProfileCannotBeRestored(t *testing.T) {
+	t.Parallel()
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:          true,
+		groups:              "operator kvm libvirt",
+		apparmorProfile:     shippedVirtAAProfile,
+		noPriority:          true,
+		parserFails:         true,
+		profileRestoreFails: true,
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: "/home/wensington/.local/share/agent-vm",
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "still in place") || !strings.Contains(err.Error(), VirtAAHelperLocal) {
+		t.Fatalf("error = %v", err)
+	}
+	text := argvJoined(fake)
+	reload := strings.Index(text, "apparmor_parser -r")
+	if reload < 0 {
+		t.Fatalf("profile was not reloaded:\n%s", text)
+	}
+	rest := text[reload:]
+	if strings.Contains(rest, "tee "+VirtAAHelperLocal) || strings.Contains(rest, "rm -f "+VirtAAHelperLocal) {
+		t.Fatalf("local carve was removed while the profile restore failed:\n%s", text)
+	}
+}
+
+func TestApply_RefusesAnUnrecognizedHiddenHomeDeny(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/operator/.local/share/agent-vm"
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: "  audit deny @{HOME}/.*/** mrwklx,\n",
+		noPriority:      true,
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "shipped three lines") || !strings.Contains(err.Error(), stateDir) {
+		t.Fatalf("error = %v", err)
+	}
+	text := argvJoined(fake)
+	if strings.Contains(text, "tee") || strings.Contains(text, "apparmor_parser -r") {
+		t.Fatalf("setup wrote a rule it cannot carve:\n%s", text)
+	}
+}
+
+func TestApply_ReportsAnApparmorProbeFailure(t *testing.T) {
+	t.Parallel()
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: shippedVirtAADeny,
+		probeExit:       2,
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: "/home/operator/.local/share/agent-vm",
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "apparmor_parser") {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(argvJoined(fake), "tee") {
+		t.Fatalf("setup wrote a rule after the probe failed:\n%s", argvJoined(fake))
+	}
+}
+
+func TestApply_LeavesAFinishedCarveAlone(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/wensington/.local/share/agent-vm"
+	narrowed, changed, err := narrowShippedHiddenDenies(shippedVirtAAProfile, stateDir)
+	if err != nil || !changed {
+		t.Fatalf("narrow: changed=%v err=%v", changed, err)
+	}
+	local := carveLocal(t, stateDir)
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:           true,
+		groups:               "operator kvm libvirt",
+		apparmorProfile:      narrowed,
+		apparmorLocalPresent: true,
+		apparmorLocal:        local,
+		noPriority:           true,
+	})
+
+	report, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if report.AppArmor != "" {
+		t.Errorf("AppArmor = %q, want nothing changed", report.AppArmor)
+	}
+	text := argvJoined(fake)
+	if strings.Contains(text, "tee") || strings.Contains(text, "apparmor_parser") {
+		t.Fatalf("setup rewrote a finished carve:\n%s", text)
+	}
+}
+
+func TestApply_RewritesACarveThatLostADeny(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/wensington/.local/share/agent-vm"
+	narrowed, _, err := narrowShippedHiddenDenies(shippedVirtAAProfile, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denies, err := hiddenHomeExceptDenies(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := strings.Replace(carveLocal(t, stateDir), denies[0]+"\n", "", 1)
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:           true,
+		groups:               "operator kvm libvirt",
+		apparmorProfile:      narrowed,
+		apparmorLocalPresent: true,
+		apparmorLocal:        local,
+		noPriority:           true,
+	})
+
+	if _, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got := stdins(t, fake, "tee")
+	if len(got) != 1 {
+		t.Fatalf("tee calls = %d, want the local file only\n%s", len(got), argvJoined(fake))
+	}
+	if !strings.Contains(got[0], denies[0]) {
+		t.Errorf("rewritten local file is missing %s", denies[0])
+	}
+	text := argvJoined(fake)
+	if strings.Contains(text, "tee "+VirtAAHelperProfile) {
+		t.Errorf("setup rewrote a profile that was already narrowed:\n%s", text)
+	}
+	if strings.Contains(text, "apparmor_parser -Q") || !strings.Contains(text, "apparmor_parser -r") {
+		t.Errorf("reload:\n%s", text)
+	}
+}
+
+func TestApply_ReplacesTheCarveWhenTheStateDirectoryChanges(t *testing.T) {
+	t.Parallel()
+	const oldDir = "/home/wensington/.local/share/agent-vm"
+	const newDir = "/home/wensington/.local/share/other-vm"
+	narrowed, _, err := narrowShippedHiddenDenies(shippedVirtAAProfile, oldDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAllow, err := VirtAAHelperPlainRule(oldDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newAllow, err := VirtAAHelperPlainRule(newDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:           true,
+		groups:               "operator kvm libvirt",
+		apparmorProfile:      narrowed,
+		apparmorLocalPresent: true,
+		apparmorLocal:        carveLocal(t, oldDir),
+		noPriority:           true,
+	})
+
+	if _, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: newDir,
+		Groups:   []string{"kvm", "libvirt"},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got := stdins(t, fake, "tee")
+	if len(got) != 1 {
+		t.Fatalf("tee calls = %d, want the local file only\n%s", len(got), argvJoined(fake))
+	}
+	if !strings.Contains(got[0], newAllow) || strings.Contains(got[0], oldAllow) {
+		t.Errorf("local profile =\n%s", got[0])
+	}
+	text := argvJoined(fake)
+	if strings.Contains(text, "tee "+VirtAAHelperProfile) || strings.Contains(text, "apparmor_parser -Q") {
+		t.Errorf("setup rewrote the profile or probed the parser:\n%s", text)
+	}
+}
+
+func TestApply_DryRunPrintsTheCarveWhenPriorityIsRejected(t *testing.T) {
+	t.Parallel()
+	const stateDir = "/home/wensington/.local/share/agent-vm"
+	inner := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: shippedVirtAAProfile,
+		noPriority:      true,
+	})
+	var printed bytes.Buffer
+	dry := hostexec.NewDryRun(inner, &printed)
+
+	report, err := Apply(context.Background(), dry, ubuntuHost(), Options{
+		StateDir: stateDir,
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if report.AppArmor != stateDir {
+		t.Errorf("AppArmor = %q, want the planned directory", report.AppArmor)
+	}
+	plan := printed.String()
+	if !strings.Contains(plan, "tee "+VirtAAHelperLocal) || !strings.Contains(plan, "tee "+VirtAAHelperProfile) || !strings.Contains(plan, "apparmor_parser -r "+VirtAAHelperProfile) {
+		t.Errorf("plan =\n%s", plan)
+	}
+	innerArgv := argvJoined(inner)
+	if strings.Contains(innerArgv, "tee") || strings.Contains(innerArgv, "apparmor_parser -r") {
+		t.Errorf("dry run wrote the profile:\n%s", innerArgv)
+	}
+	if !strings.Contains(innerArgv, "apparmor_parser -Q -K /dev/stdin") {
+		t.Errorf("dry run skipped the parser probe:\n%s", innerArgv)
+	}
+}
+
+func TestApply_ReportsABrokenDenyMarker(t *testing.T) {
+	t.Parallel()
+	fake := newFakeHost(t, fakeHostOptions{
+		searchable:      true,
+		groups:          "operator kvm libvirt",
+		apparmorProfile: "  " + virtAADenyBegin + "\n  @{HOME}/** r,\n",
+	})
+
+	_, err := Apply(context.Background(), fake, ubuntuHost(), Options{
+		StateDir: "/home/operator/.local/share/agent-vm",
+		Groups:   []string{"kvm", "libvirt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), virtAADenyEnd) {
+		t.Fatalf("error = %v", err)
+	}
+	text := argvJoined(fake)
+	if strings.Contains(text, "tee") || strings.Contains(text, "apparmor_parser") {
+		t.Fatalf("setup wrote over a broken profile:\n%s", text)
+	}
+}
+
+func carveLocal(t *testing.T, stateDir string) string {
+	t.Helper()
+	denies, err := hiddenHomeExceptDenies(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow, err := VirtAAHelperPlainRule(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return virtAACarveBlock(denies, allow) + "\n"
 }

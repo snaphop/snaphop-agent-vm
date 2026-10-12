@@ -149,9 +149,9 @@ section named here.
 - The tool MUST NOT disable or relax host confinement of QEMU (SELinux,
   AppArmor, seccomp) or grant a domain host devices, host PCI passthrough, or
   privileged QEMU options to work around a permission error. The one AppArmor
-  edit `agent-vm setup` may make is the virt-aa-helper state-directory rule
-  in [Destructive Operations And Host State](#destructive-operations-and-host-state).
-  That rule does not change the profile QEMU runs under.
+  edit `agent-vm setup` may make is the virt-aa-helper state-directory
+  exception in [Destructive Operations And Host State](#destructive-operations-and-host-state).
+  That exception does not change the profile QEMU runs under.
 - Guests MUST NOT be given a channel to the host beyond the standard virtio
   devices the tool's `virt-install` argument vector asks for (disk, NIC, RNG,
   serial console, guest agent). Adding a device that crosses the boundary —
@@ -256,10 +256,15 @@ section named here.
   above the state directory. It MUST NOT grant that account read or write.
   When the state directory lies under a hidden directory in a home directory
   (`/home/<user>/.*` or `/root/.*`) and the installed virt-aa-helper profile
-  denies `@{HOME}/.*/**`, setup may write one local AppArmor rule granting
-  that helper read and lock (`rk`) on the state directory only, then reload
-  the profile with `apparmor_parser`. That lets the helper name backing files
-  in the per-VM profile. Setup MUST NOT disable AppArmor, put a profile in
+  denies `@{HOME}/.*/**`, setup may grant that helper read and lock (`rk`) on
+  the state directory only, then reload the profile with `apparmor_parser`.
+  When the parser accepts `priority=`, the grant is one local rule at
+  priority 1. When the parser rejects `priority=` (Ubuntu 24.04's AppArmor
+  4.0.1), a local allow cannot override the shipped deny, so setup replaces
+  that deny with denies of the same hidden paths except the state directory
+  and adds the plain read-and-lock rule beside them. `@{HOME}` is `/home/*/`
+  and `/root/`. That lets the helper name backing files in the per-VM profile.
+  Setup MUST NOT disable AppArmor, put a profile in
   complain mode, change QEMU's confinement, or allow the helper to read any
   other path. A path escaping
   the state directory from any other command is a fatal error, never a warning.

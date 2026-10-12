@@ -609,6 +609,26 @@ func checkVirtAAHelper(ctx context.Context, app *App, cfg *config.Config) check 
 		}
 	}
 	if !hostsetup.VirtAAHelperProfileDeniesHiddenHome(profile) {
+		// Setup on a parser without priority= removes the shipped deny and
+		// leaves a plain read-and-lock rule in the local include. That rule
+		// is what makes the helper able to read the directory.
+		plain, plainErr := hostsetup.VirtAAHelperPlainRule(cfg.StateDir)
+		if plainErr != nil {
+			return check{
+				Name: name, Status: statusSkip,
+				Detail: "the installed virt-aa-helper profile does not deny hidden home directories",
+			}
+		}
+		local, present, err := readHostText(ctx, app.runner, hostsetup.VirtAAHelperLocal)
+		if err != nil {
+			return check{Name: name, Status: statusWarn, Detail: err.Error()}
+		}
+		if present && hostsetup.VirtAAHelperLocalAllows(local, plain) {
+			return check{
+				Name: name, Status: statusPass,
+				Detail: fmt.Sprintf("can read %s", cfg.StateDir),
+			}
+		}
 		return check{
 			Name: name, Status: statusSkip,
 			Detail: "the installed virt-aa-helper profile does not deny hidden home directories",
@@ -631,7 +651,7 @@ func checkVirtAAHelper(ctx context.Context, app *App, cfg *config.Config) check 
 	return check{
 		Name: name, Status: statusFail,
 		Detail: fmt.Sprintf("virt-aa-helper cannot read %s, so a VM fails at virt-install with Permission denied on the base image", cfg.StateDir),
-		Remedy: "Run `agent-vm setup`. It adds one local AppArmor rule so virt-aa-helper can read the state directory, then reloads the profile. QEMU stays confined.",
+		Remedy: "Run `agent-vm setup`. It lets virt-aa-helper read the state directory, then reloads the profile. QEMU stays confined.",
 	}
 }
 

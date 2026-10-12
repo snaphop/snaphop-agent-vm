@@ -96,3 +96,16 @@ omits the overlay's backing file from the per-VM profile, and QEMU reports
 `Permission denied` on `base.qcow2` even when the QEMU account can search
 every directory on the path. Setup now writes the one local override
 described above. SELinux and QEMU's profile stay out of reach.
+
+2026-10-12. Ubuntu 24.04 ships AppArmor 4.0.1. Its parser rejects
+`priority=` as a syntax error, and on that parser a later allow does not
+override a deny, so the local rule from the previous amendment never
+reloaded. Setup asks `apparmor_parser` with a throwaway profile on standard
+input (`apparmor_parser -Q -K /dev/stdin`). When `priority=` is accepted,
+the local rule is unchanged. When it is rejected, setup moves the shipped
+hidden-home deny into the local include and leaves out only the state
+directory, then adds the plain read-and-lock rule. `@{HOME}` is taken to be
+`/home/*/` and `/root/`, which is what the shipped tunable describes. A
+libvirt package update restores the shipped deny; `agent-vm doctor` fails
+until setup is run again. The helper still cannot read any other hidden
+path, and QEMU's profile is still untouched.
