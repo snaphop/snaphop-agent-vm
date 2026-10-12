@@ -287,7 +287,10 @@ background worker. Long waits include image builds, the guest boot wait during `
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,
   `--network`, `--memory`, `--vcpus`, `--cpu host-passthrough` (which is what
   gives a guest the host's virtualization features, so it can run VMs of its
-  own; on x86 the hypervisor CPUID flag is disabled on that model), `--sysinfo`
+  own; on x86 the hypervisor CPUID flag is disabled on that model),
+  `--xml ./devices/interface/rom/@enabled=no` (the virtio NIC otherwise asks
+  QEMU for `efi-virtio.rom`, an iPXE option ROM this guest never executes and
+  that Ubuntu does not install with the packages setup requests), `--sysinfo`
   SMBIOS values for a physical desktop, `--features kvm.hidden.state=on` on x86,
   `--graphics none`, serial console with a log file, `--rng`,
   `--memballoon virtio`, and the guest agent channel. This is what golden tests

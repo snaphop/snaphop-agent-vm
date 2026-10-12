@@ -138,6 +138,14 @@ func VirtInstallArgs(opts CreateOptions) ([]string, error) {
 			"kernel_args=" + opts.KernelCmdline,
 		}, ","),
 		"--network", network,
+		// QEMU's virtio-net-pci device loads efi-virtio.rom unless romfile is
+		// empty. That file ships in ipxe-qemu, which Ubuntu only Recommends,
+		// and setup installs with --no-install-recommends, so a host this
+		// tool prepared does not have it and QEMU exits before the guest
+		// starts. Direct kernel boot never executes a NIC option ROM.
+		// virt-install treats an empty rom.file as unset; libvirt turns
+		// <rom enabled='no'/> into romfile= (libvirt 4.3+, our floor is 9.0).
+		"--xml", "./devices/interface/rom/@enabled=no",
 		// The guest agent is how `virsh domifaddr --source agent` learns the
 		// guest's address without waiting for a DHCP lease to appear.
 		"--channel", "unix,target.type=virtio,target.name=org.qemu.guest_agent.0",

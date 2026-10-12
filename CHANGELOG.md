@@ -69,6 +69,16 @@ migration or rebuild step a user has to take.
   `ubuntu-26.04`). A workflow can require any one of them. GitHub still
   adds its own `self-hosted`, operating system, and architecture labels.
 
+### Fixed
+
+- Creating a VM no longer fails when the host has no virtio option ROM.
+  QEMU's virtio NIC loads `efi-virtio.rom` unless told not to, and that file
+  is in Ubuntu's `ipxe-qemu` package, which is only recommended. `agent-vm
+  setup` does not install recommended packages, so the domain exited before
+  the guest started. A new VM is defined with that option ROM turned off.
+  The guest boots its kernel directly and does not use the ROM. A VM that
+  is already defined keeps the configuration it was created with.
+
 ### Changed
 
 - Full base images install the current Eclipse Temurin JDK LTS. The build
