@@ -24,6 +24,29 @@ RUN pacman -Syu --noconfirm --needed \
       iproute2 \
  && pacman -Scc --noconfirm
 
+# SSH forwards the operator's locale into the session. The client sends LANG
+# and LC_*, sshd accepts them, and bash applies that locale before the first
+# prompt. The image this recipe starts from provides C.UTF-8, so a desktop
+# whose locale is en_US.UTF-8 — the default on macOS and on most Linux
+# desktops — prints this on every login:
+#
+#   -bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
+#
+# Arch's glibc ships locale-gen and the locale sources, with en_US.UTF-8
+# commented out in /etc/locale.gen. Uncommenting it and running locale-gen
+# makes the forwarded value a locale the guest has. It is also the guest's
+# own default, so a session that forwards nothing is still UTF-8.
+# /etc/locale.conf is what systemd reads.
+RUN set -eu; \
+    sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
+    grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen; \
+    locale-gen; \
+    printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf; \
+    if ! locale -a | grep -Eq '^en_US\.(utf8|UTF-8)$'; then \
+      echo "en_US.UTF-8 was not generated; an SSH login would warn that setlocale failed" >&2; \
+      exit 1; \
+    fi
+
 # cloud-guest-utils is growpart, which is what lets cloud-init grow the root
 # partition to the size of the VM's disk at first boot. Without it the guest is
 # stuck with the base filesystem, which carries only the slack the image build
@@ -1112,10 +1135,10 @@ RUN set -eu; \
 # guest never configures a network, and `agent-vm create` times out waiting for
 # an address with no sign that anything asked a question.
 #
-# Masking rather than presetting a timezone and locale: nothing this unit
-# configures matters to a disposable VM. cloud-init sets the hostname, and
-# /etc/locale.conf is already in the image. Masking cannot be undone by a
-# package update the way a preset value could be overwritten.
+# The timezone prompt is what blocks boot, so the unit stays masked.
+# cloud-init sets the hostname. The locale is written above, once en_US.UTF-8
+# has been generated. Masking cannot be undone by a package update the way a
+# preset timezone could be overwritten.
 #
 # This does not affect the machine ID. systemd itself initializes that from the
 # SMBIOS/DMI UUID during early boot, independently of this unit, so every VM

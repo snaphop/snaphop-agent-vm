@@ -32,8 +32,28 @@ RUN dnf -y install \
       openssh-server \
       sudo \
       qemu-guest-agent \
+      glibc-langpack-en \
       iproute \
  && dnf clean all
+
+# SSH forwards the operator's locale into the session. The client sends LANG
+# and LC_*, sshd accepts them, and bash applies that locale before the first
+# prompt. The image this recipe starts from provides C.UTF-8, so a desktop
+# whose locale is en_US.UTF-8 — the default on macOS and on most Linux
+# desktops — prints this on every login:
+#
+#   -bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
+#
+# glibc-langpack-en is the compiled en_US.UTF-8 locale, so installing it is
+# what makes setlocale succeed. It is also the guest's own default, so a
+# session that forwards nothing is still UTF-8. /etc/locale.conf is what
+# systemd and PAM read.
+RUN set -eu; \
+    printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf; \
+    if ! locale -a | grep -Eq '^en_US\.(utf8|UTF-8)$'; then \
+      echo "en_US.UTF-8 is not installed; an SSH login would warn that setlocale failed" >&2; \
+      exit 1; \
+    fi
 
 # growpart above is what lets cloud-init grow the root partition to the size of
 # the VM's disk at first boot. Without it the guest is stuck with the base

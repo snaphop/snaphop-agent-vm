@@ -71,6 +71,15 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- SSH logins no longer warn `setlocale: LC_ALL: cannot change locale (en_US.UTF-8)`.
+  Guest images generate that locale and use it as their default. An SSH client
+  forwards the locale from the machine you connect from, and `bash` applies it
+  as the session starts. An image already cached stays as it is until
+  `agent-vm image build <distro> --force`. Create the VM again from that image
+  to get the locale. A VM that is already running can be fixed in place: on
+  Ubuntu, `sudo apt-get update && sudo apt-get install -y locales && sudo locale-gen en_US.UTF-8`;
+  on Fedora, `sudo dnf -y install glibc-langpack-en`; on Arch, uncomment
+  `en_US.UTF-8 UTF-8` in `/etc/locale.gen` and run `sudo locale-gen`.
 - Creating a VM no longer fails when the host has no virtio option ROM.
   QEMU's virtio NIC loads `efi-virtio.rom` unless told not to, and that file
   is in Ubuntu's `ipxe-qemu` package, which is only recommended. `agent-vm

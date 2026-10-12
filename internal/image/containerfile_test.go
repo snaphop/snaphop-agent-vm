@@ -82,6 +82,65 @@ func TestUbuntuContainerfile_InstallsLsbRelease(t *testing.T) {
 	}
 }
 
+// TestContainerfiles_GenerateEnUSUTF8 guards the warning bash prints on every
+// SSH login when the client's locale is en_US.UTF-8.
+//
+// OpenSSH forwards LANG and LC_*, sshd accepts them, and bash calls setlocale
+// on that name before the prompt. The container images these recipes start
+// from provide C.UTF-8, so the call fails and the session opens with
+// "cannot change locale (en_US.UTF-8)". Each family has its own way of
+// installing the locale data; every variant has to do it, because a slim or
+// runner guest is reached over SSH the same way a full one is.
+func TestContainerfiles_GenerateEnUSUTF8(t *testing.T) {
+	t.Parallel()
+	const check = `locale -a | grep -Eq '^en_US\.(utf8|UTF-8)$'`
+	const conf = `printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf`
+	const enable = `sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen`
+
+	needles := map[string][]string{
+		distro.Ubuntu.Name: {
+			"\n      locales \\\n",
+			enable,
+			"grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen",
+			"\n    locale-gen; \\\n",
+			"printf 'LANG=en_US.UTF-8\\n' > /etc/default/locale",
+			conf,
+			check,
+		},
+		distro.Fedora.Name: {
+			"\n      glibc-langpack-en \\\n",
+			conf,
+			check,
+		},
+		distro.Arch.Name: {
+			enable,
+			"grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen",
+			"\n    locale-gen; \\\n",
+			conf,
+			check,
+		},
+	}
+
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		wanted, ok := needles[name]
+		if !ok {
+			t.Fatalf("%s has no locale recipe here; a new family must say how it generates en_US.UTF-8", name)
+		}
+		for _, file := range []string{d.Containerfile, d.SlimContainerfile, d.NixContainerfile, d.RunnerContainerfile} {
+			recipe := readTemplate(t, "distro/"+file)
+			for _, needle := range wanted {
+				if !strings.Contains(recipe, needle) {
+					t.Errorf("%s does not contain %q; an SSH session that forwards en_US.UTF-8 would warn that setlocale failed", file, needle)
+				}
+			}
+		}
+	}
+}
+
 // TestContainerfiles_InstallCommonGuestTooling guards the guest contract
 // documented under "Guest tooling" in docs/cli.md: an agent that lands in a VM
 // finds the ordinary tools already there instead of having to install them,
