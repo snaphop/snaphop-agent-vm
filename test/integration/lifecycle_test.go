@@ -377,6 +377,10 @@ func TestVMLifecycle(t *testing.T) {
 			// boots, not a realistic workstation.
 			"--memory", "2G",
 			"--vcpus", "2",
+			// The guest update is the same steps as `agent-vm update` and is
+			// covered at the process boundary. Running it here would spend
+			// this budget on package mirrors.
+			"--no-update",
 		}, networkArgs(t)...)
 		res := h.mustRun(t, createTimeout, args...)
 		created = decode[state.VM](t, res, "create")
@@ -867,6 +871,8 @@ func TestVMGrowableMemory(t *testing.T) {
 		"--memory", bootMemory,
 		"--max-memory", memoryCeiling,
 		"--vcpus", "2",
+		// See TestVMLifecycle: this suite checks the domain, not package mirrors.
+		"--no-update",
 	}, networkArgs(t)...)
 	created := decode[state.VM](t, h.mustRun(t, createTimeout, args...), "create")
 

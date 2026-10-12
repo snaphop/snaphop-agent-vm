@@ -182,10 +182,27 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 		return result, err
 	}
 
-	steps, err := updateSteps(vm)
-	if err != nil {
+	if err := a.runGuestUpdate(ctx, vm, address, timeout); err != nil {
 		result.Error = err.Error()
 		return result, err
+	}
+	if a.dryRun {
+		// Nothing ran, so nothing was updated; saying otherwise would be a lie
+		// about the guest.
+		return result, nil
+	}
+	result.Updated = true
+	return result, nil
+}
+
+// runGuestUpdate runs one guest's package and tooling update. address is a
+// guest that already accepts SSH. `agent-vm update` and `create` both use it,
+// so a VM that was just created is brought up to date by the same steps as a
+// later `agent-vm update`.
+func (a *App) runGuestUpdate(ctx context.Context, vm *state.VM, address string, timeout time.Duration) error {
+	steps, err := updateSteps(vm)
+	if err != nil {
+		return err
 	}
 
 	sshOptions := domain.SSHOptions{
@@ -205,17 +222,14 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 	for number, step := range steps {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			err := exitf(ExitTimeout, "%s did not finish updating within %s; it stopped at %q.",
+			return exitf(ExitTimeout, "%s did not finish updating within %s; it stopped at %q.",
 				vm.Name, timeout, step.Name)
-			result.Error = err.Error()
-			return result, err
 		}
 
 		if step.Requires != "" {
 			present, err := a.guestHas(ctx, sshOptions, step.Requires, remaining)
 			if err != nil {
-				result.Error = err.Error()
-				return result, err
+				return err
 			}
 			if !present {
 				a.out.Progress("[%d/%d] %s: skipping %q — no %s in this guest\n",
@@ -229,26 +243,16 @@ func (a *App) updateOne(ctx context.Context, target updateTarget, skipStopped bo
 		run.Command = elevated(vm.Guest.User, step)
 		cmd, err := domain.SSHCommand(run)
 		if err != nil {
-			result.Error = err.Error()
-			return result, err
+			return err
 		}
 		cmd.Timeout = remaining
 		cmd.Output = a.updateOutput()
 
 		if _, err := a.runner.Run(ctx, cmd); err != nil {
-			err = fmt.Errorf("updating %s: %w", vm.Name, err)
-			result.Error = err.Error()
-			return result, err
+			return fmt.Errorf("updating %s: %w", vm.Name, err)
 		}
 	}
-
-	if a.dryRun {
-		// Nothing ran, so nothing was updated; saying otherwise would be a lie
-		// about the guest.
-		return result, nil
-	}
-	result.Updated = true
-	return result, nil
+	return nil
 }
 
 // updateOutput is where the guest's own output goes while a step runs: stderr,

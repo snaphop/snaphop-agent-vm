@@ -62,6 +62,8 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	opencodeConfig := flags.String("opencode-config", "", "opencode.json to install in the guest, replacing the one the base image ships")
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
+	noUpdate := flags.Bool("no-update", false, "leave the guest's packages and tooling as the base image shipped them")
+	updateTimeout := flags.Duration("update-timeout", defaultUpdateTimeout, "how long the guest update may take")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
 	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; labels are the org, <family>-latest, and <family>-<tag>; requires a -runner image and gh")
 	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "file containing a Tailscale auth key; the guest joins that network after it boots")
@@ -194,7 +196,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	if app.dryRun {
-		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join)
+		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join, *waitForSSH > 0 && !*noUpdate)
 	}
 
 	// The cloud-init seed is a virt-make-fs image, so an unreadable kernel
@@ -309,6 +311,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		githubSSHKey:    *githubSSHKey,
 		githubOrg:       githubOrg,
 		tailscale:       join,
+		// A guest that was not waited for has no SSH session to update
+		// through. --no-update is the explicit form of the same choice.
+		noUpdate:      *noUpdate,
+		update:        *waitForSSH > 0 && !*noUpdate,
+		updateTimeout: *updateTimeout,
 	})
 }
 
@@ -500,6 +507,12 @@ type createRequest struct {
 	githubSSHKey    bool
 	githubOrg       string
 	tailscale       *tailscaleJoin
+	// noUpdate is the --no-update flag. update is whether this create actually
+	// runs the guest update: it is off for --no-update, and also when the
+	// boot wait is disabled, because that leaves no SSH session.
+	noUpdate      bool
+	update        bool
+	updateTimeout time.Duration
 }
 
 // createVM performs the steps that change host state. Every one of them is
@@ -520,6 +533,19 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 	address, err := a.waitForGuest(ctx, req, vm)
 	if err != nil {
 		return err
+	}
+
+	// The guest update runs before Tailscale and GitHub. A new VM should be
+	// current before it joins a tailnet or accepts work, and a failure here
+	// leaves the VM recorded so `agent-vm update` can be retried. Those later
+	// steps are not retried on their own, so they wait until the update
+	// succeeds.
+	if req.update {
+		if err := a.updateNewVM(ctx, req, vm, address); err != nil {
+			return err
+		}
+	} else if req.noUpdate && address != "" {
+		a.out.Progress("Leaving %s's packages and tooling as the base image shipped them\n", vm.Name)
 	}
 
 	// Tailscale and the GitHub key are added after the VM is usable and
@@ -781,6 +807,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if detail := githubRunnerDetail(vm.GitHubRunner); detail != "" {
 		rows = append(rows, []string{"  github runner", detail})
 	}
+	if req.update {
+		rows = append(rows, []string{"  updated", "packages and tooling"})
+	}
 	rows = append(rows, []string{"  state dir", vm.Paths.Dir})
 	a.out.Table(rows)
 
@@ -789,9 +818,71 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 		return nil
 	}
 	// Without a wait there is no address to print, and telling the operator to
-	// ssh to a guest that may not have booted would be a guess.
-	a.out.Printf("\nNot waited for: check with `agent-vm info %s`.\n", vm.Name)
+	// ssh to a guest that may not have booted would be a guess. The update
+	// needs that session too, so a create that did not wait also did not
+	// update, unless the operator already asked to skip it.
+	if req.noUpdate {
+		a.out.Printf("\nNot waited for: check with `agent-vm info %s`.\n", vm.Name)
+		return nil
+	}
+	a.out.Printf("\nNot waited for, so %s was not updated. Check with `agent-vm info %s`, then `agent-vm update %s`.\n",
+		vm.Name, vm.Name, vm.Name)
 	return nil
+}
+
+// updateNewVM brings a guest that just accepted SSH up to date. The VM is
+// already recorded; a failure is reported without removing it.
+func (a *App) updateNewVM(ctx context.Context, req createRequest, vm *state.VM, address string) error {
+	if address == "" {
+		return exitf(ExitTimeout,
+			"%s did not become reachable, so it was not updated.\n"+
+				"  The VM is still there: look at it with `agent-vm info %s`.", vm.Name, vm.Name)
+	}
+	a.out.Progress("Updating %s\n", vm.Name)
+	if err := a.runGuestUpdate(ctx, vm, address, req.updateTimeout); err != nil {
+		return updateKept(vm.Name, err, pendingAfterUpdate(req))
+	}
+	return nil
+}
+
+// pendingAfterUpdate names the create steps that run only after the guest
+// update, so a failed update can say what it did not reach.
+func pendingAfterUpdate(req createRequest) []string {
+	var pending []string
+	if req.tailscale != nil {
+		pending = append(pending, "Tailscale")
+	}
+	if req.githubSSHKey {
+		pending = append(pending, "GitHub SSH key registration")
+	}
+	if req.githubOrg != "" {
+		pending = append(pending, "GitHub Actions runner registration")
+	}
+	return pending
+}
+
+// updateKept wraps an update failure with the fact that the VM was left in
+// place. The cause is wrapped, so a timeout still exits 6.
+func updateKept(name string, err error, pending []string) error {
+	again := fmt.Sprintf("Run `agent-vm update %s` to try again, or remove the VM with `agent-vm destroy %s`", name, name)
+	if len(pending) == 0 {
+		return fmt.Errorf("%w\n  The VM %s is still there. %s", err, name, again)
+	}
+	return fmt.Errorf("%w\n  The VM %s is still there. %s did not run. %s To finish those, destroy the VM and create it again",
+		err, name, englishList(pending), again)
+}
+
+func englishList(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
 }
 
 // createRollback undoes the parts of a create that already happened. It runs in
@@ -881,7 +972,7 @@ func (r *createRollback) undoUnconfirmedDomain(ctx context.Context) []string {
 // printCreatePlan prints what a create would run and write. Like the image
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
-func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool, join *tailscaleJoin) error {
+func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool, join *tailscaleJoin, update bool) error {
 	// The store, not the configured path, because a remote hypervisor's
 	// default state directory sits under *its* home directory.
 	store, err := a.Store()
@@ -950,6 +1041,11 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	plan(hostexec.Virsh.Name, "--connect", uri, "domifaddr", name, "--source", "agent")
 	plan(hostexec.Virsh.Name, "--connect", uri, "domiflist", name)
 	plan(hostexec.Virsh.Name, "--connect", uri, "dumpxml", name)
+	if update {
+		if err := a.printUpdatePlan(cfg, name); err != nil {
+			return err
+		}
+	}
 	if githubSSHKey {
 		// gh and the connection to the guest run here rather than on the
 		// hypervisor, so they are rendered as this machine would run them.
@@ -965,14 +1061,49 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 		a.printGitHubRunnerPlan(cfg.GuestUser, cfg.Distro, org, name)
 	}
 
-	for _, note := range []string{
+	notes := []string{
 		fmt.Sprintf("create the state directory %s", vmDir),
 		fmt.Sprintf("write the generated cloud-init user-data and meta-data to %s/%s/", vmDir, state.SeedDirectory),
 		fmt.Sprintf("capture the domain XML to %s/%s and the VM record to %s/%s",
 			vmDir, state.DomainXMLFile, vmDir, state.VMRecordFile),
 		fmt.Sprintf("build the base image %s first if it is not cached", ref),
-	} {
+	}
+	if update {
+		notes = append(notes, "bring the guest's packages and tooling up to date over SSH, the same steps as `agent-vm update`")
+	}
+	for _, note := range notes {
 		a.out.Printf("# %s\n", note)
 	}
 	return nil
+}
+
+// printUpdatePlan lists the guest commands create runs once SSH accepts a
+// login. The address does not exist until the guest boots, so the plan names
+// a placeholder the way the GitHub and Tailscale lines do. Probes that ask
+// whether a tool is installed are omitted: a dry run of `agent-vm update`
+// prints the steps themselves.
+func (a *App) printUpdatePlan(cfg *config.Config, name string) error {
+	vm := &state.VM{
+		Name:      name,
+		Guest:     state.VMGuest{User: cfg.GuestUser},
+		BaseImage: state.BaseImageRef{Distro: cfg.Distro.ImageName()},
+	}
+	steps, err := updateSteps(vm)
+	if err != nil {
+		return err
+	}
+	for _, step := range steps {
+		a.out.Printf("ssh%s %s@<guest address> %s\n",
+			jumpArgs(a.sshJump()), cfg.GuestUser, guestArgv(elevated(cfg.GuestUser, step)))
+	}
+	return nil
+}
+
+// guestArgv renders a remote command the way --dry-run renders any other
+// argument vector, so a plan can be pasted.
+func guestArgv(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return hostexec.Command{Name: argv[0], Args: argv[1:]}.String()
 }

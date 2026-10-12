@@ -102,7 +102,7 @@ var flagValues = map[string][]string{
 var valuelessFlags = map[string]bool{
 	"verbose": true, "quiet": true, "yes": true, "dry-run": true,
 	"version": true, "help": true, "force": true, "keep-disk": true,
-	"no-start": true, "all": true, "github": true,
+	"no-start": true, "no-update": true, "all": true, "github": true,
 	"tailscale-ephemeral": true, "tailscale-ssh": true,
 }
 
@@ -164,7 +164,7 @@ func completionSpecs() map[string]*completionSpec {
 		"setup":  {flags: []string{"github"}},
 		"create": {flags: []string{
 			"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge",
-			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "ssh-key",
+			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "no-update", "update-timeout", "ssh-key",
 			"host-authorized-keys", "virt-install-arg", "github-org", "github-ssh-key",
 			"tailscale-auth-key-file", "tailscale-hostname", "tailscale-login-server",
 			"tailscale-advertise-tag", "tailscale-ephemeral", "tailscale-ssh",
