@@ -820,6 +820,26 @@ manifests in a single build (`docker buildx build --platform
 linux/amd64,linux/arm64`) still need a `docker-container` builder, which
 `docker buildx create --use --bootstrap` sets up by pulling BuildKit.
 
+#### Guest locale
+
+Every base image generates `en_US.UTF-8` and sets it as the guest default
+(`LANG=en_US.UTF-8`). An SSH client forwards the locale of the machine you
+connect from, and `bash` applies it before the first prompt. The container
+images these recipes start from ship `C.UTF-8`, so a login whose locale is
+`en_US.UTF-8` — the usual desktop default — warns
+`setlocale: LC_ALL: cannot change locale (en_US.UTF-8)` on every session.
+Ubuntu installs the `locales` package and runs `locale-gen`. Fedora installs
+`glibc-langpack-en`. Arch uncomments `en_US.UTF-8` in `/etc/locale.gen` and
+runs `locale-gen`.
+
+An image already cached stays as it is until
+`agent-vm image build <distro> --force`. A VM created from the previous image
+keeps that disk; create a new VM from the rebuilt image to pick this up. A VM
+that is already running can be fixed in place. On Ubuntu:
+`sudo apt-get update && sudo apt-get install -y locales && sudo locale-gen en_US.UTF-8`.
+On Fedora: `sudo dnf -y install glibc-langpack-en`. On Arch, uncomment
+`en_US.UTF-8 UTF-8` in `/etc/locale.gen` and run `sudo locale-gen`.
+
 #### Guest clock
 
 Every base image ships and enables `chrony`. It is not a convenience. On

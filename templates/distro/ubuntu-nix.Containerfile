@@ -54,9 +54,33 @@ RUN apt-get update \
       qemu-guest-agent \
       iproute2 \
       ca-certificates \
+      locales \
       lsb-release \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+# SSH forwards the operator's locale into the session. The client sends LANG
+# and LC_*, sshd accepts them, and bash applies that locale before the first
+# prompt. The image this recipe starts from provides C.UTF-8, so a desktop
+# whose locale is en_US.UTF-8 — the default on macOS and on most Linux
+# desktops — prints this on every login:
+#
+#   -bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
+#
+# Generating en_US.UTF-8 here makes the forwarded value a locale the guest
+# has. It is also the guest's own default, so a session that forwards nothing
+# is still UTF-8. /etc/default/locale is what PAM reads on Ubuntu;
+# /etc/locale.conf is what systemd reads.
+RUN set -eu; \
+    sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
+    grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen; \
+    locale-gen; \
+    printf 'LANG=en_US.UTF-8\n' > /etc/default/locale; \
+    printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf; \
+    if ! locale -a | grep -Eq '^en_US\.(utf8|UTF-8)$'; then \
+      echo "en_US.UTF-8 was not generated; an SSH login would warn that setlocale failed" >&2; \
+      exit 1; \
+    fi
 
 # The tmux configuration every guest gets.
 #
