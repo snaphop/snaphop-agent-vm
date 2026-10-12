@@ -203,6 +203,27 @@ func TestVirtInstallArgs_AttachesTheGuestToOneNetworkOnly(t *testing.T) {
 	}
 }
 
+// TestVirtInstallArgs_DisablesTheNICOptionROM is the regression for a create
+// that died in QEMU with: failed to find romfile "efi-virtio.rom". The file
+// is an iPXE option ROM. A directly booted guest never runs it, and a host
+// installed with --no-install-recommends does not have the package that
+// ships it.
+func TestVirtInstallArgs_DisablesTheNICOptionROM(t *testing.T) {
+	t.Parallel()
+	for _, opts := range []CreateOptions{natOptions(), bridgeOptions()} {
+		args, err := VirtInstallArgs(opts)
+		if err != nil {
+			t.Fatalf("VirtInstallArgs: %v", err)
+		}
+		if count := countFlag(args, "--xml"); count != 1 {
+			t.Errorf("--xml appears %d times, want exactly 1: %v", count, args)
+		}
+		if got := flagValue(args, "--xml"); got != "./devices/interface/rom/@enabled=no" {
+			t.Errorf("--xml = %q, want the NIC option ROM disabled", got)
+		}
+	}
+}
+
 func TestVirtInstallArgs_BootsTheKernelDirectlyWithItsCommandLine(t *testing.T) {
 	t.Parallel()
 	args, err := VirtInstallArgs(natOptions())
