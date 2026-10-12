@@ -30,8 +30,9 @@ the stage runs. Later stages still run after one stage fails, and the script
 exits non-zero when any stage failed. A stage leaves the other stages'
 inputs alone. A Go test calls `t.Parallel()` unless it touches process-global
 state: `t.Setenv`, a package variable the test swaps, the default `slog`
-logger, or `os.Chdir`. The integration suite does not call `t.Parallel()`:
-those tests share one hypervisor and fixed guest names.
+logger, `os.Chdir`, or loading or unloading an AppArmor profile. The
+integration suite does not call `t.Parallel()`: those tests share one
+hypervisor and fixed guest names.
 
 ## 1. Project Overview
 
@@ -360,7 +361,8 @@ Major modules and responsibilities:
 - `internal/hostsetup` — prepares a supported host to run agent-vm: the
   family's package manager, `systemctl`, `usermod`, a search-only ACL for
   the QEMU account, and, when virt-aa-helper would deny the state directory,
-  one local AppArmor rule letting that helper read it (ADR-0018).
+  an AppArmor exception that lets that helper read the state directory only
+  (ADR-0018).
   `internal/cli` decides when to run it.
 - `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
   when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth

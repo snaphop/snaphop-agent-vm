@@ -83,6 +83,16 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `agent-vm setup` can allow virt-aa-helper to read a state directory under
+  a hidden home directory on Ubuntu 24.04. That release's AppArmor parser
+  rejects the `priority=` rule setup wrote, so the profile did not reload
+  and the helper still could not open the base image. Setup now asks the
+  parser. When `priority=` works, the local rule is unchanged. When it does
+  not, setup replaces the shipped hidden-home deny with denies that leave
+  out only the state directory, then adds a read-and-lock rule for that
+  directory. `agent-vm doctor` fails if a later libvirt package puts the
+  broad deny back. Run `agent-vm setup` again after that update. QEMU stays
+  confined.
 - `agent-vm image build` for a full Ubuntu, Fedora, or Arch image gets past
   installing Java. The check that mise returned an LTS major was split
   across lines the container build does not join, so the shell stopped at
