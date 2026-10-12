@@ -294,8 +294,8 @@ RUN set -eu; \
     lts=$(mise latest java@lts) || { echo "could not resolve the current Temurin LTS (java@lts)" >&2; exit 1; }; \
     version=${lts##*-}; \
     major=${version%%.*}; \
-    case "$major" in
-      ''|*[!0-9]*) echo "mise latest java@lts returned '${lts}', which is not an LTS major" >&2; exit 1 ;;
+    case "$major" in \
+      ''|*[!0-9]*) echo "mise latest java@lts returned '${lts}', which is not an LTS major" >&2; exit 1 ;; \
     esac; \
     mise use --global --yes "java@temurin-${major}" maven@latest; \
     rm -rf /tmp/mise-cache /usr/local/lib/mise/downloads

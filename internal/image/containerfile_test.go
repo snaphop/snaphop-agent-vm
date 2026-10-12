@@ -2,6 +2,8 @@ package image
 
 import (
 	"encoding/json"
+	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -1014,6 +1016,109 @@ func TestContainerfiles_DoNotHoldBackMiseReleases(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestContainerfiles_RunStepsAreValidShell guards a builder rule that is easy
+// to miss inside a long RUN: a line continues only when it ends in `\`, and
+// the newline is removed. A `case` arm written without that backslash ends
+// the step at `case "$major" in`. The shell then exits 2 with "end of file
+// unexpected (expecting ")")" and the rest of the step, including the JDK
+// install, never runs. The following physical lines are separate
+// instructions, so the build stops there too.
+//
+// The splitter matches that continuation rule. These recipes do not use
+// Dockerfile heredocs; a heredoc would need the splitter to learn it.
+func TestContainerfiles_RunStepsAreValidShell(t *testing.T) {
+	t.Parallel()
+	known := map[string]bool{
+		"FROM": true, "ARG": true, "ENV": true, "RUN": true, "COPY": true,
+		"ADD": true, "LABEL": true, "USER": true, "WORKDIR": true,
+		"EXPOSE": true, "VOLUME": true, "ENTRYPOINT": true, "CMD": true,
+		"SHELL": true, "HEALTHCHECK": true, "STOPSIGNAL": true, "ONBUILD": true,
+	}
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		for _, file := range []string{d.Containerfile, d.SlimContainerfile, d.NixContainerfile, d.RunnerContainerfile} {
+			recipe := readTemplate(t, "distro/"+file)
+			steps, err := dockerfileInstructions(recipe)
+			if err != nil {
+				t.Errorf("%s: %v", file, err)
+				continue
+			}
+			for _, step := range steps {
+				fields := strings.Fields(step.text)
+				if len(fields) == 0 {
+					t.Errorf("%s:%d: empty instruction", file, step.line)
+					continue
+				}
+				keyword := strings.ToUpper(fields[0])
+				if !known[keyword] {
+					t.Errorf("%s:%d: %q is not a Containerfile instruction; a previous line is missing its continuation backslash", file, step.line, fields[0])
+					continue
+				}
+				if keyword != "RUN" {
+					continue
+				}
+				script := strings.TrimSpace(strings.TrimSpace(step.text)[len(fields[0]):])
+				if script == "" || strings.HasPrefix(script, "[") {
+					continue
+				}
+				cmd := exec.Command("sh", "-n", "-c", script)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					tail := script
+					if len(tail) > 240 {
+						tail = tail[len(tail)-240:]
+					}
+					t.Errorf("%s:%d: RUN is not valid shell: %v: %s\n…%s", file, step.line, err, strings.TrimSpace(string(out)), tail)
+				}
+			}
+		}
+	}
+}
+
+// dockerfileInstruction is one builder instruction with the source line it
+// starts on. Continued lines are joined with the newline removed, which is
+// what the shell receives.
+type dockerfileInstruction struct {
+	line int
+	text string
+}
+
+// dockerfileInstructions splits a Containerfile the way the image builder
+// does. A trailing backslash continues the instruction. A comment or a blank
+// line is skipped only when it is not itself a continuation.
+func dockerfileInstructions(recipe string) ([]dockerfileInstruction, error) {
+	var out []dockerfileInstruction
+	var b strings.Builder
+	start := 0
+	cont := false
+	for i, line := range strings.Split(recipe, "\n") {
+		lineno := i + 1
+		if !cont {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			start = lineno
+			b.Reset()
+		}
+		if strings.HasSuffix(line, "\\") {
+			b.WriteString(strings.TrimSuffix(line, "\\"))
+			cont = true
+			continue
+		}
+		b.WriteString(line)
+		out = append(out, dockerfileInstruction{line: start, text: b.String()})
+		cont = false
+	}
+	if cont {
+		return out, fmt.Errorf("file ended while a line continuation was still open, starting at line %d", start)
+	}
+	return out, nil
 }
 
 // TestUserSetupScript_DoesEveryJobItIsThereFor guards the first-boot script
