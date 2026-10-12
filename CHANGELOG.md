@@ -81,6 +81,18 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- `agent-vm create` brings the new guest up to date once SSH accepts a login,
+  before Tailscale or GitHub setup. It runs the same package and tooling
+  steps as `agent-vm update`. The guest needs a network path to its package
+  mirrors, and the update can take a while; the limit is 45 minutes
+  (`--update-timeout`). If it fails, the VM stays and the later Tailscale and
+  GitHub steps do not run. Run `agent-vm update <name>` to try again. To
+  finish a join or a registration the update never reached, destroy the VM
+  and create it again. `--no-update` leaves the guest as the base image
+  shipped it. `--wait-for-ssh 0` skips the update as well, because there is
+  no SSH session to run it through, and tells you to run `agent-vm update`
+  afterwards. A kernel package updated this way is still not the kernel the
+  VM boots next time. That still comes from rebuilding the base image.
 - Full base images install the current Eclipse Temurin JDK LTS. The build
   asks mise which major `java@lts` names and installs `java@temurin-<major>`
   (Temurin 25 with mise 2026.10.5). `java@temurin` was the newest Temurin

@@ -43,7 +43,20 @@ func TestCreate_AddsTheGuestGeneratedKeyToGitHub(t *testing.T) {
 		t.Fatalf("exit code = %d: %s", code, stderr)
 	}
 
-	argv := strings.Join(fake.Argvs(), "\n")
+	argvs := fake.Argvs()
+	argv := strings.Join(argvs, "\n")
+	updateAt, githubAt := -1, -1
+	for i, line := range argvs {
+		if strings.Contains(line, "apt-get update") && updateAt < 0 {
+			updateAt = i
+		}
+		if strings.Contains(line, "user/keys") {
+			githubAt = i
+		}
+	}
+	if updateAt < 0 || githubAt < 0 || githubAt < updateAt {
+		t.Errorf("the guest update must finish before the key is added to GitHub:\n%s", argv)
+	}
 	for _, want := range []string{
 		"gh auth status --hostname github.com",
 		"-f key=" + strings.TrimSpace(guestPublicKey),

@@ -8,8 +8,9 @@ command is `agent-vm`.
 
 An agent that can run arbitrary commands should not run them on your laptop. The
 `agent-vm` command gives each agent task its own VM: full root access, a real
-kernel, real networking, and a hard isolation boundary — created in seconds and
-thrown away when the task is done.
+kernel, real networking, and a hard isolation boundary. The disk is ready in
+seconds from a cached image, `create` then brings the guest up to date, and
+the VM is thrown away when the task is done.
 
 > **Status: implementation in progress.** Every command in the documented
 > contract is implemented — `doctor`, `image build`/`list`/`inspect`/`rm`,
@@ -161,7 +162,9 @@ differences and update procedure.
 ## What A VM Comes With
 
 A base image is not a bare distro: it carries the tools an agent expects to
-find already installed, so `create` stays fast and a guest works offline.
+find already installed. `create` then brings the guest's packages and tooling
+up to date over the guest's network. `--no-update` leaves the cached image as
+it is, which is what an offline create needs.
 Beyond what makes a container image boot as a VM (kernel, `systemd`,
 `cloud-init`, `openssh-server`, `sudo`, `qemu-guest-agent`), every full image ships
 `git`, a C toolchain, Python, Node.js, Go, Rust, the current Eclipse Temurin JDK LTS with Maven (via mise),
@@ -219,6 +222,7 @@ agent-vm create ◄────────────────────�
    │   qemu-img create -b base.qcow2 …        (copy-on-write overlay)
    │   virt-make-fs --label=cidata seed/      (NoCloud seed: hostname, SSH key)
    │   virt-install --import --boot kernel=…  (direct kernel boot)
+   │   ssh: same steps as agent-vm update     (packages and tooling)
    ▼
 running VM ──► NAT network or host bridge      (virsh from here on)
 ```

@@ -774,8 +774,10 @@ service.
 Beyond the packages that make a container image boot as a VM, a full image
 carries the tools an agent working inside the guest expects to find already
 installed. They live in the base image rather than in per-VM cloud-init
-packages so `create` stays fast: the download is paid once per cached image
-instead of on every first boot, and a VM works the same way offline.
+packages, so the download is paid once per cached image instead of being
+installed on every first boot. `create` then brings that guest up to date
+over its own network. `--no-update` leaves the cached image as it is, which
+is what an offline create needs.
 
 | Group | What is installed |
 |---|---|
@@ -1266,7 +1268,9 @@ and must not already exist.
 | `--opencode-config <path>` | none | Your own `opencode.json`, installed in the guest in place of the one the base image ships. Must be valid JSON. |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
-| `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting. |
+| `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting and skips the guest update. |
+| `--no-update` | off | Leave the guest's packages and tooling as the base image shipped them. |
+| `--update-timeout <duration>` | `45m` | How long that guest update may take. Every step shares this one budget. Exceeding it exits `6` and leaves the VM in place. |
 | `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
 | `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots, labeled with `<org>`, `<family>-latest`, and `<family>-<tag>`. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
 | `--tailscale-auth-key-file <path>` | none | Join the guest to a Tailscale network after it boots. The file holds one auth key. No flag takes the key itself, and no config key or environment variable turns this on. Requires a wait. |
@@ -1276,8 +1280,11 @@ and must not already exist.
 | `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. |
 | `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. |
 
-On success, prints the VM name, address, and SSH command; with `--output json`,
-prints the same `vm.json` record the tool stored.
+On success, prints the VM name, address, and SSH command, and, when the guest
+update ran, that its packages and tooling were updated.
+With `--output json`, prints the same `vm.json` record the tool stored. The
+update is not a field of that record: it changes the overlay, and the record
+stays the description of how the VM was defined.
 
 Inputs are checked before anything on the host is touched. The SSH keys, the
 `--cloud-init` file (it must begin with a header cloud-init recognizes), the
@@ -1370,12 +1377,34 @@ Constraints, all of which are checked before anything on the host changes:
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.
 
-After the VM is recorded, a boot-wait timeout, a Tailscale join failure, a
-GitHub SSH-key registration failure, and a GitHub Actions runner registration
-failure retain
-it for inspection. A `--wait-for-ssh` timeout
+Once SSH accepts a login, `create` brings the guest up to date before it
+joins Tailscale or registers anything with GitHub. The steps are the same
+ones [`agent-vm update`](#agent-vm-update-name---all) runs: the family's
+package update, then mise, codex, and the shared Rust toolchain, each skipped
+when the guest has no such command. The guest's own output is streamed to
+stderr. The budget is `--update-timeout` (default 45 minutes), shared by
+every step. A guest that needs no refresh still runs the steps; they finish
+quickly when nothing has changed. This uses the guest's network. A cached
+base image is not modified, and a kernel package installed here is not the
+kernel the VM boots next time — that still comes from `agent-vm image build
+<distro> --force` and a new VM.
+
+`--no-update` skips that step and leaves the overlay as the base image
+shipped it. `--wait-for-ssh 0` skips it too, because there is no SSH session
+to update through, and the success message says how to run `agent-vm update`
+afterwards. `--dry-run` prints the guest commands with `<guest address>`
+standing in for the address the boot has not assigned yet.
+
+After the VM is recorded, a boot-wait timeout, a guest update failure, a
+Tailscale join failure, a GitHub SSH-key registration failure, and a GitHub
+Actions runner registration failure retain it for inspection. A failed update
+does not join Tailscale or register the GitHub key or the Actions runner; the
+message names what did not run. Retry the update with `agent-vm update
+<name>`. To finish a Tailscale join or a GitHub registration that the update
+never reached, destroy the VM and create it again. A `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
-booted slowly" and "it failed to boot" need the same evidence. Clean it up with
+booted slowly" and "it failed to boot" need the same evidence. An update that
+exceeds `--update-timeout` exits `6` the same way. Clean it up with
 `agent-vm destroy <name>` once you have looked.
 
 #### Default SSH keys
@@ -1964,7 +1993,7 @@ table below is the summary.
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
-| `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`; `--xml ./devices/interface/rom/@enabled=no` so QEMU does not load a virtio option ROM), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe) |
+| `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`; `--xml ./devices/interface/rom/@enabled=no` so QEMU does not load a virtio option ROM), `virsh domifaddr`, `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe), then the guest commands listed for `update` (skipped with `--no-update` or `--wait-for-ssh 0`) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr`, `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
 | `ssh` | `virsh domstate`, `virsh domifaddr`, then `ssh` |

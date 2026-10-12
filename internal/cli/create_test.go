@@ -665,6 +665,9 @@ func TestCreate_WaitingCanBeDisabled(t *testing.T) {
 	if strings.Contains(stdout, "192.168.122.3") {
 		t.Errorf("no wait means no address to report:\n%s", stdout)
 	}
+	if !strings.Contains(stdout, "was not updated") || !strings.Contains(stdout, "agent-vm update agent-01") {
+		t.Errorf("a create that does not wait should say the guest was not updated:\n%s", stdout)
+	}
 }
 
 // A bridge running the spanning tree protocol holds a guest's tap port in
@@ -1233,6 +1236,126 @@ func TestCreate_PrefersTheNamedKeyOverTheDefaultIdentities(t *testing.T) {
 	}
 	if !slices.Equal(vm.Guest.SSHKeyPaths, []string{keyPath}) {
 		t.Errorf("recorded key paths = %v, want %v", vm.Guest.SSHKeyPaths, []string{keyPath})
+	}
+}
+
+func TestCreate_UpdatesTheGuestAfterItAcceptsSSH(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s\n%s", code, stderr, stdout)
+	}
+
+	guest := sshArgvs(fake)
+	probeAt, updateAt := -1, -1
+	for i, step := range guest {
+		if step == "true" && probeAt < 0 {
+			probeAt = i
+		}
+		if step == "sudo -n apt-get update" {
+			updateAt = i
+		}
+	}
+	if probeAt < 0 || updateAt < 0 || updateAt < probeAt {
+		t.Fatalf("the update must follow the SSH readiness probe:\n%v", guest)
+	}
+	if !strings.Contains(stdout, "packages and tooling") {
+		t.Errorf("the report does not say the guest was updated:\n%s", stdout)
+	}
+	for _, call := range fake.Calls() {
+		if call.Name != "ssh" || !contains(call.Args, "apt-get") {
+			continue
+		}
+		if !contains(call.Args, "BatchMode=yes") {
+			t.Errorf("the update must not be able to sit on an ssh prompt: %v", call.Argv())
+		}
+	}
+}
+
+func TestCreate_NoUpdateLeavesTheGuestAsTheBaseImageShippedIt(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--no-update")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	for _, step := range sshArgvs(fake) {
+		if strings.Contains(step, "apt-get") || strings.Contains(step, "mise") {
+			t.Errorf("--no-update still updated the guest: %q", step)
+		}
+	}
+	if strings.Contains(stdout, "packages and tooling") {
+		t.Errorf("--no-update reported an update:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "as the base image shipped them") {
+		t.Errorf("create did not say it was leaving the image alone:\n%s", stderr)
+	}
+}
+
+func TestCreate_AnUpdateFailureLeavesTheVMAndSkipsGitHub(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := withGitHub(createHost(t), "119548016")
+	previous := fake.MatchFunc
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		if c.Name == "ssh" && contains(c.Args, "apt-get") && contains(c.Args, "update") {
+			return hostexec.FakeResponse{ExitCode: 100, Stderr: "Could not resolve 'archive.ubuntu.com'\n"}, true
+		}
+		if previous != nil {
+			return previous(c)
+		}
+		return hostexec.FakeResponse{}, false
+	}
+
+	code, _, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--github-ssh-key")...)
+	if code != ExitFailure {
+		t.Fatalf("exit code = %d, want %d\n%s", code, ExitFailure, stderr)
+	}
+	if !strings.Contains(stderr, "archive.ubuntu.com") || !strings.Contains(stderr, "still there") {
+		t.Errorf("the failure should name the guest's diagnosis and that the VM remains:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "agent-vm update agent-01") || !strings.Contains(stderr, "GitHub SSH key registration did not run") {
+		t.Errorf("the failure should say how to retry and what did not run:\n%s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01", "vm.json")); err != nil {
+		t.Errorf("the VM record was not kept: %v", err)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.Contains(argv, "undefine") {
+			t.Errorf("a failed update must not undefine the VM: %s", argv)
+		}
+		if strings.Contains(argv, "user/keys") {
+			t.Errorf("GitHub key registration ran after the update failed: %s", argv)
+		}
+		if strings.Contains(argv, "dist-upgrade") {
+			t.Errorf("a failed refresh must not be followed by an upgrade: %s", argv)
+		}
+	}
+}
+
+func TestCreate_DryRunListsTheUpdateAndNoUpdateOmitsIt(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, stdout, stderr := cliRun(t, createHost(t), stateDir, append([]string{"--dry-run"}, createArgs(keyPath)...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "apt-get update") || !strings.Contains(stdout, "agent-vm update") {
+		t.Errorf("the plan does not include the guest update:\n%s", stdout)
+	}
+
+	code, stdout, stderr = cliRun(t, createHost(t), stateDir, append([]string{"--dry-run"}, createArgs(keyPath, "--no-update")...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if strings.Contains(stdout, "apt-get") {
+		t.Errorf("--no-update still plans an update:\n%s", stdout)
 	}
 }
 

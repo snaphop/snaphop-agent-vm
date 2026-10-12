@@ -85,7 +85,8 @@ Treat
 update them in the same change if the implementation must diverge.
 
 Users are developers and agent supervisors who need a throwaway machine per
-task: a VM is created in seconds from a cached base image, the agent works
+task: a VM's disk is created in seconds from a cached base image, `create`
+then brings the guest's packages and tooling up to date, the agent works
 inside it as the `agent` user with passwordless `sudo` by default, and the VM
 is destroyed afterwards. The three invariants that
 matter most are **the guest is untrusted** (an agent inside it may run arbitrary
@@ -262,7 +263,9 @@ Host preparation beyond package installation (bridge creation, libvirt NAT
 network definition, storage location, unprivileged access) is documented in
 [`docs/host-setup.md`](./docs/host-setup.md). No credentials are required for
 development. Image builds use public registries, package mirrors, and tool
-download services; offline VM creation is possible once a base image is cached.
+download services. Once a base image is cached, `create --no-update` does not
+need the network; a normal `create` still updates the guest over its own
+network.
 
 ## 4. Common Commands
 
@@ -393,14 +396,17 @@ file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
 → poll `virsh domifaddr` and wait for SSH (unless waiting is disabled)
+→ bring the guest's packages and tooling up to date, the same steps as
+`agent-vm update` (unless `--no-update`, or the boot wait was disabled)
 → optionally install Tailscale in the guest and join the tailnet (the auth
 key goes on stdin, not into the seed) → optionally register the guest public
 key with GitHub → optionally register a `-runner` guest as an organization
 Actions runner (the registration token goes on stdin, not into the seed).
 Failures through recording
-roll back the domain and per-VM directory; a boot-wait, Tailscale join, GitHub
-SSH-key, or Actions-runner registration
-failure retains the recorded VM for inspection. Built base images and the shared
+roll back the domain and per-VM directory; a boot-wait, guest update, Tailscale
+join, GitHub SSH-key, or Actions-runner registration
+failure retains the recorded VM for inspection. An update failure does not
+continue into the Tailscale or GitHub steps. Built base images and the shared
 NAT network remain reusable. Cleanup failures must report what remains.
 
 Runtime profiles and configuration: a single profile, parameterized by the
@@ -415,8 +421,9 @@ and, for full images, tool and vendor download services. Runner images also
 download the pinned GitHub Actions runner release during the image build.
 The first Tailscale join downloads Tailscale's installer inside that guest;
 a guest that already has `tailscale` on `PATH` skips the download.
-`--github-ssh-key` and `--github-org` contact GitHub from the client; `update`
-downloads packages and tools from inside guests.
+`--github-ssh-key` and `--github-org` contact GitHub from the client; `create`
+(unless `--no-update`) and `update` download packages and tools from inside
+guests.
 
 Canonical contracts and what must change together: `docs/cli.md` (flags,
 subcommands, exit codes, underlying commands), `test/golden/` (`virt-install` argv

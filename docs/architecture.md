@@ -142,7 +142,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-make-fs --type=vfat --label=cidata seed/ seed.img` (ADR-0011) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
-| Guest update (`update`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
+| Guest update (`update`, and `create` unless `--no-update` or `--wait-for-ssh 0`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update` |
 | Host preparation (`setup`) | the family's package manager, `systemctl enable --now`, `usermod -aG`, `setfacl -m u:<qemu user>:x`, and, when virt-aa-helper denies a hidden home state directory, `apparmor_parser -Q -K /dev/stdin` to see whether `priority=` parses, then either `tee` of one local `priority=` rule or, when the parser rejects it, `tee` of the main profile with that deny replaced plus `tee` of the local carve-out, and `apparmor_parser -r` (ADR-0018). Firewall rules, bridges, SELinux, and QEMU's profile are not touched |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 | GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command. That command sets labels `<org>`, `<family>-latest`, and `<family>-<tag>` (for the default Ubuntu image, `ubuntu-latest` and `ubuntu-26.04`). `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
@@ -157,8 +157,9 @@ this?" is always answerable from the state directory.
 
 All work is synchronous and foreground; there is no queue, scheduler, or
 background worker. Long waits include image builds, the guest boot wait during `create`
-(bounded by `--wait-for-ssh`), graceful shutdown, and guest software updates
-(bounded by `update --timeout`).
+(bounded by `--wait-for-ssh`), the guest update `create` runs once SSH accepts
+a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update`
+(bounded by `--timeout`).
 
 ## Components
 
@@ -500,12 +501,18 @@ background worker. Long waits include image builds, the guest boot wait during `
     `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence.
-11. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
+11. **Update the guest.** Unless `--no-update` was given, run the same package
+    and tooling steps as `agent-vm update` over SSH, bounded by
+    `--update-timeout`. `--wait-for-ssh 0` skips this step, because there is
+    no session to run it through. A failure leaves the VM in place and does
+    not continue to the Tailscale or GitHub steps. The base image is not
+    modified.
+12. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
     copy the join script over SSH, install Tailscale when the guest does not
     already have it, then run `tailscale up` with the auth key on stdin.
     Save the non-secret result into `vm.json`. A failure here leaves the VM
     in place and does not store the key.
-12. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
+13. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
     after the join: it reads the guest's public key and adds it with `gh` on
     the client. When the image is a `-runner` variant and an organization is
     set, `create` then fetches a registration token with `gh` on the client
@@ -515,9 +522,9 @@ background worker. Long waits include image builds, the guest boot wait during `
 
 Rollback: steps 5–9 are undone in reverse on failure — `virsh destroy`, `virsh
 undefine`, then delete the overlay, the seed, and the state directory. Steps 10
-through 12 are the deliberate exceptions: a boot-wait timeout, a failed
-Tailscale join, a failed GitHub SSH-key registration, and a failed
-Actions-runner registration preserve the VM and its
+through 13 are the deliberate exceptions: a boot-wait timeout, a failed guest
+update, a failed Tailscale join, a failed GitHub SSH-key registration, and a
+failed Actions-runner registration preserve the VM and its
 console log rather than destroying the evidence. `undefine` is
 never given `--remove-all-storage`; the tool deletes its own files after the
 containment check, so libvirt is never asked to remove storage it might interpret
