@@ -83,6 +83,12 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `agent-vm image build` for a full Ubuntu, Fedora, or Arch image gets past
+  installing Java. The check that mise returned an LTS major was split
+  across lines the container build does not join, so the shell stopped at
+  `case` with "end of file unexpected" and the JDK was never installed.
+  An image already cached stays as it is until
+  `agent-vm image build <family> --force`.
 - Rootless `podman` can pull and build after `agent-vm setup` on Ubuntu.
   `newuidmap` applies the subordinate UID range, and `pasta` is the network
   command a build step uses. The `podman` package only recommends `uidmap`
