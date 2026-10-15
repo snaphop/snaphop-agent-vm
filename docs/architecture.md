@@ -130,7 +130,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Domain lifecycle | `virsh start` / `shutdown` / `destroy` / `undefine` |
 | Domain inspection | `virsh list --all --name`, `domstate`, `dumpxml`, `domblklist`, `domiflist` |
 | Hypervisor architecture | `virsh capabilities` |
-| Guest address | `virsh domifaddr --source lease` (NAT) or `--source agent` (bridged), filtered to the recorded MAC |
+| Guest address | `virsh domifaddr --source lease` (NAT) or `--source agent` (bridged), filtered to the recorded MAC. When a NAT guest has more than one lease for that MAC, `virsh net-dhcp-leases` supplies the expiry and the latest one is used |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -d -json link show type bridge` |
@@ -282,7 +282,7 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 - **Responsibility:** Build the `virt-install` argument vector that defines a VM,
   and drive the rest of the lifecycle through `virsh` (`start`, `shutdown`,
   `destroy`, `undefine`) and its query subcommands (`list --all --name`,
-  `dumpxml`, `domstate`, `domblklist`, `domiflist`, `domifaddr`). `console` and `ssh` are exec'd directly so
+  `dumpxml`, `domstate`, `domblklist`, `domiflist`, `domifaddr`, `net-dhcp-leases`). `console` and `ssh` are exec'd directly so
   the operator gets a real terminal, not a proxied one.
 - **Public interface:** the `virt-install` argument vector — direct kernel boot via
   `--boot kernel=,initrd=,kernel_args=`, `--import --disk … bus=virtio`,
@@ -496,8 +496,11 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
    argv). Recording happens *before* the wait, so that a VM left in place by a
    boot timeout is still one `agent-vm destroy` knows how to remove.
 10. **Wait for the guest.** Poll `virsh domifaddr` for an address — `--source
-    lease` on NAT, `--source agent` on a bridge, on the recorded MAC only —
-    then wait for SSH, bounded by
+    lease` on NAT, `--source agent` on a bridge, on the recorded MAC only.
+    When a NAT guest has more than one lease for that MAC, `virsh
+    net-dhcp-leases` names the one with the latest expiry: recreating a VM
+    keeps the MAC, the new guest takes a new lease, and the older leases
+    stay until they expire. Then wait for SSH, bounded by
     `--wait-for-ssh`. A timeout exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence.

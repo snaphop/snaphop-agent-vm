@@ -242,6 +242,11 @@ type NIC struct {
 	// on any other interface — docker0, a nested libvirt bridge — are ignored.
 	// Empty means the record predates the MAC being captured.
 	MAC string
+	// Network is the libvirt network a NAT guest is attached to. When that
+	// guest has more than one DHCP lease for MAC, the lease table names which
+	// one is current. Empty leaves the first leased address in place, which
+	// is the only one there is for a guest with a single lease.
+	Network string
 }
 
 // source is the `virsh domifaddr --source` the NIC's address is read from.
@@ -287,19 +292,41 @@ func onInterface(interfaces []Interface, mac string) []Interface {
 	return kept
 }
 
-// IPv4Address returns the first IPv4 address the guest is reachable at, or ""
-// if it has none yet. IPv4 specifically: it is what the ssh convenience wrapper
-// and the address column of `agent-vm list` report.
+// IPv4Address returns the IPv4 address the guest is reachable at, or "" if it
+// has none yet. IPv4 specifically: it is what the ssh convenience wrapper and
+// the address column of `agent-vm list` report.
 //
 // Loopback is skipped. `virsh domifaddr --source agent` reports every interface
 // the guest agent can see, and lists `lo` with 127.0.0.1 first; taking it
 // literally points ssh back at the host's own sshd instead of the guest. A NIC
 // with no recorded MAC is the case that still sees it.
+//
+// A NAT guest can have several leases for one MAC. The MAC is derived from the
+// VM's name and disk path, so recreating it in place keeps the address, while
+// the new guest's DHCP client identity does not. dnsmasq keeps a lease per
+// client identity until it expires, and `domifaddr --source lease` prints all
+// of them in lease-file order. The first row is then an address nothing
+// answers on. `virsh net-dhcp-leases` records each expiry, and the latest
+// one is the lease the guest last accepted.
 func (m *Manager) IPv4Address(ctx context.Context, name string, nic NIC) (string, error) {
 	interfaces, err := m.Addresses(ctx, name, nic)
 	if err != nil {
 		return "", err
 	}
+	found := ipv4Addresses(interfaces)
+	if len(found) == 0 {
+		return "", nil
+	}
+	if len(found) > 1 && !nic.Bridged && nic.Network != "" {
+		return m.latestDHCPIPv4(ctx, nic)
+	}
+	return found[0], nil
+}
+
+// ipv4Addresses keeps the non-loopback IPv4 addresses, in the order virsh
+// printed them.
+func ipv4Addresses(interfaces []Interface) []string {
+	found := make([]string, 0, len(interfaces))
 	for _, iface := range interfaces {
 		if iface.Protocol != "ipv4" || iface.Address == "" {
 			continue
@@ -307,9 +334,87 @@ func (m *Manager) IPv4Address(ctx context.Context, name string, nic NIC) (string
 		if ip := net.ParseIP(iface.Address); ip == nil || ip.IsLoopback() {
 			continue
 		}
-		return iface.Address, nil
+		found = append(found, iface.Address)
 	}
-	return "", nil
+	return found
+}
+
+// dhcpLease is one row of `virsh net-dhcp-leases`.
+type dhcpLease struct {
+	Expiry   time.Time
+	MAC      string
+	Protocol string
+	Address  string
+}
+
+// latestDHCPIPv4 returns the IPv4 lease for nic.MAC whose expiry is furthest
+// ahead. That is the lease dnsmasq most recently handed out or renewed.
+func (m *Manager) latestDHCPIPv4(ctx context.Context, nic NIC) (string, error) {
+	res, err := m.run(ctx, hostexec.Read, "net-dhcp-leases", nic.Network)
+	if err != nil {
+		return "", fmt.Errorf("reading the DHCP leases on %s: %w", nic.Network, err)
+	}
+	leases, err := parseDHCPLeases(res.Stdout)
+	if err != nil {
+		return "", fmt.Errorf("reading the DHCP leases on %s: %w", nic.Network, err)
+	}
+	return latestLeaseAddress(leases, nic.MAC), nil
+}
+
+// latestLeaseAddress returns the IPv4 address in leases for mac with the
+// latest expiry, or "" when mac has none.
+func latestLeaseAddress(leases []dhcpLease, mac string) string {
+	var best *dhcpLease
+	for i := range leases {
+		lease := &leases[i]
+		if lease.Address == "" || lease.Protocol != "ipv4" || !strings.EqualFold(lease.MAC, mac) {
+			continue
+		}
+		if best == nil || lease.Expiry.After(best.Expiry) {
+			best = lease
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.Address
+}
+
+// parseDHCPLeases reads the table `virsh net-dhcp-leases` prints. virsh has no
+// machine-readable mode for it. The expiry is two columns, a date and a time,
+// so a row is read as those plus the MAC, protocol, address, and hostname;
+// the client id that follows is not needed to choose a lease.
+func parseDHCPLeases(out []byte) ([]dhcpLease, error) {
+	rows, err := parseVirshTable(out, 6)
+	if err != nil {
+		return nil, err
+	}
+
+	leases := make([]dhcpLease, 0, len(rows))
+	for _, row := range rows {
+		expiryText := row[0] + " " + row[1]
+		expiry, err := time.Parse("2006-01-02 15:04:05", expiryText)
+		if err != nil {
+			return nil, fmt.Errorf("unreadable expiry %q from virsh net-dhcp-leases", expiryText)
+		}
+		address := row[4]
+		if address != "N/A" && address != "-" {
+			value, _, _ := strings.Cut(address, "/")
+			if err := ValidateAddress(value); err != nil {
+				return nil, err
+			}
+			address = value
+		} else {
+			address = ""
+		}
+		leases = append(leases, dhcpLease{
+			Expiry:   expiry,
+			MAC:      row[2],
+			Protocol: row[3],
+			Address:  address,
+		})
+	}
+	return leases, nil
 }
 
 // MAC returns the MAC address of the domain's first interface, which is
@@ -425,7 +530,7 @@ func (m *Manager) WaitForAddress(ctx context.Context, name string, nic NIC, time
 	if address == "" {
 		return "", &TimeoutError{
 			What: "get an address", Name: name, Waited: timeout, LastErr: lastErr,
-			Remedy: "Check the guest's console log for a boot failure, or run `virsh domifaddr " + name + "`.",
+			Remedy: "Check the guest's console log for a boot failure, or run `virsh domifaddr " + name + "` and `virsh net-dhcp-leases`.",
 		}
 	}
 	return address, nil

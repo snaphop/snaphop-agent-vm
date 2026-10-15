@@ -44,7 +44,14 @@ func restartCommand() *command {
 // guestNIC is the host's own account of a VM's network interface, which is what
 // its address is looked up from.
 func guestNIC(vm *state.VM) domain.NIC {
-	return domain.NIC{Bridged: vm.Network.Mode == config.NetworkBridge, MAC: vm.Network.MAC}
+	nic := domain.NIC{Bridged: vm.Network.Mode == config.NetworkBridge, MAC: vm.Network.MAC}
+	// The libvirt network name is what `net-dhcp-leases` is asked of when a
+	// NAT guest has more than one lease for its MAC. A bridge is not a
+	// libvirt network, so its name is not one.
+	if !nic.Bridged {
+		nic.Network = vm.Network.Name
+	}
+	return nic
 }
 
 // vmTarget loads a recorded VM and returns a manager bound to the connection it

@@ -331,6 +331,10 @@ virsh -c qemu:///system net-list --all
 virsh -c qemu:///system net-dhcp-leases agent-vm-nat
 ```
 
+Recreating a VM keeps its MAC. The new guest asks for a lease with a new
+client identity, so this table can show several addresses for one MAC until
+the old leases expire. `agent-vm` connects to the one with the latest expiry.
+
 If the network fails to start, the usual causes are a subnet conflict with an
 existing libvirt network or another `virbr` interface, and a missing
 `dnsmasq`/`nftables` dependency. Both appear in `journalctl -u libvirtd`.
