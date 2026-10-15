@@ -621,6 +621,66 @@ func TestCreate_ReportsHostStateItCouldNotCleanUp(t *testing.T) {
 	}
 }
 
+// Recreating a VM keeps its MAC. dnsmasq still has the previous boot's lease,
+// and that lease has the latest expiry until the new guest is handed one.
+// The first probe goes to the stale address and is refused; the lease granted
+// during the wait is the one create has to follow.
+func TestCreate_FollowsTheNATLeaseGrantedWhileSSHIsRefused(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	fake.RespondPrefix("virsh --connect qemu:///system domiflist", hostexec.FakeResponse{
+		Stdout: strings.ReplaceAll(readToolout(t, "virsh-domiflist.txt"), "aa:bb:cc:dd:ee:ff", "02:44:3d:00:cf:97"),
+	})
+
+	staleLeases := readToolout(t, "virsh-net-dhcp-leases.txt")
+	currentLeases := staleLeases + " 2026-10-15 17:26:19   02:44:3d:00:cf:97   ipv4       192.168.171.141/24   snaphop-runner-1   ff:32:39:f9:b5:00:02:00:00:ab:11:df:c4:22:d2:ce:84:51:eb\n"
+	staleAddresses := readToolout(t, "virsh-domifaddr-source-lease.txt")
+	currentAddresses := staleAddresses + " -          -                    ipv4         192.168.171.141/24\n"
+
+	var staleProbes atomic.Int32
+	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
+		argv := strings.Join(c.Argv(), " ")
+		granted := staleProbes.Load() > 0
+		switch {
+		case strings.Contains(argv, "net-dhcp-leases"):
+			if granted {
+				return hostexec.FakeResponse{Stdout: currentLeases}, true
+			}
+			return hostexec.FakeResponse{Stdout: staleLeases}, true
+		case strings.Contains(argv, "domifaddr"):
+			if granted {
+				return hostexec.FakeResponse{Stdout: currentAddresses}, true
+			}
+			return hostexec.FakeResponse{Stdout: staleAddresses}, true
+		case strings.Contains(argv, "192.168.171.140"):
+			staleProbes.Add(1)
+			return hostexec.FakeResponse{
+				ExitCode: 255,
+				Stderr:   "ssh: connect to host 192.168.171.140 port 22: No route to host\n",
+			}, true
+		case strings.Contains(argv, "192.168.171.141"):
+			return hostexec.FakeResponse{}, true
+		default:
+			return hostexec.FakeResponse{}, false
+		}
+	}
+
+	code, stdout, stderr := cliRun(t, fake, stateDir, createArgs(keyPath, "--no-update")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Waiting for SSH on 192.168.171.140") || !strings.Contains(stderr, "Waiting for SSH on 192.168.171.141") {
+		t.Errorf("the wait did not follow the lease granted while SSH was refused:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "192.168.171.141") || strings.Contains(stdout, "192.168.171.140") {
+		t.Errorf("create reported the wrong address:\n%s", stdout)
+	}
+	if staleProbes.Load() == 0 {
+		t.Error("the stale lease was never probed")
+	}
+}
+
 func TestCreate_ABootTimeoutLeavesTheVMInPlace(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)

@@ -746,42 +746,31 @@ func (a *App) ensureNetwork(ctx context.Context, cfg *config.Config) error {
 	return network.EnsureNAT(ctx, a.runner, uri, cfg.NATNetwork, store)
 }
 
-// waitForGuest waits for the guest to get an address and accept SSH. Both waits
-// share the --wait-for-ssh budget, because from the operator's side they are one
-// question: is this VM usable yet?
+// waitForGuest waits for the guest to get an address and accept SSH. Both are
+// one question from the operator's side — is this VM usable yet? — and they
+// share the --wait-for-ssh budget.
+//
+// The address is read again before every probe. A recreated NAT VM still has
+// its previous leases in dnsmasq, and the newest of those is what a single
+// lookup returns until the new guest is handed one of its own.
 func (a *App) waitForGuest(ctx context.Context, req createRequest, vm *state.VM) (string, error) {
 	if req.waitForSSH <= 0 {
 		return "", nil
 	}
 
-	deadline := time.Now().Add(req.waitForSSH)
 	a.out.Progress("Waiting for the guest to boot (up to %s)\n", req.waitForSSH)
-
-	address, err := req.manager.WaitForAddress(ctx, req.name, guestNIC(vm), req.waitForSSH)
-	if err != nil {
-		return "", err
-	}
-
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		// The address arrived exactly as the budget ran out. One probe is still
-		// worth trying rather than reporting a timeout that was never tested.
-		remaining = time.Second
-	}
-	a.out.Progress("Waiting for SSH on %s\n", address)
-	err = req.manager.WaitForSSH(ctx, req.name, domain.SSHOptions{
-		User:    vm.Guest.User,
-		Address: address,
+	return req.manager.WaitForSSH(ctx, req.name, domain.SSHOptions{
+		User: vm.Guest.User,
 		// The probe offers the same key `agent-vm ssh` will, and reaches the
 		// guest the same way, so that "create says it is ready" and "ssh
 		// works" cannot disagree.
 		IdentityFile: privateKeyFor(vm),
 		Jump:         a.sshJump(),
-	}, remaining)
-	if err != nil {
-		return address, err
-	}
-	return address, nil
+	}, func(ctx context.Context) (string, error) {
+		return req.manager.IPv4Address(ctx, req.name, guestNIC(vm))
+	}, func(address string) {
+		a.out.Progress("Waiting for SSH on %s\n", address)
+	}, req.waitForSSH)
 }
 
 func (a *App) reportCreated(req createRequest, vm *state.VM, address string) error {

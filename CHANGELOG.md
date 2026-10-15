@@ -71,6 +71,12 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `create` follows a NAT lease that appears while it is waiting for SSH.
+  Recreating a VM leaves the previous boot's lease in place, and that lease
+  is the newest one until the new guest is given an address. The wait was
+  connecting to the old address for the whole budget, so it reported
+  "No route to host" after the guest was already up on the new address.
+  Each SSH probe now reads the lease table again and uses the newest one.
 - A NAT VM that has been recreated is reached at the DHCP lease it is using.
   Recreating a VM keeps its MAC, and the new guest takes a new lease, while
   the old leases stay until they expire. `list`, `info`, `ssh`, `start`, and

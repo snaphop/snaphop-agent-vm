@@ -117,24 +117,59 @@ func ValidateAddress(address string) error {
 // point at which cloud-init has finished enough to be useful: the account
 // exists and the key is authorized.
 //
+// lookup runs before every probe and supplies the address. An empty result
+// skips the probe: early in boot the guest has no address yet. A later
+// result may name a different address. A recreated NAT VM keeps its MAC, and
+// dnsmasq keeps the previous boot's lease until it expires, so the newest
+// lease at the start of this wait can be an address the new guest never
+// configures. The lease that guest accepts appears a few seconds later.
+// Probing the first address for the rest of the budget fails with "No route
+// to host" while the guest is already up on the new one.
+//
+// onAddress, when set, is called each time the address about to be probed
+// changes. The returned address is the last one probed, or "" when the guest
+// never had one.
+//
 // A timeout here is deliberately not a failure of create. The VM is left in
 // place with its console log, because "it booted slowly" and "it failed to
 // boot" need the same evidence (docs/cli.md).
-func (m *Manager) WaitForSSH(ctx context.Context, name string, opts SSHOptions, timeout time.Duration) error {
-	probe := opts
-	probe.BatchMode = true
-	// `true` is the smallest thing that proves a login succeeded.
-	probe.Command = []string{"true"}
-
-	cmd, err := SSHCommand(probe)
-	if err != nil {
-		return err
+func (m *Manager) WaitForSSH(ctx context.Context, name string, opts SSHOptions, lookup func(context.Context) (string, error), onAddress func(string), timeout time.Duration) (string, error) {
+	if lookup == nil {
+		return "", fmt.Errorf("waiting for SSH needs an address lookup")
 	}
-	cmd.Effect = hostexec.Read
-	cmd.Timeout = sshProbeTimeout
 
-	var lastErr error
-	ready, err := poll(ctx, timeout, func() (bool, bool, error) {
+	var (
+		address string
+		lastErr error
+	)
+	accepted, err := poll(ctx, timeout, func() (bool, bool, error) {
+		next, err := lookup(ctx)
+		if err != nil {
+			// Address lookups fail transiently while a guest is booting.
+			lastErr = err
+			return false, false, nil
+		}
+		if next == "" {
+			return false, false, nil
+		}
+		if next != address {
+			address = next
+			if onAddress != nil {
+				onAddress(address)
+			}
+		}
+
+		opts.Address = address
+		probe := opts
+		probe.BatchMode = true
+		// `true` is the smallest thing that proves a login succeeded.
+		probe.Command = []string{"true"}
+		cmd, err := SSHCommand(probe)
+		if err != nil {
+			return false, false, err
+		}
+		cmd.Effect = hostexec.Read
+		cmd.Timeout = sshProbeTimeout
 		if _, err := m.runner.Run(ctx, cmd); err != nil {
 			// Connection refused, no route, authentication not ready yet: all
 			// expected while a guest boots, all worth reporting if time runs out.
@@ -144,15 +179,20 @@ func (m *Manager) WaitForSSH(ctx context.Context, name string, opts SSHOptions, 
 		return true, true, nil
 	})
 	if err != nil {
-		return err
+		return address, err
 	}
-	if !ready {
-		return &TimeoutError{
-			What: "accept SSH", Name: name, Waited: timeout, LastErr: lastErr,
-			Remedy: "The VM is still running. Look at its console log, or connect with `agent-vm console " + name + "`.",
+	if !accepted {
+		what := "accept SSH"
+		remedy := "The VM is still running. Look at its console log, or connect with `agent-vm console " + name + "`."
+		if address == "" {
+			what = "get an address"
+			remedy = "Check the guest's console log for a boot failure, or run `virsh domifaddr " + name + "` and `virsh net-dhcp-leases`."
+		}
+		return address, &TimeoutError{
+			What: what, Name: name, Waited: timeout, LastErr: lastErr, Remedy: remedy,
 		}
 	}
-	return nil
+	return address, nil
 }
 
 // WaitForGuestFile reads a file from the guest, retrying until it appears.
