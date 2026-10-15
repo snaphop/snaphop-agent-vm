@@ -138,6 +138,95 @@ func TestIPv4Address_ANATGuestsAddressComesFromLibvirtsLeaseNotItsAgent(t *testi
 	}
 }
 
+func TestIPv4Address_OneNATLeaseDoesNotConsultTheLeaseTable(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domifaddr agent-01 --source lease", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr.txt"),
+	})
+
+	address, err := manager(fake).IPv4Address(context.Background(), "agent-01", NIC{
+		MAC: "aa:bb:cc:dd:ee:ff", Network: "agent-vm-nat",
+	})
+	if err != nil {
+		t.Fatalf("IPv4Address: %v", err)
+	}
+	if address != "192.168.122.3" {
+		t.Errorf("address = %q, want the single leased address", address)
+	}
+	if fake.Ran("virsh --connect " + uri + " net-dhcp-leases agent-vm-nat") {
+		t.Error("one lease needs no expiry to choose it")
+	}
+}
+
+func TestParseDHCPLeases_ReadsARealLeaseTable(t *testing.T) {
+	t.Parallel()
+	leases, err := parseDHCPLeases([]byte(toolout(t, "virsh-net-dhcp-leases.txt")))
+	if err != nil {
+		t.Fatalf("parseDHCPLeases: %v", err)
+	}
+	if got := latestLeaseAddress(leases, "02:44:3d:00:cf:97"); got != "192.168.171.140" {
+		t.Errorf("latest for the guest = %q, want 192.168.171.140, the lease with the latest expiry", got)
+	}
+	if got := latestLeaseAddress(leases, "d6:0f:a5:e0:91:26"); got != "192.168.171.215" {
+		t.Errorf("latest for the other guest = %q, want 192.168.171.215", got)
+	}
+	if got := latestLeaseAddress(leases, "00:11:22:33:44:55"); got != "" {
+		t.Errorf("latest for an unknown MAC = %q, want none", got)
+	}
+}
+
+func TestIPv4Address_SeveralNATLeasesUseTheLatestExpiry(t *testing.T) {
+	t.Parallel()
+	// The capture lists three leases for one MAC. domifaddr prints the stale
+	// ones first. The guest is using the lease that expires last.
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domifaddr snaphop-runner-1 --source agent", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr-source-agent.txt"),
+	})
+	fake.Respond("virsh --connect "+uri+" domifaddr snaphop-runner-1 --source lease", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr-source-lease.txt"),
+	})
+	fake.Respond("virsh --connect "+uri+" net-dhcp-leases agent-vm-nat", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-net-dhcp-leases.txt"),
+	})
+
+	address, err := manager(fake).IPv4Address(context.Background(), "snaphop-runner-1", NIC{
+		MAC: "02:44:3d:00:cf:97", Network: "agent-vm-nat",
+	})
+	if err != nil {
+		t.Fatalf("IPv4Address: %v", err)
+	}
+	if address != "192.168.171.140" {
+		t.Errorf("address = %q, want 192.168.171.140, the lease the guest last accepted", address)
+	}
+	if fake.Ran("virsh --connect " + uri + " domifaddr snaphop-runner-1 --source agent") {
+		t.Error("a NAT guest's address must not be taken from its guest agent")
+	}
+}
+
+func TestIPv4Address_AFailedLeaseTableIsNotAStaleAddress(t *testing.T) {
+	t.Parallel()
+	fake := hostexec.NewFake()
+	fake.Respond("virsh --connect "+uri+" domifaddr snaphop-runner-1 --source lease", hostexec.FakeResponse{
+		Stdout: toolout(t, "virsh-domifaddr-source-lease.txt"),
+	})
+	fake.Respond("virsh --connect "+uri+" net-dhcp-leases agent-vm-nat", hostexec.FakeResponse{
+		ExitCode: 1,
+		Stderr:   "error: failed to get network 'agent-vm-nat'",
+	})
+
+	address, err := manager(fake).IPv4Address(context.Background(), "snaphop-runner-1", NIC{
+		MAC: "02:44:3d:00:cf:97", Network: "agent-vm-nat",
+	})
+	if err == nil {
+		t.Fatal("want an error when the lease table cannot be read")
+	}
+	if address != "" {
+		t.Errorf("address = %q, want none: the first domifaddr row is a stale lease", address)
+	}
+}
+
 func TestAddresses_ReportsFailureWhenTheSourceFails(t *testing.T) {
 	t.Parallel()
 	fake := hostexec.NewFake()

@@ -25,6 +25,8 @@ holds the output of `virsh --version`.
 | `virt-sysprep--version.txt` | `virt-sysprep --version` | libguestfs 1.56.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domifaddr.txt` | `virsh -c test:///default domifaddr test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domifaddr-source-agent.txt` | `virsh -c qemu:///system domifaddr <vm> --source agent` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
+| `virsh-domifaddr-source-lease.txt` | `virsh -c qemu:///system domifaddr <vm> --source lease` | libvirt 12.0.0 (Ubuntu) | 2026-10-15 |
+| `virsh-net-dhcp-leases.txt` | `virsh -c qemu:///system net-dhcp-leases agent-vm-nat` | libvirt 12.0.0 (Ubuntu) | 2026-10-15 |
 | `virsh-domiflist.txt` | `virsh -c test:///default domiflist test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `virsh-domblklist.txt` | `virsh -c test:///default domblklist test` | libvirt 12.6.0 (Arch Linux) | 2026-08-17 |
 | `podman-image-inspect.json` | `podman image inspect --format json docker.io/library/busybox:latest` | podman 6.1.0 (Arch Linux) | 2026-08-17 |
@@ -59,6 +61,16 @@ guest agent reports, which is every interface the guest can see — including
 `lo` with 127.0.0.1, listed *first*, and the `-` continuation rows a second
 protocol on one interface produces. The `test:///default` capture has neither,
 which is how the address picker came to return the loopback address.
+
+`virsh-domifaddr-source-lease.txt` and `virsh-net-dhcp-leases.txt` are another
+real guest. Recreating a VM keeps its MAC, and the new guest asks for DHCP
+with a new client identity, so dnsmasq holds several leases for that one MAC
+until the old ones expire. `domifaddr --source lease` prints them in
+lease-file order, and the first row is an address the guest is not using.
+`net-dhcp-leases` carries each lease's expiry. The latest expiry is the
+address the guest accepted. The lease table also has a second guest, so a
+picker that ignores the MAC would take the wrong one whenever that guest's
+lease expires later.
 
 `podman-image-inspect.json` is a multi-architecture repository's inspect
 output, which is what makes it worth having: alongside the image's own `Digest`

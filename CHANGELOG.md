@@ -71,6 +71,12 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- A NAT VM that has been recreated is reached at the DHCP lease it is using.
+  Recreating a VM keeps its MAC, and the new guest takes a new lease, while
+  the old leases stay until they expire. `list`, `info`, `ssh`, `start`, and
+  `create` were showing the first of those leases, which is an address
+  nothing answers on, so `agent-vm ssh` sat until it timed out. The lease
+  with the latest expiry is the one used now.
 - SSH logins no longer warn `setlocale: LC_ALL: cannot change locale (en_US.UTF-8)`.
   Guest images generate that locale and use it as their default. An SSH client
   forwards the locale from the machine you connect from, and `bash` applies it
