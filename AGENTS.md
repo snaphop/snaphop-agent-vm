@@ -395,7 +395,7 @@ seed with `virt-make-fs` → `qemu-img create` the overlay with the base as back
 file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
-→ poll `virsh domifaddr` and, when a NAT guest has more than one lease for its MAC, take the latest expiry from `virsh net-dhcp-leases`, then wait for SSH (unless waiting is disabled)
+→ poll `virsh domifaddr` and, when a NAT guest has more than one lease for its MAC, take the latest expiry from `virsh net-dhcp-leases` again before each SSH probe (unless waiting is disabled), so a lease granted while the previous boot's lease is still the newest is the one the probe follows
 → bring the guest's packages and tooling up to date, the same steps as
 `agent-vm update` (unless `--no-update`, or the boot wait was disabled)
 → optionally install Tailscale in the guest and join the tailnet (the auth
