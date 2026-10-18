@@ -2199,11 +2199,16 @@ func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
 			"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner",
 			"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh",
 			"COPY runner-git.sh /tmp/agent-vm-runner-git.sh",
+			"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh",
+			"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py",
+			"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py",
+			"COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh",
 			"/usr/sbin/agent-vm-github-runner",
 			"/tmp/agent-vm-github-runner-install.sh",
 			// The account has to exist before it can join the docker group.
 			// git and gh are installed after that account and before Docker.
-			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-docker.sh",
+			// The disk hook is last: it needs the account and the docker command.
+			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-docker.sh \\\n && /tmp/agent-vm-runner-cleanup.sh",
 		} {
 			if !strings.Contains(rest, want) {
 				t.Errorf("%s runner section does not contain %q", d.RunnerContainerfile, want)
@@ -2249,6 +2254,10 @@ func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 		"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner": true,
 		"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh":                   true,
 		"COPY runner-git.sh /tmp/agent-vm-runner-git.sh":                         true,
+		"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh":                 true,
+		"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py":          true,
+		"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py":    true,
+		"COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh":    true,
 	}
 
 	for runnerName, pair := range variantRecipes(t, distro.Runner) {

@@ -547,8 +547,8 @@ skipped.
 Every family also has a runner variant, named by appending `-runner`:
 `agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
 ubuntu-runner`. It is that family's slim image plus the GitHub Actions
-self-hosted runner (ADR-0013), Docker (ADR-0016), `git`, and the GitHub
-CLI (`gh`). It boots the same way —
+self-hosted runner (ADR-0013), Docker (ADR-0016), `git`, the GitHub CLI
+(`gh`), and a job-started disk hook (ADR-0019). It boots the same way —
 same kernel command line, same cloud-init contract, same SSH and clock
 guarantees — and carries the same common Linux tooling. It does not carry
 the coding agents, browser, or nested virtualization stack a full image adds.
@@ -591,6 +591,22 @@ cannot run. The commands are left logged out; a job that calls `gh`
 supplies its own credentials. `git` is also part of the slim recipe the
 runner image starts from. An image already cached gains both commands when
 it is rebuilt with `agent-vm image build <family>-runner --force`.
+
+Before each job, the runner runs
+`/usr/local/libexec/snaphop-runner/job-started.sh` (ADR-0019). The hook
+removes `_work` checkouts that no job has touched for 72 hours. It leaves
+the checkout the current job is using, and it leaves directories whose
+names start with `_` (`_actions`, `_tool`, `_temp`). It removes `_diag`
+logs older than seven days. When less than 20 GiB is free it removes
+unused Docker data, including buildx builders older than 72 hours. When
+less than 5 GiB is free it removes the rest of the unused build cache.
+The job still runs if the cleanup cannot. The programs are owned by root
+and live outside the runner directory. `/opt/actions-runner/.env` names
+the hook with `ACTIONS_RUNNER_HOOK_JOB_STARTED` and sets
+`SNAPHOP_RUNNER_ROOT` to the runner directory. `configure` writes those
+two lines again after `config.sh`. An image already cached gains the hook
+when it is rebuilt with `agent-vm image build <family>-runner --force`.
+Create the VM again from that image.
 
 A base image is shared by every VM built on it, so the image is not
 registered with GitHub. It contains no repository URL and no registration
@@ -637,7 +653,9 @@ as the `github-runner` user — `config.sh` refuses to run as root — and then
 GitHub's `svc.sh install github-runner` and `svc.sh start` as root, from the
 runner directory.
 `config.sh` writes `svc.sh` when a guest is registered. The image does not
-contain `svc.sh` before that.
+contain `svc.sh` before that. After `config.sh`, `configure` writes the
+job-started hook lines back into `/opt/actions-runner/.env` when that hook
+is installed. `remove` leaves `.env` as it is.
 
 The runner release is pinned in the image recipe and recorded at
 `/opt/actions-runner/.agent-vm-runner-version`. Rebuilding the base image is

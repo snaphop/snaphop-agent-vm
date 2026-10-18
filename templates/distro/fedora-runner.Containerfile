@@ -439,21 +439,29 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 # agent-vm-runner-section
 #
 # GitHub Actions self-hosted runner (ADR-0013, ADR-0017), Docker
-# (ADR-0016), git, and the GitHub CLI. The blocks above are the slim
-# recipe. This section installs the runner, unconfigured, the command that
-# registers it after boot, Docker from the distro's own packages, and git
-# and gh. Nothing in this section is a credential. Jobs run as
-# github-runner, which has passwordless sudo. Docker is installed after
-# that account exists, because the account has to join the docker group
-# and the group arrives with the packages. git and gh are installed from
-# the distro packages and checked on PATH before the image is committed.
+# (ADR-0016), git, the GitHub CLI, and the job-started disk hook
+# (ADR-0019). The blocks above are the slim recipe. This section installs
+# the runner, unconfigured, the command that registers it after boot,
+# Docker from the distro's own packages, git and gh, and the hook that
+# clears old checkouts and unused Docker data before each job. Nothing in
+# this section is a credential. Jobs run as github-runner, which has
+# passwordless sudo. Docker is installed after that account exists,
+# because the account has to join the docker group and the group arrives
+# with the packages. git and gh are installed from the distro packages
+# and checked on PATH before the image is committed. The disk hook is
+# installed last, after that account and Docker exist.
 COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh
 COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner
 COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh
 COPY runner-git.sh /tmp/agent-vm-runner-git.sh
-RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh \
+COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh
+COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py
+COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py
+COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh
+RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-job-started.sh \
  && ln -sf /usr/local/sbin/agent-vm-github-runner /usr/sbin/agent-vm-github-runner \
  && /tmp/agent-vm-github-runner-install.sh \
  && /tmp/agent-vm-runner-git.sh \
  && /tmp/agent-vm-runner-docker.sh \
- && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh
+ && /tmp/agent-vm-runner-cleanup.sh \
+ && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-headroom.py /tmp/agent-vm-runner-job-started.py /tmp/agent-vm-runner-job-started.sh

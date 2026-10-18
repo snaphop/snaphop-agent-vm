@@ -224,7 +224,12 @@ section named here.
   act as root inside the guest (ADR-0017). It is a member of the `docker`
   group so a job can use the daemon (ADR-0016). A job that can open the
   Docker socket can start a privileged container and act as root inside the
-  guest. Destroying a VM
+  guest. The image also installs a job-started hook outside the runner
+  directory, owned by root, that deletes checkouts unused for 72 hours and,
+  when free disk is low, unused Docker data (ADR-0019). `github-runner` owns
+  the runner's `.env` and can change which program that hook runs.
+  Passwordless sudo means a job can replace the hook programs as well.
+  Destroying a VM
   whose record names a runner deletes that runner at GitHub before the domain
   is undefined. A runner registered by hand, which has no record, stays at
   GitHub; unregister it with `agent-vm-github-runner remove` or in the GitHub
