@@ -18,6 +18,14 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create --pihole` registers the guest on a Pi-hole v6 DNS server
+  as `<name>.agent`. The address is the one libvirt reports. `destroy`
+  removes that name. `start` points it at a new address when libvirt reports
+  one. The Pi-hole password stays in a file on the client and is not written
+  into the guest, the seed, or `vm.json`. `agent-vm ssh` still uses the
+  address libvirt reports. On a NAT network only this host can reach the
+  address the name points at. A bridged guest is reachable by other machines
+  that use that Pi-hole.
 - A VM created with `--network bridge` publishes its hostname and SSH on the
   LAN with mDNS. Other machines can open it as `ssh <user>@<name>.local`.
   The guest uses systemd-resolved, which the base images already run, so a

@@ -60,6 +60,7 @@ single-host tool with no daemon of its own.
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
 │  internal/github     gh on the client: SSH keys and Actions runner registration    │
 │  internal/tailscale  guest Tailscale join; auth key on stdin only                  │
+│  internal/pihole     Pi-hole v6 local DNS; the password stays on the client        │
 │  internal/progress   step progress: a bar on a terminal, plain lines elsewhere     │
 │  internal/notices    LICENSE and NOTICE, embedded so one binary can print them     │
 │  internal/hostexec   the ONLY place processes spawn: argv, logging, exit status,   │
@@ -93,9 +94,12 @@ The host tools, state directory, and guests in the diagram are on
 guests are on the hypervisor, and `agent-vm` drives them from the client by
 wrapping each invocation in `ssh`
 ([ADR-0010](./decisions/0010-drive-a-remote-hypervisor-by-running-host-tools-over-ssh.md)).
-Only two invocations stay on the client — `gh`, which uses the operator's GitHub
+Only two spawned commands stay on the client — `gh`, which uses the operator's GitHub
 login, and the `ssh` into a guest, which uses their keys and terminal and reaches
-the guest through the hypervisor with `-J`.
+the guest through the hypervisor with `-J`. The Pi-hole HTTP client also stays
+on the client ([ADR-0021](./decisions/0021-register-a-guest-on-pi-hole.md)). It
+is not a host tool and is not wrapped in `ssh`. The password is sent only to
+the Pi-hole the operator named.
 
 Trust boundaries, from most to least trusted:
 
@@ -156,6 +160,13 @@ tested against output captured from the real tool. **Recorded provenance** — `
 stores the `virt-install` version and argv that defined the domain, and
 `manifest.json` stores the tool versions that built the base image, so "what created
 this?" is always answerable from the state directory.
+
+Pi-hole local DNS sits outside that table. Pi-hole v6 has no local CLI this
+tool can drive on another machine, so the client calls `POST /api/auth` and
+`GET`, `PUT`, and `DELETE` on `/api/config/dns/hosts` itself
+([ADR-0009](./decisions/0009-orchestrate-existing-host-cli-tools.md),
+[ADR-0021](./decisions/0021-register-a-guest-on-pi-hole.md)). The password
+stays on the client. `doctor` does not require a Pi-hole.
 
 All work is synchronous and foreground; there is no queue, scheduler, or
 background worker. Long waits include image builds, the guest boot wait during `create`
@@ -401,6 +412,35 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   does not remove the tailnet node. SSH continues to use the address libvirt
   reported; the tailnet address is display only.
 
+### `internal/pihole`
+
+- **Responsibility:** Register one guest's address on a Pi-hole v6 DNS server
+  when `create --pihole` is set (ADR-0021). The password is read from a file
+  on the client and sent only in the body of `POST /api/auth`. Pi-hole has no
+  local CLI this tool can drive on another machine, so the call is HTTP
+  (ADR-0009).
+- **Public interface:** the optional `pihole` object in `vm.json` (`url`,
+  `name`, `address`, `passwordFile`, and `insecure` when set), the `+pihole`
+  suffix `list` adds after `+tailscale`, and the `dns` row `info` prints.
+  `internal/cli` decides when to call it.
+- **Failure behavior:** the password file is checked before anything is
+  created, and a bad file is a usage error that names the path and not the
+  contents. A failure after the VM exists leaves the VM in place and does not
+  record a registration. A logout that fails after Pi-hole accepted the
+  change is a warning; the name is still recorded. `destroy` removes a
+  recorded name before undefine. A name Pi-hole no longer has is success.
+  `start` updates the address when libvirt reports a different one. An
+  unknown or unparsable address does not fail `start` and does not call
+  Pi-hole.
+- **Compatibility constraints:** the password is not a flag value and is not
+  written into a base image, a cloud-init seed, `vm.json`, a log, an argument
+  vector, or the guest. The password-file path may be stored. `schemaVersion`
+  stays 1. HTTP redirects are not followed, and the client does not use a
+  proxy. `--pihole-insecure` skips TLS verification only when the operator
+  sets it, and that setting does not authenticate the server. `agent-vm ssh`
+  continues to use the address libvirt reported. `doctor` does not require
+  Pi-hole.
+
 ### `internal/progress`
 
 - **Responsibility:** Render the progress of a long, multi-step operation — today
@@ -519,18 +559,27 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
     exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence.
-11. **Update the guest.** Unless `--no-update` was given, run the same package
+11. **Register on Pi-hole, when asked.** If `--pihole` was given, publish the
+    address libvirt just reported as `<name>.agent` (or `<name>.<domain>`)
+    through the Pi-hole v6 API. The password is read from a file on the client
+    and sent only in `POST /api/auth`. It is not written into the guest, the
+    seed, or `vm.json`. The record stores the URL, the name, the address, and
+    the password-file path. A failure leaves the VM in place, writes no
+    `pihole` object, and skips the guest update, the Tailscale join, and the
+    GitHub steps.
+12. **Update the guest.** Unless `--no-update` was given, run the same package
     and tooling steps as `agent-vm update` over SSH, bounded by
     `--update-timeout`. `--wait-for-ssh 0` skips this step, because there is
     no session to run it through. A failure leaves the VM in place and does
-    not continue to the Tailscale or GitHub steps. The base image is not
+    not continue to the Tailscale or GitHub steps. A DNS name already recorded
+    stays. The base image is not
     modified.
-12. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
+13. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
     copy the join script over SSH, install Tailscale when the guest does not
     already have it, then run `tailscale up` with the auth key on stdin.
     Save the non-secret result into `vm.json`. A failure here leaves the VM
     in place and does not store the key.
-13. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
+14. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
     after the join: it reads the guest's public key and adds it with `gh` on
     the client. When the image is a `-runner` variant and an organization is
     set, `create` then fetches a registration token with `gh` on the client
@@ -540,7 +589,8 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 
 Rollback: steps 5–9 are undone in reverse on failure — `virsh destroy`, `virsh
 undefine`, then delete the overlay, the seed, and the state directory. Steps 10
-through 13 are the deliberate exceptions: a boot-wait timeout, a failed guest
+through 14 are the deliberate exceptions: a boot-wait timeout, a failed
+Pi-hole registration, a failed guest
 update, a failed Tailscale join, a failed GitHub SSH-key registration, and a
 failed Actions-runner registration preserve the VM and its
 console log rather than destroying the evidence. `undefine` is
@@ -556,7 +606,10 @@ operator perform the same work by hand.
 
 `destroy` is the same path in reverse, and only ever acts on domains and paths
 recorded in `vm.json`. When that record names a GitHub Actions runner, the
-runner is deleted at GitHub before the domain is undefined.
+runner is deleted at GitHub before the domain is undefined. When it names a
+Pi-hole DNS record, that name is deleted after the runner and before the
+domain is undefined. `stop` leaves the name in place. `start` and `restart`
+point it at a new address when libvirt reports one.
 
 ## Public Contracts
 
@@ -686,11 +739,13 @@ binary onto a KVM-capable host. The binary embeds `LICENSE` and `NOTICE`, and
   `vm.json`/`manifest.json` — so a "worked last month" regression can be traced to a
   host tool upgrade.
 - Redaction: cloud-init user-data contents, the contents of any file passed by
-  the operator, a Tailscale auth key, and a GitHub Actions registration token
+  the operator, a Tailscale auth key, a GitHub Actions registration token, a
+  Pi-hole password, and a Pi-hole session id
   are never logged; only paths and sizes are. Argv is logged, so no
   secret is ever passed as a command-line argument. The auth key and the
   registration token travel on the guest command's stdin, which is not logged.
-  The token's type redacts itself from errors.
+  The token's type redacts itself from errors. The Pi-hole password's type
+  redacts itself from errors. It is sent only in the body of `POST /api/auth`.
 - The guest serial console is captured to `vms/<name>/console.log`, which is the
   primary artifact for diagnosing a VM that never became reachable.
 - `agent-vm doctor` is the health check, machine-readable with
@@ -721,7 +776,10 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   auth key when `create` names a file (ADR-0014), and a GitHub Actions
   registration token when `create` registers a `-runner` VM with an
   organization (ADR-0015). Neither is written into an image, a seed, or
-  `vm.json`, and neither is a command-line argument. The operator's `gh`
+  `vm.json`, and neither is a command-line argument. A Pi-hole password never
+  enters the guest at all: it is read from a file on the client and sent only
+  to the Pi-hole the operator named (ADR-0021). The password-file path may be
+  stored in `vm.json`. The password is not. The operator's `gh`
   credential stays on the client. No private key ever enters an image, a
   seed, or this repository.
 - Authorization decisions belong to the host: libvirt/QEMU enforce guest

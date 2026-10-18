@@ -73,6 +73,11 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	tailscaleSSH := flags.Bool("tailscale-ssh", false, "enable Tailscale SSH on the guest")
 	var tailscaleTags repeatedFlag
 	flags.Var(&tailscaleTags, "tailscale-advertise-tag", "tailnet `tag` to advertise, such as tag:ci; repeatable")
+	piholeOn := flags.Bool("pihole", false, "register <name>.agent on a Pi-hole DNS server after the guest has an address")
+	piholeURL := flags.String("pihole-url", "", "Pi-hole base `URL`, such as https://pi.hole")
+	piholePasswordFile := flags.String("pihole-password-file", "", "`file` containing the Pi-hole web password or an application password")
+	piholeDomain := flags.String("pihole-domain", "", "DNS `domain` for the record (default agent, so the name is <vm>.agent)")
+	piholeInsecure := flags.Bool("pihole-insecure", false, "do not verify the Pi-hole server's TLS certificate")
 	hostAuthorizedKeys := flags.Bool("host-authorized-keys", false, "also authorize the keys in this host account's ~/.ssh/authorized_keys")
 	var sshKeys repeatedFlag
 	flags.Var(&sshKeys, "ssh-key", "SSH public `key` to authorize; repeatable (default: this account's ~/.ssh identities)")
@@ -99,15 +104,19 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	cfg, err := app.ConfigWith(config.Overrides{
-		Distro:    *distroRef,
-		VCPUs:     *vcpus,
-		Memory:    *memory,
-		MaxMemory: *maxMemory,
-		Disk:      *disk,
-		Network:   *networkMode,
-		Bridge:    *bridge,
-		SSHKeys:   sshKeys,
-		GitHubOrg: *githubOrgFlag,
+		Distro:             *distroRef,
+		VCPUs:              *vcpus,
+		Memory:             *memory,
+		MaxMemory:          *maxMemory,
+		Disk:               *disk,
+		Network:            *networkMode,
+		Bridge:             *bridge,
+		SSHKeys:            sshKeys,
+		GitHubOrg:          *githubOrgFlag,
+		PiHoleURL:          *piholeURL,
+		PiHolePasswordFile: *piholePasswordFile,
+		PiHoleDomain:       *piholeDomain,
+		PiHoleInsecure:     piholeInsecureOverride(*piholeInsecure),
 	})
 	if err != nil {
 		return err
@@ -181,6 +190,14 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		return exitf(ExitUsage,
 			"--tailscale-auth-key-file needs --wait-for-ssh: the guest is joined over SSH after it boots.")
 	}
+	reg, err := resolvePiHole(name, cfg, *piholeOn, *piholeURL, *piholePasswordFile, *piholeDomain, *piholeInsecure)
+	if err != nil {
+		return err
+	}
+	if reg != nil && *waitForSSH <= 0 {
+		return exitf(ExitUsage,
+			"--pihole needs --wait-for-ssh: the guest's address is read after it boots.")
+	}
 	// A configured organization is ignored for an ordinary image, so a default
 	// org does not change create. Naming --github-org for an image that has
 	// no runner is a mistake to report, not a flag to drop.
@@ -197,7 +214,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	if app.dryRun {
-		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join, *waitForSSH > 0 && !*noUpdate)
+		return app.printCreatePlan(cfg, name, virtInstallArgs, *githubSSHKey, join, *waitForSSH > 0 && !*noUpdate, reg)
 	}
 
 	// The cloud-init seed is a virt-make-fs image, so an unreadable kernel
@@ -312,6 +329,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		githubSSHKey:    *githubSSHKey,
 		githubOrg:       githubOrg,
 		tailscale:       join,
+		pihole:          reg,
 		// A guest that was not waited for has no SSH session to update
 		// through. --no-update is the explicit form of the same choice.
 		noUpdate:      *noUpdate,
@@ -508,6 +526,7 @@ type createRequest struct {
 	githubSSHKey    bool
 	githubOrg       string
 	tailscale       *tailscaleJoin
+	pihole          *piholeRegistration
 	// noUpdate is the --no-update flag. update is whether this create actually
 	// runs the guest update: it is off for --no-update, and also when the
 	// boot wait is disabled, because that leaves no SSH session.
@@ -534,6 +553,15 @@ func (a *App) createVM(ctx context.Context, req createRequest) error {
 	address, err := a.waitForGuest(ctx, req, vm)
 	if err != nil {
 		return err
+	}
+
+	// The DNS name is registered before the guest update, so an update that
+	// fails still leaves the name in place and recorded. The password stays
+	// on the client (ADR-0021).
+	if req.pihole != nil {
+		if err := a.registerPiHole(ctx, req, vm, address); err != nil {
+			return err
+		}
 	}
 
 	// The guest update runs before Tailscale and GitHub. A new VM should be
@@ -788,6 +816,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	if address != "" {
 		rows = append(rows, []string{"  address", address})
 	}
+	if vm.PiHole != nil {
+		rows = append(rows, []string{"  dns", vm.PiHole.Name + " -> " + vm.PiHole.Address})
+	}
 	if key := vm.Guest.GitHubKey; key != nil {
 		rows = append(rows, []string{"  github key", fmt.Sprintf("%s (id %d)", key.Title, key.ID)})
 	}
@@ -804,6 +835,9 @@ func (a *App) reportCreated(req createRequest, vm *state.VM, address string) err
 	a.out.Table(rows)
 
 	if address != "" {
+		if vm.PiHole != nil {
+			a.out.Printf("\n%s\n", piholeReachability(vm))
+		}
 		a.out.Printf("\nConnect with: agent-vm ssh %s\n", vm.Name)
 		return nil
 	}
@@ -962,7 +996,7 @@ func (r *createRollback) undoUnconfirmedDomain(ctx context.Context) []string {
 // printCreatePlan prints what a create would run and write. Like the image
 // build plan, it creates nothing: values that only exist once the VM has been
 // created are left out rather than invented.
-func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool, join *tailscaleJoin, update bool) error {
+func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []string, githubSSHKey bool, join *tailscaleJoin, update bool, reg *piholeRegistration) error {
 	// The store, not the configured path, because a remote hypervisor's
 	// default state directory sits under *its* home directory.
 	store, err := a.Store()
@@ -1049,6 +1083,10 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	}
 	if org := githubOrgForCreate(cfg); org != "" {
 		a.printGitHubRunnerPlan(cfg.GuestUser, cfg.Distro, org, name)
+	}
+	if reg != nil {
+		a.out.Printf("# register %s on %s using the Pi-hole password in %s\n", reg.name, reg.server.BaseURL, reg.passwordFile)
+		a.out.Printf("# PUT %s/api/config/dns/hosts/<address>%%20%s\n", strings.TrimRight(reg.server.BaseURL, "/"), reg.name)
 	}
 
 	notes := []string{

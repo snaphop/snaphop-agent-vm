@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/domain"
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
@@ -12,7 +13,7 @@ import (
 
 // destroyUsage is shared by the command table and the flag set, so the summary
 // in `agent-vm --help` and the one `destroy --help` prints cannot disagree.
-const destroyUsage = "agent-vm destroy <name> [--keep-disk] [--force] [--timeout <duration>] [--github-ssh-key]"
+const destroyUsage = "agent-vm destroy <name> [--keep-disk] [--force] [--timeout <duration>] [--github-ssh-key] [--pihole-url <URL>] [--pihole-password-file <path>] [--pihole-insecure]"
 
 func destroyCommand() *command {
 	return &command{
@@ -29,9 +30,26 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 	force := flags.Bool("force", false, "power off immediately instead of asking the guest; can lose guest writes")
 	timeout := flags.Duration("timeout", defaultStopTimeout, "how long to wait for a graceful shutdown")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "also remove this VM's SSH key from your GitHub account, using gh")
+	piholeURL := flags.String("pihole-url", "", "Pi-hole base `URL` when it differs from the server recorded for this VM")
+	piholePasswordFile := flags.String("pihole-password-file", "", "`file` containing the Pi-hole password when it is not the recorded file")
+	piholeInsecure := flags.Bool("pihole-insecure", false, "do not verify the Pi-hole server's TLS certificate")
 	name, err := flags.parseNamed(args)
 	if err != nil {
 		return err
+	}
+	// Resolved before the record is loaded so the password file and the
+	// insecure bit from this invocation are in the cache. The URL stays a raw
+	// flag: a URL in the config file must not replace the server vm.json names.
+	if _, err := app.ConfigWith(config.Overrides{
+		PiHolePasswordFile: *piholePasswordFile,
+		PiHoleInsecure:     piholeInsecureOverride(*piholeInsecure),
+	}); err != nil {
+		return err
+	}
+	if *piholeURL != "" {
+		if _, err := config.ParsePiHoleURL(*piholeURL); err != nil {
+			return err
+		}
 	}
 
 	// Loading the record first is what makes destroy safe: a VM this state
@@ -117,6 +135,15 @@ func runDestroy(ctx context.Context, app *App, args []string) (err error) {
 		}
 	}
 
+	// A recorded DNS name is removed with the VM, including when --keep-disk
+	// leaves the overlay. The DELETE runs before undefine, so a Pi-hole
+	// failure leaves the domain and the record in place.
+	if vm.PiHole != nil {
+		if err := app.removePiHole(ctx, store, vm, *piholeURL); err != nil {
+			return err
+		}
+	}
+
 	return app.destroyVM(ctx, destroyRequest{
 		vm:       vm,
 		store:    store,
@@ -142,6 +169,9 @@ func destroyPrompt(vm *state.VM, keepDisk, force, githubSSHKey bool) string {
 	}
 	if vm.GitHubRunner != nil {
 		what += fmt.Sprintf(" Its GitHub Actions runner %s/%s will also be removed.", vm.GitHubRunner.Org, vm.GitHubRunner.Name)
+	}
+	if vm.PiHole != nil {
+		what += fmt.Sprintf(" Its DNS name %s will also be removed from Pi-hole.", vm.PiHole.Name)
 	}
 	return what
 }

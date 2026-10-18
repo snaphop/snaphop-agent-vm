@@ -49,6 +49,15 @@ type fileConfig struct {
 	GitHub struct {
 		Org string `toml:"org"`
 	} `toml:"github"`
+
+	// PiHole names the DNS server create --pihole registers a guest on.
+	// The password is a file path, never the password itself (ADR-0021).
+	PiHole struct {
+		URL          string `toml:"url"`
+		PasswordFile string `toml:"password_file"`
+		Domain       string `toml:"domain"`
+		Insecure     bool   `toml:"insecure"`
+	} `toml:"pihole"`
 }
 
 // loadFile reads the configuration file at path. A missing file is not an
@@ -91,24 +100,32 @@ func loadFile(path string) (Overrides, bool, error) {
 	}
 
 	o := Overrides{
-		StateDir:        file.StateDir,
-		LibvirtURI:      file.LibvirtURI,
-		ApplianceKernel: file.ApplianceKernel,
-		Distro:          file.Defaults.Distro,
-		Memory:          file.Defaults.Memory,
-		MaxMemory:       file.Defaults.MaxMemory,
-		Disk:            file.Defaults.Disk,
-		Network:         file.Defaults.Network,
-		Bridge:          file.Network.Bridge.Interface,
-		NATNetwork:      file.Network.NAT.Name,
-		GuestUser:       file.Guest.User,
-		SSHKeys:         file.Guest.SSHKeys,
-		GitHubOrg:       file.GitHub.Org,
+		StateDir:           file.StateDir,
+		LibvirtURI:         file.LibvirtURI,
+		ApplianceKernel:    file.ApplianceKernel,
+		Distro:             file.Defaults.Distro,
+		Memory:             file.Defaults.Memory,
+		MaxMemory:          file.Defaults.MaxMemory,
+		Disk:               file.Defaults.Disk,
+		Network:            file.Defaults.Network,
+		Bridge:             file.Network.Bridge.Interface,
+		NATNetwork:         file.Network.NAT.Name,
+		GuestUser:          file.Guest.User,
+		SSHKeys:            file.Guest.SSHKeys,
+		GitHubOrg:          file.GitHub.Org,
+		PiHoleURL:          file.PiHole.URL,
+		PiHolePasswordFile: file.PiHole.PasswordFile,
+		PiHoleDomain:       file.PiHole.Domain,
 	}
 	// Whether vcpus was written is asked of the file, not inferred from the
 	// value: `vcpus = 0` is a mistake to report, not an absent key.
 	if meta.IsDefined("defaults", "vcpus") {
 		o.VCPUs = strconv.Itoa(file.Defaults.VCPUs)
+	}
+	// An absent insecure key must not override a higher-precedence true: a
+	// bool cannot tell "left out" from "set to false".
+	if meta.IsDefined("pihole", "insecure") {
+		o.PiHoleInsecure = strconv.FormatBool(file.PiHole.Insecure)
 	}
 	return o, true, nil
 }

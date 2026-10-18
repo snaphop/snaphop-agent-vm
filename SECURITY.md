@@ -93,6 +93,7 @@ The same boundaries are drawn in
 ## Sensitive Data Classes
 
 - **Host credentials:** SSH private keys, GitHub tokens and `gh` credentials,
+  Pi-hole web passwords, Pi-hole application passwords, Pi-hole session ids,
   registry authorization, cloud credentials, and any credential the
   `qemu+ssh://` account can use.
 - **Operator-supplied content:** cloud-init user-data and any other file the
@@ -111,7 +112,13 @@ that kind. The one path that carries it into a guest is the stdin of
 `tailscale up` after the guest has booted, and only when the operator names
 a file with `create --tailscale-auth-key-file` (ADR-0014). That path does
 not put the key in a base image, a cloud-init seed, `vm.json`, a log, or an
-argument vector. This tool has no metrics or traces. Guest
+argument vector. A Pi-hole password is a host credential of the same kind,
+and it has no path into a guest. It is read from a file the operator names
+and sent only in the body of `POST /api/auth` to the Pi-hole URL the operator
+named (ADR-0021). It MUST NOT enter a guest, a base image, a cloud-init seed,
+`vm.json`, a log, an argument vector, an HTTP redirect, or an HTTP proxy. The
+password-file path may be stored in `vm.json`. `--pihole-insecure` skips TLS
+certificate verification and does not authenticate the server. This tool has no metrics or traces. Guest
 content belongs to that VM and is destroyed with it; it MUST NOT be copied into
 a base image, the repository, or a log. Synthetic development material must be
 clearly non-production and must not contain real credentials or customer data.
@@ -186,6 +193,20 @@ section named here.
   up` returns, including on failure. The guest can read the key while that
   command runs, so the key SHOULD be one-time and ephemeral. Do not put the
   key in cloud-init, the base image, or an argument to avoid that window.
+- A Pi-hole password MUST NOT enter a guest at all. The operator names a file
+  with `create --pihole-password-file` (or `pihole.password_file`, or
+  `AGENT_VM_PIHOLE_PASSWORD_FILE`), and the client sends that file's contents
+  only in the body of `POST /api/auth` to the Pi-hole base URL the operator
+  named (ADR-0021). The password MUST NOT be a flag value, an argument
+  vector, a base-image layer, generated cloud-init user-data, a field in
+  `vm.json`, a log line, or the body of any request other than that login.
+  The type that carries it MUST redact it. HTTP redirects MUST NOT be
+  followed, and the client's proxy MUST be disabled, so the password is not
+  replayed to another host. The password-file path MAY be stored in `vm.json`
+  so `destroy` and `start` can find the file. `--pihole-insecure` skips TLS
+  certificate verification. That setting does not authenticate the server.
+  Do not put the password in cloud-init, the base image, or the guest to
+  simplify registration.
 - A guest generating a key pair for its own accounts at first boot is a
   different thing and is allowed: that key is created inside the VM, never
   leaves it except as the public half described below, and is destroyed with
@@ -313,6 +334,17 @@ section named here.
   selected by a config key or an environment variable. `list` and `info` MUST
   show that the guest joined, because the tailnet is another way to reach it.
   `destroy` does not remove the tailnet node.
+- Registering a name on a Pi-hole is not a libvirt network mode and MUST NOT
+  change the host's routes, interfaces, or firewall. It MUST be requested
+  explicitly on `create` with `--pihole`. A configured URL, password file, or
+  domain MUST NOT register a VM on its own. `list` and `info` MUST show the
+  recorded name and the address it points at. `destroy` removes a recorded
+  name. `stop` MUST NOT remove it. `agent-vm ssh` MUST NOT connect to
+  `<name>.agent`; the destination is the address libvirt reports. A NAT
+  registration points at an address only this host can reach. A bridged
+  registration is reachable by machines that use that Pi-hole as their
+  resolver. `.agent` is not a special-use name, and this tool does not make
+  it one on any other resolver.
 - The libvirt NAT network the tool defines MUST NOT be given host-wide routing,
   additional host interfaces, or forwarding rules beyond libvirt's standard NAT
   behavior.
@@ -402,8 +434,8 @@ section named here.
   status, duration, paths, sizes, digests, the VM name, and the network mode.
 - MUST NOT log or otherwise retain the classes in **Sensitive Data Classes**.
   In particular, MUST NOT log cloud-init contents, operator-supplied file
-  contents, authorization headers, private keys, GitHub tokens, or Tailscale
-  auth keys.
+  contents, authorization headers, private keys, GitHub tokens, Tailscale
+  auth keys, Pi-hole passwords, or Pi-hole session ids.
 - The guest serial console is captured to `console.log` inside that VM's state
   directory and removed when the VM is destroyed. It is a guest diagnostic, not
   a host-secret store. Host credentials MUST NOT be written there.
@@ -423,9 +455,13 @@ section named here.
   image builds. Libvirt remains the source of truth for whether a domain is
   running.
 - On a failed `create`, roll back the domain and the per-VM directory. A
-  boot-wait, Tailscale-join, or GitHub-registration failure may retain the
+  boot-wait, Pi-hole-registration, Tailscale-join, or GitHub-registration
+  failure may retain the
   recorded VM for inspection; that retention MUST be visible in the error,
-  not reported as a clean create. Built base images and the shared NAT
+  not reported as a clean create. A Pi-hole failure after the VM exists
+  retains the VM and does not roll the domain back. When registration
+  succeeded and a later step failed, the DNS name stays and is recorded.
+  Built base images and the shared NAT
   network stay in place because other VMs reuse them.
 - Integration tests MUST run only against a disposable host, MUST use a
   dedicated state directory and the `agent-vm-test-` name prefix, and MUST NOT
@@ -482,6 +518,12 @@ section named here.
   that is not ephemeral stays on the tailnet after `destroy` until it is
   removed in the tailnet's admin console. Joining a tailnet puts the guest
   on that network; it is a separate choice from NAT or bridge.
+- Keep the Pi-hole password in a mode `600` file on the client. It must not
+  enter the guest. `--pihole-insecure` accepts the certificate the named host
+  presents and does not authenticate that host. Publish `<name>.agent` only
+  for a guest you mean other resolvers of that Pi-hole to find. `agent-vm
+  ssh` uses the address libvirt reports, so a stale or forged name cannot
+  redirect the tool.
 - A `qemu+ssh://` URI grants command execution as that account on that host.
   Use it only against a hypervisor the operator is willing to administer.
 - Destroy the VM when the task is done. The overlay, the seed, and
@@ -539,6 +581,7 @@ Out of scope: vulnerabilities in libvirt, QEMU/KVM, the Linux kernel,
 upstream — though if our invocation of one of them is what creates the
 exposure, that is in scope); guest-to-host escapes attributable to the
 hypervisor rather than to our configuration; the documented consequences of
-opt-in features such as bridged networking and joining a Tailscale network;
+opt-in features such as bridged networking, joining a Tailscale network,
+and registering a name on a Pi-hole the operator chose;
 social engineering; and purely
 volumetric denial-of-service reports.

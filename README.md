@@ -216,6 +216,20 @@ Use a one-time ephemeral key: the guest can read it while it logs in, and
 `destroy` does not remove a node that was not ephemeral. See
 [ADR-0014](./docs/decisions/0014-join-a-tailscale-network-from-the-guest.md).
 
+- **Pi-hole.** This does not change the libvirt network. After the guest has
+  an address, `create --pihole` registers `<name>.agent` on a Pi-hole v6 DNS
+  server you already run. The password stays in a file on the client:
+
+```bash
+agent-vm create agent-06 --network bridge --bridge br0 --pihole \
+  --pihole-url https://pi.hole --pihole-password-file ~/.config/agent-vm/pihole-password
+```
+
+Other machines open that name when they use that Pi-hole. `agent-vm ssh` uses
+the address libvirt reports. A NAT guest can be registered too; only this host
+can reach the address the name points at. See
+[ADR-0021](./docs/decisions/0021-register-a-guest-on-pi-hole.md).
+
 ## How It Works
 
 ```text

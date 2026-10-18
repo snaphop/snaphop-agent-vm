@@ -207,6 +207,11 @@ func (a *App) reportState(ctx context.Context, vm *state.VM, manager *domain.Man
 			a.logger.Debug("could not read guest address", "vm", vm.Name, "error", err)
 		}
 		status.Address = address
+		// A recorded name follows the address libvirt reports. An address that
+		// is not known yet leaves the old record, and does not fail the start.
+		if err := a.refreshPiHole(ctx, vm, address); err != nil {
+			return err
+		}
 	}
 
 	if a.out.format == OutputJSON {

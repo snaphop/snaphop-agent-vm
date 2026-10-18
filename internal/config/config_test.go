@@ -507,6 +507,88 @@ func TestLoad_RejectsAnInvalidGitHubOrg(t *testing.T) {
 	}
 }
 
+func TestLoad_PiHoleFromFileEnvAndFlag(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, `
+[pihole]
+url = "https://from-file.example/"
+password_file = "~/pihole-password"
+domain = "Lab."
+insecure = true
+`)
+	fromFile, err := Load(noEnv, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load file: %v", err)
+	}
+	if fromFile.PiHole.URL != "https://from-file.example" {
+		t.Errorf("URL = %q", fromFile.PiHole.URL)
+	}
+	if fromFile.PiHole.PasswordFile != "/nonexistent/agent-vm-test-home/pihole-password" {
+		t.Errorf("PasswordFile = %q", fromFile.PiHole.PasswordFile)
+	}
+	if fromFile.PiHole.Domain != "lab" {
+		t.Errorf("Domain = %q, want lab", fromFile.PiHole.Domain)
+	}
+	if !fromFile.PiHole.Insecure {
+		t.Error("Insecure = false, want true from the file")
+	}
+
+	fromEnv, err := Load(envMap(map[string]string{
+		"HOME":                          emptyHome,
+		"AGENT_VM_PIHOLE_URL":           "http://from-env.example",
+		"AGENT_VM_PIHOLE_DOMAIN":        "env.agent",
+		"AGENT_VM_PIHOLE_INSECURE":      "false",
+		"AGENT_VM_PIHOLE_PASSWORD_FILE": "/tmp/from-env",
+	}), Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load env: %v", err)
+	}
+	if fromEnv.PiHole.URL != "http://from-env.example" || fromEnv.PiHole.Domain != "env.agent" || fromEnv.PiHole.Insecure {
+		t.Errorf("env did not beat the file: %+v", fromEnv.PiHole)
+	}
+	if fromEnv.PiHole.PasswordFile != "/tmp/from-env" {
+		t.Errorf("PasswordFile = %q", fromEnv.PiHole.PasswordFile)
+	}
+
+	fromFlag, err := Load(envMap(map[string]string{
+		"HOME":                     emptyHome,
+		"AGENT_VM_PIHOLE_URL":      "http://from-env.example",
+		"AGENT_VM_PIHOLE_INSECURE": "false",
+	}), Overrides{
+		ConfigFile:     path,
+		PiHoleURL:      "https://from-flag.example",
+		PiHoleInsecure: "true",
+	})
+	if err != nil {
+		t.Fatalf("Load flag: %v", err)
+	}
+	if fromFlag.PiHole.URL != "https://from-flag.example" || !fromFlag.PiHole.Insecure {
+		t.Errorf("flag did not beat env: %+v", fromFlag.PiHole)
+	}
+}
+
+func TestLoad_PiHoleInsecureStaysWhenTheFlagDoesNotSetIt(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[pihole]\ninsecure = true\n")
+	cfg, err := Load(noEnv, Overrides{ConfigFile: path, PiHoleInsecure: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.PiHole.Insecure {
+		t.Fatal("an absent flag cleared insecure = true")
+	}
+}
+
+func TestLoad_RejectsAnUnknownPiHoleConfigKey(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[pihole]\npassword = \"secret\"\n")
+	_, err := Load(noEnv, Overrides{ConfigFile: path})
+	var verr *ValidationError
+	if !errors.As(err, &verr) || !strings.Contains(verr.Error(), "pihole.password") {
+		t.Fatalf("Load = %v, want an unknown-key error", err)
+	}
+}
+
 func TestLoad_RejectsAnUnknownGitHubConfigKey(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, "[github]\nnope = \"acme\"\n")

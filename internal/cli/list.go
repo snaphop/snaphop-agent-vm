@@ -198,6 +198,9 @@ func networkSummary(vm *state.VM) string {
 	if vm.Tailscale != nil {
 		summary += "+tailscale"
 	}
+	if vm.PiHole != nil {
+		summary += "+pihole"
+	}
 	return summary
 }
 

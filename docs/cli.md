@@ -139,6 +139,12 @@ ssh_keys = ["~/.ssh/id_ed25519.pub"]
 
 [github]
 org = "acme"   # optional: register a -runner VM with this organization
+
+[pihole]
+url = "https://pi.hole"   # used only when create is given --pihole
+password_file = "~/.config/agent-vm/pihole-password"   # mode 600, one password
+domain = "agent"   # optional; the record is <name>.agent
+insecure = false   # optional; skip TLS verification only when set true
 ```
 
 A key the file does not support — including a misspelled key or table name —
@@ -173,6 +179,10 @@ the **client** home directory, so use absolute remote paths.
 | `AGENT_VM_BRIDGE` | `create --bridge` |
 | `AGENT_VM_SSH_KEY` | `create --ssh-key` |
 | `AGENT_VM_GITHUB_ORG` | `create --github-org` |
+| `AGENT_VM_PIHOLE_URL` | `create --pihole-url`. `destroy` keeps the URL stored in `vm.json` unless that command is given `--pihole-url` |
+| `AGENT_VM_PIHOLE_PASSWORD_FILE` | `create --pihole-password-file` and `destroy --pihole-password-file` |
+| `AGENT_VM_PIHOLE_DOMAIN` | `create --pihole-domain` |
+| `AGENT_VM_PIHOLE_INSECURE` | `create --pihole-insecure` and `destroy --pihole-insecure` (`true`, `false`, `yes`, `no`, `on`, `off`, `1`, or `0`) |
 
 ## Commands
 
@@ -1326,6 +1336,11 @@ and must not already exist.
 | `--tailscale-advertise-tag <tag>` | none | ACL tag to advertise, such as `tag:ci`. Repeatable. |
 | `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. |
 | `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. |
+| `--pihole` | off | Register `<name>.agent` on a Pi-hole v6 DNS server after libvirt reports an address. A configured URL does not do this on its own. Requires a wait. |
+| `--pihole-url <URL>` | config value | Pi-hole base URL, such as `https://pi.hole`. `http` or `https`, with a host, and no user, query, or path. Also `[pihole] url` and `AGENT_VM_PIHOLE_URL`. |
+| `--pihole-password-file <path>` | config value | File containing the Pi-hole web password or an application password. Mode `600`, one line. Also `[pihole] password_file` and `AGENT_VM_PIHOLE_PASSWORD_FILE`. |
+| `--pihole-domain <domain>` | `agent` | DNS domain for the record, so the name is `<name>.<domain>`. No leading dot. Also `[pihole] domain` and `AGENT_VM_PIHOLE_DOMAIN`. |
+| `--pihole-insecure` | off | Do not verify the Pi-hole server's TLS certificate. Also `[pihole] insecure` and `AGENT_VM_PIHOLE_INSECURE`. The flag forces this on and does not turn a configured `true` back off. |
 
 On success, prints the VM name, address, and SSH command, and, when the guest
 update ran, that its packages and tooling were updated.
@@ -1336,9 +1351,11 @@ stays the description of how the VM was defined.
 Inputs are checked before anything on the host is touched. The SSH keys, the
 `--cloud-init` file (it must begin with a header cloud-init recognizes), the
 `--opencode-config` file (it must be valid JSON), and — when a join was
-requested — the Tailscale auth key file (one key, and nothing else) are read
+requested — the Tailscale auth key file (one key, and nothing else), and —
+when `--pihole` was requested — the Pi-hole URL, the domain, and the password
+file (a regular file, mode `600`, one password) are read
 and validated first, and a bad one exits `2` — under `--dry-run` too. An error
-from the auth key file names the path and does not print the file. Next, the minimum versions of
+from the auth key file or the password file names the path and does not print the file. Next, the minimum versions of
 `virt-install`, `virsh`, `qemu-img`, and `virt-make-fs` (plus `gh` when
 `--github-ssh-key` is set or a runner will be registered) are checked, and a
 missing or too-old tool exits `3`. Only
@@ -1473,11 +1490,14 @@ lease, which has the latest expiry until the new guest is handed an address.
 The probe follows the newer lease. `ssh`, `info`, and `list` still use
 whichever lease is latest at the moment they run.
 
-After the VM is recorded, a boot-wait timeout, a guest update failure, a
-Tailscale join failure, a GitHub SSH-key registration failure, and a GitHub
-Actions runner registration failure retain it for inspection. A failed update
-does not join Tailscale or register the GitHub key or the Actions runner; the
-message names what did not run. Retry the update with `agent-vm update
+After the VM is recorded, a boot-wait timeout, a Pi-hole registration failure,
+a guest update failure, a Tailscale join failure, a GitHub SSH-key
+registration failure, and a GitHub Actions runner registration failure retain
+it for inspection. A failed Pi-hole registration does not update the guest,
+join Tailscale, or register with GitHub, and `vm.json` has no `pihole`
+object. A failed update
+does not join Tailscale or register the GitHub key or the Actions runner; a
+DNS name already recorded stays. The message names what did not run. Retry the update with `agent-vm update
 <name>`. To finish a Tailscale join or a GitHub registration that the update
 never reached, destroy the VM and create it again. A `--wait-for-ssh` timeout
 exits `6` and **leaves the VM in place** with its `console.log`, because "it
@@ -1746,13 +1766,112 @@ The first join downloads Tailscale's installer into that guest. A guest
 that already has `tailscale` on `PATH` skips the download. Cached base
 images do not contain Tailscale and do not need a rebuild for this to work.
 
+#### Pi-hole DNS
+
+`agent-vm create --pihole` registers the guest on a Pi-hole v6 DNS server
+after libvirt reports an address
+([ADR-0021](./decisions/0021-register-a-guest-on-pi-hole.md)). It does not
+change `--network`. NAT stays the default libvirt attachment. A URL in the
+config file or the environment does not register a VM; `--pihole` is the
+request. Any other `--pihole-*` flag without `--pihole` exits `2`.
+
+```console
+$ agent-vm create build-01 --pihole \
+    --pihole-url https://pi.hole \
+    --pihole-password-file ~/.config/agent-vm/pihole-password
+$ agent-vm create build-01 --network bridge --bridge br0 --pihole \
+    --pihole-domain lab.internal --pihole-insecure
+```
+
+The URL, the password file, and the domain also come from `[pihole]` in the
+config file and from `AGENT_VM_PIHOLE_URL`, `AGENT_VM_PIHOLE_PASSWORD_FILE`,
+and `AGENT_VM_PIHOLE_DOMAIN`. Flags win, then environment variables, then the
+file. `--pihole-insecure` and `AGENT_VM_PIHOLE_INSECURE` (`true`, `false`,
+`yes`, `no`, `on`, `off`, `1`, or `0`) skip TLS verification. A config value
+of `insecure = true` stays on when the flag is absent. The flag turns
+verification off and cannot turn it back on.
+
+The password file is read before anything is created, including under
+`--dry-run`. It must be a regular file, not a directory or a symbolic link,
+mode `600`, at most 4096 bytes, and one password. A single trailing newline
+is accepted. An empty file, a second line, or a NUL exits `2`. The error
+names the path and does not print the password. `--dry-run` prints the
+planned `PUT` and the password-file path. It does not log in, and it does
+not change Pi-hole or `vm.json`.
+
+`--pihole` needs a boot wait. `--wait-for-ssh 0` exits `2`, because the
+address is the one that wait reads from libvirt.
+
+The name is `<name>.<domain>`. The default domain is `agent`, so the name is
+`build-01.agent`. The domain has no leading dot: `.agent` is rejected, with
+the remedy to use `agent`. A trailing dot is removed. An empty domain means
+the default. The full name is at most 253 characters.
+
+Registration runs after that address is known and before the guest update, so
+a later update failure leaves the name registered and recorded. The client
+speaks Pi-hole v6. `POST /api/auth` sends `{"password":"…"}` and reads
+`session.sid`. Later calls send that value in `X-FTL-SID` and `sid`. Local
+DNS is `GET /api/config/dns/hosts`, then `PUT` or `DELETE` of
+`/api/config/dns/hosts/<address>%20<name>`. A line that already has this name
+at this address is left alone. A line that has the name at another address is
+removed exactly as Pi-hole returned it, and any other names on that line are
+written back. The password is sent only in the login body. Redirects are not
+followed. The client does not use an HTTP proxy. `--pihole-insecure` skips
+certificate verification and does not authenticate the server. Pi-hole v5 is
+not supported; a 404 names the v6 path. HTTP 401 and 403 say that an
+application password can change config only when `webserver.api.app_sudo` is
+true. `doctor` does not contact Pi-hole and does not fail when it is absent.
+
+On success `vm.json` records `pihole`: `url`, `name`, `address`,
+`passwordFile`, and `insecure` when verification was skipped. The password
+itself is not a field. `schemaVersion` stays 1. `list` appends `+pihole`
+after `+tailscale` (`nat+pihole`, `bridge:br0+tailscale+pihole`). `info`
+shows a `dns` row, `<name>.agent -> <address>`.
+
+A NAT guest may be registered. The success text says the name points at a
+NAT address only this host can reach. A bridged guest's text says other
+machines that use this Pi-hole can open the name. Those machines resolve it
+when they use that Pi-hole. `.agent` is not a special-use name on the public
+DNS. Registration does not change host firewalls, routes, or the guest.
+`agent-vm ssh` connects to the address libvirt reported.
+
+A registration that fails after the VM exists leaves the VM in place and
+does not write `pihole`. The error names the later steps that did not run:
+the guest update, when one was requested, then a Tailscale join and the
+GitHub steps. A logout that fails after Pi-hole accepted the change is a
+warning. The command still records the name. The session expires on its own.
+
+`stop` leaves the DNS record in place. `start` and `restart`, once the guest
+is running and libvirt reports a different address, update the record and
+`vm.json`. The same address does not call Pi-hole, so start works when the
+password file is missing until the address changes. An address that is not
+yet known, or that does not parse, leaves the old record and does not fail
+the command. A refresh that fails after the VM is running exits `1`: the VM
+is running, and the name still points at the old address. Fix the password
+file, then stop and start, or destroy the VM.
+
+`destroy` removes a recorded name before it undefines the domain, after the
+GitHub SSH key and the Actions runner. No extra `--pihole` flag is required.
+The prompt names the DNS name. The URL is the one in `vm.json` unless this
+invocation passes `--pihole-url`. A URL in the config file or in
+`AGENT_VM_PIHOLE_URL` does not move the delete to another server. A bad
+`--pihole-url` exits `2` before the VM name is looked up. The password file is the flag,
+the environment, or the config file when one of those set it, and the
+recorded path otherwise. `--pihole-insecure` on this invocation, or
+`insecure` already recorded, skips verification. A name Pi-hole no longer
+has is success. `--keep-disk` still removes the name and clears `pihole`.
+`--dry-run` prints the `DELETE` and the password-file path and does not
+change Pi-hole or `vm.json`. A failure leaves the VM. When the server is
+gone, remove the `pihole` object from `vm.json` and run destroy again.
+
 ### `agent-vm list`
 
 Lists VMs known to this state directory with state, distro, resources, network
 mode, address, and creation time. The network column is `nat` or
 `bridge:<iface>`. A guest that joined a tailnet has `+tailscale` appended
 (`nat+tailscale`, `bridge:br0+tailscale`), because that overlay is another way
-to reach it. Domains that exist in libvirt but not in state
+to reach it. A guest registered on Pi-hole has `+pihole` after that
+(`nat+pihole`, `bridge:br0+tailscale+pihole`). Domains that exist in libvirt but not in state
 are not listed; domains in state that have vanished from libvirt are reported as
 `missing`. With `--output json`, emits an array of stored VM records augmented
 with live `state` and an optional `address`.
@@ -1773,7 +1892,8 @@ a tailnet also shows a `tailscale` row: the address it reported, the hostname,
 and any login server, tags, ephemeral node, or Tailscale SSH that was requested.
 A guest registered as a GitHub Actions runner shows a `github runner` row:
 `org/name (id N)`, or `org/name` when the id was not recorded.
-That address is display only; `agent-vm ssh` still uses the address libvirt
+A guest registered on Pi-hole shows a `dns` row: `<name>.agent -> <address>`.
+The tailnet address and the DNS name are display only; `agent-vm ssh` still uses the address libvirt
 reported.
 
 With `--output json`, the stored VM fields are augmented with live `state`, an
@@ -1802,6 +1922,15 @@ Flags for `stop` and `restart`:
 | `--timeout <duration>` | `60s` | How long to wait for a graceful shutdown. |
 | `--force` | off | Power off immediately (`virsh destroy`) instead of requesting a graceful shutdown. Can lose guest writes. |
 
+`start` and `restart` of a VM whose `vm.json` has `pihole`, once the guest is
+running and libvirt reports a different address, update that record on
+Pi-hole and in `vm.json`. The same address does not call Pi-hole. An address
+that is missing or unparsable leaves the old record and does not fail the
+command. `stop` does not change the record and does not remove it. A refresh
+that fails after the VM is running exits `1`: the VM is running, and the name
+still points at the recorded address. Fix the password file, then stop and
+start, or destroy the VM. See [Pi-hole DNS](#pi-hole-dns).
+
 ### `agent-vm ssh <name> [-- <command>...]`
 
 Execs `ssh` to the VM as the guest user, or runs a command non-interactively and
@@ -1812,7 +1941,9 @@ DHCP server is the LAN's. Either way only the interface libvirt defined, by the
 MAC recorded in `vm.json`, is used. A bridged guest also publishes
 `<name>.local` for other machines on the LAN. This command still connects
 to the address libvirt reported
-([mDNS on a bridged guest](#mdns-on-a-bridged-guest)). The guest is untrusted
+([mDNS on a bridged guest](#mdns-on-a-bridged-guest)). A name this tool
+registered on Pi-hole, such as `<name>.agent`, is not the destination either
+([Pi-hole DNS](#pi-hole-dns)). The guest is untrusted
 and is never asked where it is on NAT. Recreating a NAT VM keeps that MAC and the new guest takes
 a new lease, while dnsmasq keeps the previous leases until they expire. When
 more than one lease matches the MAC, the one with the latest expiry from
@@ -1946,6 +2077,9 @@ overlay, and generated seed. Prompts for confirmation unless `--yes` is given.
 | `--force` | off | Power off immediately instead of attempting graceful shutdown. |
 | `--timeout <duration>` | `60s` | How long to wait for the graceful shutdown. |
 | `--github-ssh-key` | off | Also remove this VM's SSH key from your GitHub account, using `gh`. |
+| `--pihole-url <URL>` | the URL recorded in `vm.json` | Pi-hole base URL when it differs from the server recorded for this VM. A URL in the config file or `AGENT_VM_PIHOLE_URL` does not override the recorded server. |
+| `--pihole-password-file <path>` | config value, else the recorded path | File containing the Pi-hole password when it is not the recorded file. |
+| `--pihole-insecure` | off | Do not verify the Pi-hole server's TLS certificate. Also honored when the record already has `insecure`. |
 
 `--github-ssh-key` removes the key `create --github-ssh-key` added, by the id
 recorded in `vm.json`. It runs **first**, while the VM is still intact: if `gh`
@@ -1976,6 +2110,23 @@ treated as already gone. More than one runner of that name stops destroy, so
 the wrong one is not deleted. `--keep-disk` still removes the recorded runner
 and clears the record. A runner you registered by hand has no record and
 stays at GitHub. `--dry-run` prints the DELETE and does not change `vm.json`.
+
+A VM whose record has `pihole` also has that DNS name removed, with no extra
+`--pihole` flag. The prompt names the name. Cancelling the prompt does not
+call Pi-hole. The removal runs after the GitHub steps and before the domain
+is undefined: `POST /api/auth`, then `DELETE /api/config/dns/hosts/<address>%20<name>`.
+The URL is the one stored in `vm.json` unless this invocation passes
+`--pihole-url`. The config file and `AGENT_VM_PIHOLE_URL` do not retarget
+it. The password file is `--pihole-password-file`,
+`AGENT_VM_PIHOLE_PASSWORD_FILE`, or `[pihole] password_file` when one of
+those is set, and the path recorded at create otherwise. A name Pi-hole no
+longer has is not an error. Any other failure leaves the domain and the
+record. The `pihole` object is cleared only after the delete succeeds, so a
+later failure retries a name that is already gone. `--keep-disk` still
+removes the name and clears the object. `--dry-run` prints the `DELETE` and
+the password-file path and does not log in or change `vm.json`. When the
+Pi-hole server is gone, remove the `pihole` object from `vm.json` and run
+destroy again. See [Pi-hole DNS](#pi-hole-dns).
 
 `destroy` only ever touches domains and paths recorded in this state directory.
 It refuses to remove a path that does not resolve inside the state directory,
@@ -2040,7 +2191,8 @@ global flags, the values of flags whose set of values is closed (`--output`,
 `info`, `start`, `stop`, `restart`, `ssh`, `update`, `console`, and `destroy`,
 and the cached images for `image inspect`, `image rm`, and `--distro`. Where
 `agent-vm` offers nothing, the shell falls back to filenames, which is what
-`--config`, `--ssh-key`, `--cloud-init`, and `--tailscale-auth-key-file` want.
+`--config`, `--ssh-key`, `--cloud-init`, `--tailscale-auth-key-file`, and
+`--pihole-password-file` want.
 Nothing is offered after
 `--` in `agent-vm ssh <name> --`, because what follows runs in the guest.
 
@@ -2074,19 +2226,21 @@ table below is the summary.
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --labels <org>,<family>-latest,<family>-<tag> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
 | `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
+| `create --pihole` | the `create` tools, then, after libvirt reports an address and before the guest update, HTTP from the client to Pi-hole v6: `POST /api/auth` (the password in the JSON body), `GET /api/config/dns/hosts`, and `PUT /api/config/dns/hosts/<address>%20<name>`. No host tool is spawned. The password is not in the URL or an argument vector. Redirects are not followed |
+| `destroy` of a recorded Pi-hole name | HTTP from the client, before `virsh undefine`: `POST /api/auth`, `GET /api/config/dns/hosts`, and `DELETE /api/config/dns/hosts/<address>%20<name>`. A missing name is success. No host tool is spawned. The password is not in the URL or an argument vector |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
 | `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`; `--xml ./devices/interface/rom/@enabled=no` so QEMU does not load a virtio option ROM), `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe; `virsh domifaddr` and, when a NAT guest has more than one lease, `virsh net-dhcp-leases` are read again before each probe), then the guest commands listed for `update` (skipped with `--no-update` or `--wait-for-ssh 0`) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `qemu-img info -U --output=json` (`info` only) |
-| `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`) |
+| `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`). `start` and `restart` of a VM with a recorded Pi-hole name also call the same Pi-hole HTTP API as `create --pihole` when libvirt reports a different address. `stop` does not call Pi-hole |
 | `ssh` | `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), then `ssh` |
 | `update` | `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `find`/`chown -h` (the shared store's selector symlinks, handed to the guest user), `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
 | `licenses` | none — prints the embedded license texts and spawns no process |
-| any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh` and the `ssh` into a guest still run here, the latter as `ssh -J <destination> …` |
+| any command, with `--libvirt-uri qemu+ssh://…` | every invocation above that touches a disk, an image, or a domain, wrapped as `ssh -- <destination> <quoted-command>`; the state directory is managed there with `mkdir`, `dd`, `chmod`, `mv`, `cat`, `rm`, `find`, `readlink`, `stat`, `df`, `du`, and `flock`. `gh`, the `ssh` into a guest, and the Pi-hole HTTP client still run here. The guest `ssh` is `ssh -J <destination> …`. Pi-hole is not wrapped in `ssh`, and the password is not sent to the hypervisor |
 | `doctor` | `virsh version`, plus `--version` on every required tool that has one (`virt-install`, `qemu-img`, `podman`, `virt-make-fs`, `virt-ls`, `virt-copy-out`, `virt-sysprep`), a `PATH` check for `newuidmap` and `pasta` (neither is executed), `ip -V`, `ssh -V`, `gh --version` (optional), `virsh net-list`, `virsh net-dumpxml` (to name the NAT bridge the two firewall checks match rules against), `uname -m` and `uname -r` with `cat /boot/config-<release>` or `zcat /proc/config.gz` (to judge whether the host kernel can boot a libguestfs appliance), `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped when `appliance_kernel` is set), and — when a bridge is configured — `ip -d -json link`, and — when `/etc/ufw/ufw.conf`, `/etc/default/ufw`, or `/etc/ufw/user.rules` is not readable — `sudo -n -- cat --` of that file, and — when the state directory is under a hidden home directory — `cat` of `/etc/apparmor.d/usr.lib.libvirt.virt-aa-helper` and, when that profile is installed and the state directory can be written as an AppArmor path, `cat` of `/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` (skipped for a remote hypervisor; doctor does not run `apparmor_parser`). The firewall checks never run `ufw` and never change a rule |
 | `setup` | `cat /etc/os-release`, `uname -m`, `id -u`, `id -un`, then the family's package manager (`apt-get update` and `apt-get install` on Ubuntu, `dnf -y install` on Fedora, or `pacman -Sy --needed` on Arch), `systemctl show -p LoadState` and `systemctl enable --now`, `id -nG` and `usermod -aG`, `realpath` and `mkdir -p` of the state directory, `getent passwd`, and `setfacl -m u:<qemu>:x` when that account cannot search a directory above the state directory. When the state directory is under a hidden home directory, `test -f` and `cat` of `/etc/apparmor.d/usr.lib.libvirt.virt-aa-helper` and of `/etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper`. When that profile still denies `@{HOME}/.*/**`, `apparmor_parser -Q -K /dev/stdin` asks whether `priority=` parses (this probe runs for real under `--dry-run`, and it is not run under `sudo`). When the parser accepts it and the local priority rule is missing, `sudo -n -- tee /etc/apparmor.d/local/usr.lib.libvirt.virt-aa-helper` (the snippet on stdin) and `sudo -n -- apparmor_parser -r /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper`. When the parser rejects `priority=`, the same `tee` of the local include carries the carved denies and a plain read-and-lock rule, `sudo -n -- tee /etc/apparmor.d/usr.lib.libvirt.virt-aa-helper` replaces the shipped hidden-home deny with a marker, and `sudo -n -- apparmor_parser -r` reloads the profile. Privileged commands run under `sudo -n`. Nothing here changes a firewall, a bridge, SELinux, or the profile QEMU runs under |
 
@@ -2223,6 +2377,7 @@ answer that goes stale.
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
 | `tailscale` | Present only for a VM created with `--tailscale-auth-key-file`: `hostname`, and, when set, `loginServer`, `advertiseTags`, `ephemeral`, `ssh`, and `ipv4`. The auth key and the path of its file are not stored. `ipv4` is the address the guest reported and is not an SSH destination. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
+| `pihole` | Present only for a VM created with `--pihole`: `url`, `name` (usually `<vm>.agent`), `address`, `passwordFile`, and `insecure` when TLS verification was skipped. The password is not stored. `address` is the address libvirt reported and is not an SSH destination. `destroy` and a later `start` use `url` and `passwordFile`. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
 | `githubRunner` | Present only when `create` registered this VM as a GitHub Actions runner: `org`, `name`, `id` (omitted when it was not recorded), and `url` (`https://github.com/<org>`). The registration token is not stored. `destroy` deletes that runner by `id`, or by `name` when `id` is absent. Absent on every other VM, including records written before this field existed and runner VMs created with no organization. `schemaVersion` stays 1. |
 | `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |
 | `createdBy` | Provenance: the `agent-vm` and `virt-install` versions, and the exact argument vector that defined the domain. |
