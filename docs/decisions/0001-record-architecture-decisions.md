@@ -39,7 +39,8 @@ family, adding a base image variant or changing where guest tooling comes from
 joining a guest to an overlay network (ADR-0014),
 registering a guest as a GitHub Actions runner (ADR-0015),
 preparing a host with `agent-vm setup` (ADR-0018),
-publishing mDNS from a bridged guest (ADR-0020), and
+publishing mDNS from a bridged guest (ADR-0020),
+registering a guest on a Pi-hole DNS server (ADR-0021), and
 implementing in our own code something a standard host tool
 already does (ADR-0009).
 

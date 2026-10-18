@@ -94,6 +94,11 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 		[]string{"vcpus", fmt.Sprint(vm.Resources.VCPUs)},
 		[]string{"memory", memoryDetail(vm.Resources)},
 		[]string{"network", networkSummary(vm)},
+	)
+	if vm.PiHole != nil {
+		rows = append(rows, []string{"dns", vm.PiHole.Name + " -> " + vm.PiHole.Address})
+	}
+	rows = append(rows,
 		[]string{"mac", vm.Network.MAC},
 		[]string{"guest user", vm.Guest.User},
 		[]string{"ssh keys", strings.Join(vm.Guest.SSHKeyPaths, ", ")},

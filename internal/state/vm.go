@@ -36,6 +36,10 @@ type VM struct {
 	// It is omitted otherwise, so a record written before the field existed
 	// stays valid without a schema bump. The auth key is not stored.
 	Tailscale *VMTailscale `json:"tailscale,omitempty"`
+	// PiHole is set when create registered this guest on a Pi-hole DNS server.
+	// It is omitted otherwise, so a record written before the field existed
+	// stays valid without a schema bump. The password is not stored.
+	PiHole *VMPiHole `json:"pihole,omitempty"`
 	// GitHubRunner is set when create registered this guest as a GitHub
 	// Actions runner. It is omitted otherwise, so a record written before the
 	// field existed stays valid without a schema bump. The registration token
@@ -110,6 +114,17 @@ type GitHubSSHKey struct {
 	Title     string    `json:"title"`
 	PublicKey string    `json:"publicKey"`
 	AddedAt   time.Time `json:"addedAt"`
+}
+
+// VMPiHole is the non-secret record of a Pi-hole DNS registration. Name is
+// the FQDN, usually <vm>.agent. PasswordFile is the path destroy and start
+// read the password from; the password itself is not stored.
+type VMPiHole struct {
+	URL          string `json:"url"`
+	Name         string `json:"name"`
+	Address      string `json:"address"`
+	Insecure     bool   `json:"insecure,omitempty"`
+	PasswordFile string `json:"passwordFile,omitempty"`
 }
 
 // GitHubRunner identifies one Actions runner this tool registered in an

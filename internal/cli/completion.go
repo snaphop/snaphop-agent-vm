@@ -168,6 +168,7 @@ func completionSpecs() map[string]*completionSpec {
 			"host-authorized-keys", "virt-install-arg", "github-org", "github-ssh-key",
 			"tailscale-auth-key-file", "tailscale-hostname", "tailscale-login-server",
 			"tailscale-advertise-tag", "tailscale-ephemeral", "tailscale-ssh",
+			"pihole", "pihole-url", "pihole-password-file", "pihole-domain", "pihole-insecure",
 		}},
 		"list":       {},
 		"info":       {args: vmName},
@@ -177,7 +178,7 @@ func completionSpecs() map[string]*completionSpec {
 		"ssh":        {args: vmName},
 		"update":     {flags: []string{"all", "timeout"}, args: vmName},
 		"console":    {args: vmName},
-		"destroy":    {flags: []string{"keep-disk", "force", "timeout", "github-ssh-key"}, args: vmName},
+		"destroy":    {flags: []string{"keep-disk", "force", "timeout", "github-ssh-key", "pihole-url", "pihole-password-file", "pihole-insecure"}, args: vmName},
 		"licenses":   {},
 		"completion": {args: []argSource{func(*App) []string { return shellNames() }}},
 		"image": {subcommands: map[string]*completionSpec{

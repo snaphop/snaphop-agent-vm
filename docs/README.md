@@ -34,6 +34,7 @@ Documentation for SnapHop Agent VM.
 | [0018](./decisions/0018-set-up-a-supported-host.md) | Set up a supported host from the command |
 | [0019](./decisions/0019-clean-runner-disk-before-each-job.md) | Clean runner disk before each job |
 | [0020](./decisions/0020-publish-ssh-with-mdns-on-a-bridged-guest.md) | Publish SSH with mDNS on a bridged guest |
+| [0021](./decisions/0021-register-a-guest-on-pi-hole.md) | Register a guest on a Pi-hole DNS server |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.

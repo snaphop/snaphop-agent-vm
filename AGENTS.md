@@ -65,7 +65,7 @@ describes the full intended design and public contract; the code implements part
 of it. Landed so far: `internal/hostexec`, `internal/config`, `internal/state`,
 `internal/network`, `internal/image` (including the per-distro
 `Containerfile`s), `internal/guestinit`, `internal/domain`, `internal/github`,
-`internal/tailscale`, `internal/progress`, `internal/hostsetup`, and the `doctor`, `setup`, `image`, `create`, `list`, `info`,
+`internal/tailscale`, `internal/pihole`, `internal/progress`, `internal/hostsetup`, and the `doctor`, `setup`, `image`, `create`, `list`, `info`,
 `start`, `stop`, `restart`, `ssh`, `update`, `console`, `destroy`, `licenses`,
 `completion`, `--version`, and `--dry-run` surfaces in `internal/cli` — every command in the
 documented contract. What remains is hardening: the integration
@@ -128,6 +128,7 @@ Ordinary focused work continues to follow this file directly.
 │   ├── state/              # state directory, vm.json, locking
 │   ├── github/             # gh on the client: SSH keys and Actions runner registration
 │   ├── tailscale/          # guest Tailscale join; the auth key travels on stdin
+│   ├── pihole/             # Pi-hole v6 local DNS; the password stays on the client
 │   ├── hostsetup/          # prepare a supported host: packages, libvirt, groups
 │   ├── progress/           # terminal progress rendering for long operations
 │   ├── notices/            # LICENSE and NOTICE, embedded in the release binary
@@ -376,6 +377,13 @@ Major modules and responsibilities:
   the seed, or `vm.json`. The guest command's argument vector lives in this
   package; `internal/cli` only decides when to run it. Do not put the key in
   cloud-init to simplify the join.
+- `internal/pihole` — registers `<name>.agent` on a Pi-hole v6 DNS server when
+  `create --pihole` is set (ADR-0021). The password is read from a file on the
+  client and sent only in `POST /api/auth`. It is not written into the guest,
+  the image, the seed, `vm.json`, a log, or an argument vector. The
+  password-file path may be stored. Pi-hole has no local CLI for another
+  machine, so this package speaks HTTP (ADR-0009). `doctor` does not require
+  Pi-hole. `agent-vm ssh` keeps using the address libvirt reports.
 - `internal/progress` — renders the progress of a long, multi-step operation: a
   bar redrawn in place on a terminal, one plain line per step anywhere else.
   Presentation only; the package doing the work reports which step it reached.
@@ -386,7 +394,9 @@ Major modules and responsibilities:
   command runs. Each command carries a location; with a `qemu+ssh://` libvirt URI
   the hypervisor-located ones — everything touching a disk, an image, or a domain
   — are wrapped in `ssh` here rather than at each call site (ADR-0010). Only `gh`
-  and the `ssh` into a guest stay on the client.
+  and the `ssh` into a guest stay on the client as spawned commands. The
+  Pi-hole HTTP client also stays on the client; it is not a spawned process
+  (ADR-0021).
 
 Flow for `agent-vm create`: resolve config and validate input files → confirm
 any versioned kernel in `/boot` is readable, unless `appliance_kernel` is set →
@@ -399,6 +409,9 @@ file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
 → poll `virsh domifaddr` and, when a NAT guest has more than one lease for its MAC, take the latest expiry from `virsh net-dhcp-leases` again before each SSH probe (unless waiting is disabled), so a lease granted while the previous boot's lease is still the newest is the one the probe follows
+→ when `--pihole` is set, register `<name>.agent` on that Pi-hole from the
+client (the password stays on the client and is not written into the guest,
+the seed, or `vm.json`)
 → bring the guest's packages and tooling up to date, the same steps as
 `agent-vm update` (unless `--no-update`, or the boot wait was disabled)
 → optionally install Tailscale in the guest and join the tailnet (the auth
@@ -406,10 +419,12 @@ key goes on stdin, not into the seed) → optionally register the guest public
 key with GitHub → optionally register a `-runner` guest as an organization
 Actions runner (the registration token goes on stdin, not into the seed).
 Failures through recording
-roll back the domain and per-VM directory; a boot-wait, guest update, Tailscale
+roll back the domain and per-VM directory; a boot-wait, Pi-hole registration,
+guest update, Tailscale
 join, GitHub SSH-key, or Actions-runner registration
-failure retains the recorded VM for inspection. An update failure does not
-continue into the Tailscale or GitHub steps. Built base images and the shared
+failure retains the recorded VM for inspection. A Pi-hole failure does not
+continue into the guest update, Tailscale, or GitHub steps. An update failure does not
+continue into the Tailscale or GitHub steps; a DNS name already recorded stays. Built base images and the shared
 NAT network remain reusable. Cleanup failures must report what remains.
 
 Runtime profiles and configuration: a single profile, parameterized by the
@@ -426,7 +441,8 @@ The first Tailscale join downloads Tailscale's installer inside that guest;
 a guest that already has `tailscale` on `PATH` skips the download.
 `--github-ssh-key` and `--github-org` contact GitHub from the client; `create`
 (unless `--no-update`) and `update` download packages and tools from inside
-guests.
+guests. `--pihole` contacts that Pi-hole from the client. The password is
+read from a file and is not sent to the guest.
 
 Canonical contracts and what must change together: `docs/cli.md` (flags,
 subcommands, exit codes, underlying commands), `test/golden/` (`virt-install` argv
@@ -461,7 +477,8 @@ guest tooling comes from (ADR-0012, ADR-0013, ADR-0016, ADR-0019), the Actions r
 account (ADR-0017), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
 (ADR-0015), preparing a host with `agent-vm setup` (ADR-0018),
-publishing mDNS from a bridged guest (ADR-0020), or
+publishing mDNS from a bridged guest (ADR-0020),
+registering a guest on a Pi-hole DNS server (ADR-0021), or
 **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
@@ -593,6 +610,11 @@ The essentials, which `SECURITY.md` states precisely:
   organization (ADR-0015). The operator's `gh` credential stays on the
   client. The token is not written into the image, the seed, `vm.json`, a
   log, or an argument vector. Do not put that token in cloud-init to simplify
+  registration. A Pi-hole password is read from a file on the client when
+  `create --pihole` is set (ADR-0021). It is sent only in `POST /api/auth`
+  to the Pi-hole the operator named. It does not enter the guest, the image,
+  the seed, `vm.json`, a log, or an argument vector. The password-file path
+  may be stored. Do not put that password in cloud-init to simplify
   registration.
 - Never bake secrets into a base image or a cloud-init seed that outlives the
   VM, and never log the contents of user-supplied cloud-init data.
@@ -605,6 +627,10 @@ The essentials, which `SECURITY.md` states precisely:
   libvirt reports (ADR-0020). Joining a tailnet is also
   explicit, on `create`, and is not a third `--network` value. It does not
   install Tailscale on the host or change host routes or firewalls.
+  Registering `<name>.agent` on a Pi-hole is also explicit, on `create
+  --pihole`, and is not a third `--network` value (ADR-0021). A configured
+  URL does not register a VM on its own. It does not change host routes or
+  firewalls. `agent-vm ssh` does not connect to `<name>.agent`.
 - Report vulnerabilities through the private process in `SECURITY.md`; do not
   open a public issue.
 

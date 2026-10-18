@@ -114,6 +114,22 @@ type Config struct {
 	// when create registers it. Empty means create leaves the runner
 	// unconfigured. It is never a secret.
 	GitHubOrg string
+
+	// PiHole is where create --pihole registers <name>.<domain>. The password
+	// is not a field here: it is read from PasswordFile at the moment of use
+	// and is not retained (ADR-0021).
+	PiHole PiHoleSettings
+}
+
+// PiHoleSettings is the non-secret Pi-hole configuration. URL and PasswordFile
+// are empty unless the operator set them. Domain is empty when the default,
+// agent, should be used. Insecure is true only when the operator asked not to
+// verify the server's TLS certificate.
+type PiHoleSettings struct {
+	URL          string
+	PasswordFile string
+	Domain       string
+	Insecure     bool
 }
 
 // Overrides carries values from one source as the operator wrote them. An
@@ -138,6 +154,13 @@ type Overrides struct {
 	GuestUser string
 	SSHKeys   []string
 	GitHubOrg string
+
+	PiHoleURL          string
+	PiHolePasswordFile string
+	PiHoleDomain       string
+	// PiHoleInsecure is "true" or "false" when this source set it, and empty
+	// when it did not. A bool cannot tell unset from false.
+	PiHoleInsecure string
 }
 
 // Environ is a lookup of environment variables, so tests do not mutate the
@@ -265,6 +288,10 @@ func environOverrides(env Environ) Overrides {
 		o.SSHKeys = []string{key}
 	}
 	o.GitHubOrg = env("AGENT_VM_GITHUB_ORG")
+	o.PiHoleURL = env("AGENT_VM_PIHOLE_URL")
+	o.PiHolePasswordFile = env("AGENT_VM_PIHOLE_PASSWORD_FILE")
+	o.PiHoleDomain = env("AGENT_VM_PIHOLE_DOMAIN")
+	o.PiHoleInsecure = env("AGENT_VM_PIHOLE_INSECURE")
 	return o
 }
 
@@ -363,6 +390,36 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 		if org != "" {
 			cfg.GitHubOrg = org
 		}
+	}
+	if o.PiHoleURL != "" {
+		parsed, err := ParsePiHoleURL(o.PiHoleURL)
+		if err != nil {
+			return err
+		}
+		cfg.PiHole.URL = parsed
+	}
+	if o.PiHolePasswordFile != "" {
+		path, err := expandPath(env, o.PiHolePasswordFile)
+		if err != nil {
+			return err
+		}
+		cfg.PiHole.PasswordFile = path
+	}
+	if o.PiHoleDomain != "" {
+		domain, err := ParsePiHoleDomain(o.PiHoleDomain)
+		if err != nil {
+			return err
+		}
+		if domain != "" {
+			cfg.PiHole.Domain = domain
+		}
+	}
+	if o.PiHoleInsecure != "" {
+		insecure, err := parseBoolFlag("pi-hole insecure", o.PiHoleInsecure)
+		if err != nil {
+			return err
+		}
+		cfg.PiHole.Insecure = insecure
 	}
 	return nil
 }
