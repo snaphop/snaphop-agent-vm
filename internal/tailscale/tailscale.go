@@ -73,14 +73,40 @@ func (k AuthKey) Reader() io.Reader {
 	return bytes.NewReader([]byte(k.raw))
 }
 
+// authKeyFileRemedy tells the operator where the key file usually lives.
+// The path is the same directory as the Pi-hole password file.
+const authKeyFileRemedy = "Create an auth key in the tailnet admin console and save it, mode 600, as ~/.config/agent-vm/tailscale-auth-key. --tailscale-auth-key-file, tailscale.auth_key_file, and AGENT_VM_TAILSCALE_AUTH_KEY_FILE can name another file."
+
 // ReadAuthKey reads an auth key from path. The file's contents are never
-// included in an error; only the path is.
+// included in an error; only the path is. The file must be a regular file
+// and mode-restricted to the owner, the same rule as the Pi-hole password.
 func ReadAuthKey(path string) (AuthKey, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return AuthKey{}, &config.ValidationError{
+			Field: "tailscale auth key file", Value: path, Err: err,
+			Remedy: authKeyFileRemedy,
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return AuthKey{}, &config.ValidationError{
+			Field: "tailscale auth key file", Value: path,
+			Err:    fmt.Errorf("must be a regular file"),
+			Remedy: "Pass the auth key file itself, not a directory or a symbolic link. The usual file is ~/.config/agent-vm/tailscale-auth-key.",
+		}
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return AuthKey{}, &config.ValidationError{
+			Field: "tailscale auth key file", Value: path,
+			Err:    fmt.Errorf("is readable by group or others (mode %#o)", info.Mode().Perm()),
+			Remedy: "Run chmod 600 on the file so only your user can read the auth key.",
+		}
+	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return AuthKey{}, &config.ValidationError{
 			Field: "tailscale auth key file", Value: path, Err: err,
-			Remedy: "Create an auth key in the tailnet admin console and pass its file with --tailscale-auth-key-file.",
+			Remedy: authKeyFileRemedy,
 		}
 	}
 	key := strings.TrimSpace(string(contents))

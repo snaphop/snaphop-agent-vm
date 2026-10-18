@@ -371,12 +371,17 @@ Major modules and responsibilities:
   (ADR-0018).
   `internal/cli` decides when to run it.
 - `internal/tailscale` — joins a guest to a Tailscale network after SSH is up,
-  when `create --tailscale-auth-key-file` names a file (ADR-0014). The auth
-  key is read from that file and passed on the guest's stdin. It is not a
-  flag value, not an environment variable, and not written into the image,
-  the seed, or `vm.json`. The guest command's argument vector lives in this
-  package; `internal/cli` only decides when to run it. Do not put the key in
-  cloud-init to simplify the join.
+  when `create --tailscale` or `create --tailscale-auth-key-file` asks for it
+  (ADR-0014). The auth key is read from a file and passed on the guest's
+  stdin. The file path may come from the flag, from `tailscale.auth_key_file`
+  in the config file, from `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`, or, when none
+  of those is set, from `~/.config/agent-vm/tailscale-auth-key`. The file is
+  mode 600. The key
+  itself is not a flag value, not a config value, not an environment
+  variable, and not written into the image, the seed, or `vm.json`. A
+  configured file does not join a VM on its own. The guest command's
+  argument vector lives in this package; `internal/cli` only decides when
+  to run it. Do not put the key in cloud-init to simplify the join.
 - `internal/pihole` — registers `<name>.agent` on a Pi-hole v6 DNS server when
   `create --pihole` is set (ADR-0021). The password is read from a file on the
   client and sent only in `POST /api/auth`. It is not written into the guest,
@@ -414,8 +419,9 @@ client (the password stays on the client and is not written into the guest,
 the seed, or `vm.json`)
 → bring the guest's packages and tooling up to date, the same steps as
 `agent-vm update` (unless `--no-update`, or the boot wait was disabled)
-→ optionally install Tailscale in the guest and join the tailnet (the auth
-key goes on stdin, not into the seed) → optionally register the guest public
+→ when `--tailscale` or `--tailscale-auth-key-file` asks, install Tailscale
+in the guest and join the tailnet (the auth key goes on stdin, not into the
+seed) → optionally register the guest public
 key with GitHub → optionally register a `-runner` guest as an organization
 Actions runner (the registration token goes on stdin, not into the seed).
 Failures through recording
@@ -602,10 +608,12 @@ The essentials, which `SECURITY.md` states precisely:
 - Never commit real credentials, tokens, private keys, or PII. SSH **public**
   keys are injected at first boot via cloud-init; private keys never enter an
   image, a seed, or the repository. A Tailscale auth key is passed on the
-  guest's stdin after boot when `create --tailscale-auth-key-file` names a
-  file (ADR-0014). It is not written into the image, the seed, `vm.json`, a
-  log, or an argument vector. Do not put that key in cloud-init to simplify
-  the join. A GitHub Actions registration token is passed on the guest's
+  guest's stdin after boot when `create --tailscale` or
+  `create --tailscale-auth-key-file` asks for the join (ADR-0014). The path
+  of the key file may come from the config file. The key is not written into
+  the image, the seed, `vm.json`, a log, or an argument vector. A configured
+  file does not join a VM on its own. Do not put that key in cloud-init to
+  simplify the join. A GitHub Actions registration token is passed on the guest's
   stdin after boot when `create` registers a `-runner` VM with an
   organization (ADR-0015). The operator's `gh` credential stays on the
   client. The token is not written into the image, the seed, `vm.json`, a
@@ -625,8 +633,10 @@ The essentials, which `SECURITY.md` states precisely:
   the default and always requires an explicit flag. A bridged guest publishes
   its hostname and SSH with mDNS; `agent-vm ssh` still uses the address
   libvirt reports (ADR-0020). Joining a tailnet is also
-  explicit, on `create`, and is not a third `--network` value. It does not
-  install Tailscale on the host or change host routes or firewalls.
+  explicit, on `create` with `--tailscale` or `--tailscale-auth-key-file`,
+  and is not a third `--network` value. A configured auth-key file does not
+  join a VM on its own. It does not install Tailscale on the host or change
+  host routes or firewalls.
   Registering `<name>.agent` on a Pi-hole is also explicit, on `create
   --pihole`, and is not a third `--network` value (ADR-0021). A configured
   URL does not register a VM on its own. It does not change host routes or

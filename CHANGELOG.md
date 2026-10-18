@@ -18,6 +18,12 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create --tailscale` joins a guest using the Tailscale settings in
+  `~/.config/agent-vm/config.toml`. The auth key stays in a file. The usual
+  file is `~/.config/agent-vm/tailscale-auth-key`, mode `600`, in the same
+  directory as the Pi-hole password. A file there does not join a VM on its
+  own. `--tailscale-auth-key-file` still requests the join and can name a
+  different file.
 - `agent-vm create --pihole` registers the guest on a Pi-hole v6 DNS server
   as `<name>.agent`. The address is the one libvirt reports. `destroy`
   removes that name. `start` points it at a new address when libvirt reports

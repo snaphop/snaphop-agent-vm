@@ -579,6 +579,132 @@ func TestLoad_PiHoleInsecureStaysWhenTheFlagDoesNotSetIt(t *testing.T) {
 	}
 }
 
+func TestLoad_TailscaleFromFileEnvAndFlag(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, `
+[tailscale]
+auth_key_file = "~/tskey"
+hostname = "from-file"
+login_server = "https://from-file.example"
+advertise_tags = ["tag:file"]
+ephemeral = true
+ssh = false
+`)
+	fromFile, err := Load(noEnv, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load file: %v", err)
+	}
+	if fromFile.Tailscale.AuthKeyFile != "/nonexistent/agent-vm-test-home/tskey" {
+		t.Errorf("AuthKeyFile = %q", fromFile.Tailscale.AuthKeyFile)
+	}
+	if fromFile.Tailscale.Hostname != "from-file" || fromFile.Tailscale.LoginServer != "https://from-file.example" {
+		t.Errorf("file settings = %+v", fromFile.Tailscale)
+	}
+	if len(fromFile.Tailscale.AdvertiseTags) != 1 || fromFile.Tailscale.AdvertiseTags[0] != "tag:file" {
+		t.Errorf("tags = %v", fromFile.Tailscale.AdvertiseTags)
+	}
+	if !fromFile.Tailscale.Ephemeral || fromFile.Tailscale.SSH {
+		t.Errorf("ephemeral=%v ssh=%v", fromFile.Tailscale.Ephemeral, fromFile.Tailscale.SSH)
+	}
+
+	fromEnv, err := Load(envMap(map[string]string{
+		"HOME":                              emptyHome,
+		"AGENT_VM_TAILSCALE_AUTH_KEY_FILE":  "/tmp/from-env",
+		"AGENT_VM_TAILSCALE_HOSTNAME":       "from-env",
+		"AGENT_VM_TAILSCALE_EPHEMERAL":      "false",
+		"AGENT_VM_TAILSCALE_SSH":            "true",
+		"AGENT_VM_TAILSCALE_ADVERTISE_TAGS": "tag:env, tag:env2",
+	}), Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load env: %v", err)
+	}
+	if fromEnv.Tailscale.AuthKeyFile != "/tmp/from-env" || fromEnv.Tailscale.Hostname != "from-env" || fromEnv.Tailscale.Ephemeral || !fromEnv.Tailscale.SSH {
+		t.Errorf("env did not beat the file: %+v", fromEnv.Tailscale)
+	}
+	if fromEnv.Tailscale.LoginServer != "https://from-file.example" {
+		t.Errorf("login server = %q, want the file value", fromEnv.Tailscale.LoginServer)
+	}
+	if len(fromEnv.Tailscale.AdvertiseTags) != 2 || fromEnv.Tailscale.AdvertiseTags[0] != "tag:env" || fromEnv.Tailscale.AdvertiseTags[1] != "tag:env2" {
+		t.Errorf("tags = %v", fromEnv.Tailscale.AdvertiseTags)
+	}
+
+	fromFlag, err := Load(envMap(map[string]string{
+		"HOME":                        emptyHome,
+		"AGENT_VM_TAILSCALE_HOSTNAME": "from-env",
+		"AGENT_VM_TAILSCALE_SSH":      "false",
+	}), Overrides{
+		ConfigFile:         path,
+		TailscaleHostname:  "from-flag",
+		TailscaleEphemeral: "true",
+	})
+	if err != nil {
+		t.Fatalf("Load flag: %v", err)
+	}
+	if fromFlag.Tailscale.Hostname != "from-flag" || !fromFlag.Tailscale.Ephemeral || fromFlag.Tailscale.SSH {
+		t.Errorf("flag did not beat env: %+v", fromFlag.Tailscale)
+	}
+}
+
+func TestLoad_TailscaleEphemeralStaysWhenTheFlagDoesNotSetIt(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[tailscale]\nephemeral = true\nssh = true\n")
+	cfg, err := Load(noEnv, Overrides{ConfigFile: path, TailscaleEphemeral: "", TailscaleSSH: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Tailscale.Ephemeral || !cfg.Tailscale.SSH {
+		t.Fatalf("an absent flag cleared the file: %+v", cfg.Tailscale)
+	}
+}
+
+func TestDefaultTailscaleAuthKeyPath(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	got, err := DefaultTailscaleAuthKeyPath(envMap(map[string]string{"HOME": home}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".config", "agent-vm", "tailscale-auth-key"); got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+
+	xdg := t.TempDir()
+	got, err = DefaultTailscaleAuthKeyPath(envMap(map[string]string{
+		"HOME":            home,
+		"XDG_CONFIG_HOME": xdg,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(xdg, "agent-vm", "tailscale-auth-key"); got != want {
+		t.Fatalf("XDG path = %q, want %q", got, want)
+	}
+
+	got, err = DefaultTailscaleAuthKeyPath(envMap(map[string]string{
+		"HOME":            home,
+		"XDG_CONFIG_HOME": "relative/config",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".config", "agent-vm", "tailscale-auth-key"); got != want {
+		t.Fatalf("relative XDG path = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_RejectsAnUnknownTailscaleConfigKey(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[tailscale]\nauth_key = \"tskey-auth-test-NOTACONFIGVALUE\"\n")
+	_, err := Load(noEnv, Overrides{ConfigFile: path})
+	var verr *ValidationError
+	if !errors.As(err, &verr) || !strings.Contains(verr.Error(), "tailscale.auth_key") {
+		t.Fatalf("Load = %v, want an unknown-key error", err)
+	}
+	if strings.Contains(verr.Error(), "tskey-auth-test-NOTACONFIGVALUE") {
+		t.Fatalf("the error includes the value:\n%v", verr)
+	}
+}
+
 func TestLoad_RejectsAnUnknownPiHoleConfigKey(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, "[pihole]\npassword = \"secret\"\n")

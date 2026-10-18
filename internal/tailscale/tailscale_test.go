@@ -68,6 +68,40 @@ func TestReadAuthKey_RejectsAFileThatIsNotOneKey(t *testing.T) {
 	}
 }
 
+func TestReadAuthKey_RejectsAWorldReadableFileAndASymlink(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tskey")
+	if err := os.WriteFile(path, []byte(canaryKey+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadAuthKey(path)
+	if err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("ReadAuthKey = %v, want a mode error", err)
+	}
+	if strings.Contains(err.Error(), canaryKey) {
+		t.Fatalf("the error quotes the key: %v", err)
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ReadAuthKey(link)
+	if err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("ReadAuthKey(symlink) = %v, want a regular-file error", err)
+	}
+	if strings.Contains(err.Error(), canaryKey) {
+		t.Fatalf("the error quotes the key: %v", err)
+	}
+}
+
 func TestReadAuthKey_MissingFileNamesThePath(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing")

@@ -109,10 +109,12 @@ These values MUST NOT enter source control, normal logs, argument vectors,
 base-image layers, cloud-init seeds (except an SSH **public** key), metric
 labels, or routine issue reports. A Tailscale auth key is a credential of
 that kind. The one path that carries it into a guest is the stdin of
-`tailscale up` after the guest has booted, and only when the operator names
-a file with `create --tailscale-auth-key-file` (ADR-0014). That path does
-not put the key in a base image, a cloud-init seed, `vm.json`, a log, or an
-argument vector. A Pi-hole password is a host credential of the same kind,
+`tailscale up` after the guest has booted, and only when `create --tailscale`
+or `create --tailscale-auth-key-file` asks for the join (ADR-0014). The key
+stays in a file. A config key or an environment variable may name that file's
+path and must not contain the key. That path does not put the key in a base
+image, a cloud-init seed, `vm.json`, a log, or an argument vector. A
+configured path does not join a VM on its own. A Pi-hole password is a host credential of the same kind,
 and it has no path into a guest. It is read from a file the operator names
 and sent only in the body of `POST /api/auth` to the Pi-hole URL the operator
 named (ADR-0021). It MUST NOT enter a guest, a base image, a cloud-init seed,
@@ -184,15 +186,23 @@ section named here.
   directory, or this repository. The tool may locate a private key that sits
   beside a recorded public key and pass that path to `ssh`. It MUST NOT read
   the key, copy it, or log it.
-- A Tailscale auth key may cross into a guest in exactly one way: the operator
-  names a file with `create --tailscale-auth-key-file`, and after SSH is up
-  the tool passes that file's contents on the stdin of the guest's `up`
-  command. The key MUST NOT be a flag value, an environment variable, an
-  argument vector, a base-image layer, generated cloud-init user-data, or a
-  field in `vm.json`. The guest script MUST remove its copy when `tailscale
-  up` returns, including on failure. The guest can read the key while that
-  command runs, so the key SHOULD be one-time and ephemeral. Do not put the
-  key in cloud-init, the base image, or an argument to avoid that window.
+- A Tailscale auth key may cross into a guest in exactly one way: `create
+  --tailscale` or `create --tailscale-auth-key-file` requests the join, the
+  tool reads the key from a file, and after SSH is up it passes that file's
+  contents on the stdin of the guest's `up` command. `--tailscale-auth-key-file`,
+  `tailscale.auth_key_file`, and `AGENT_VM_TAILSCALE_AUTH_KEY_FILE` name the
+  path only. When none of those is set, the file is
+  `~/.config/agent-vm/tailscale-auth-key`. The file MUST be a regular file,
+  mode `600`, the same rule as the Pi-hole password file. The key MUST NOT
+  be a flag value, a config value, an environment variable, an argument
+  vector, a base-image layer, generated cloud-init user-data, or a field in
+  `vm.json`. The path of the file MUST NOT be stored in `vm.json`. A
+  configured path, including that default path, MUST NOT join a VM on its
+  own. The guest
+  script MUST remove its copy when `tailscale up` returns, including on
+  failure. The guest can read the key while that command runs, so the key
+  SHOULD be one-time and ephemeral. Do not put the key in cloud-init, the
+  base image, or an argument to avoid that window.
 - A Pi-hole password MUST NOT enter a guest at all. The operator names a file
   with `create --pihole-password-file` (or `pihole.password_file`, or
   `AGENT_VM_PIHOLE_PASSWORD_FILE`), and the client sends that file's contents
@@ -330,10 +340,11 @@ section named here.
   interfaces, or expose a guest beyond the selected network mode.
 - Joining a Tailscale network is not a libvirt network mode and MUST NOT
   change the host's routes, interfaces, or firewall. It MUST be requested
-  explicitly on `create` with `--tailscale-auth-key-file`, and MUST NOT be
-  selected by a config key or an environment variable. `list` and `info` MUST
-  show that the guest joined, because the tailnet is another way to reach it.
-  `destroy` does not remove the tailnet node.
+  explicitly on `create` with `--tailscale` or `--tailscale-auth-key-file`.
+  A configured auth-key file, hostname, login server, tag, or boolean MUST
+  NOT join a VM on its own. `list` and `info` MUST show that the guest
+  joined, because the tailnet is another way to reach it. `destroy` does
+  not remove the tailnet node.
 - Registering a name on a Pi-hole is not a libvirt network mode and MUST NOT
   change the host's routes, interfaces, or firewall. It MUST be requested
   explicitly on `create` with `--pihole`. A configured URL, password file, or

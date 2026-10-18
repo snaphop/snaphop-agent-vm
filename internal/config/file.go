@@ -58,6 +58,18 @@ type fileConfig struct {
 		Domain       string `toml:"domain"`
 		Insecure     bool   `toml:"insecure"`
 	} `toml:"pihole"`
+
+	// Tailscale names the auth key file and the other join settings. The
+	// key itself is not a config value (ADR-0014). These settings do not
+	// request a join; create --tailscale does.
+	Tailscale struct {
+		AuthKeyFile   string   `toml:"auth_key_file"`
+		Hostname      string   `toml:"hostname"`
+		LoginServer   string   `toml:"login_server"`
+		AdvertiseTags []string `toml:"advertise_tags"`
+		Ephemeral     bool     `toml:"ephemeral"`
+		SSH           bool     `toml:"ssh"`
+	} `toml:"tailscale"`
 }
 
 // loadFile reads the configuration file at path. A missing file is not an
@@ -100,22 +112,26 @@ func loadFile(path string) (Overrides, bool, error) {
 	}
 
 	o := Overrides{
-		StateDir:           file.StateDir,
-		LibvirtURI:         file.LibvirtURI,
-		ApplianceKernel:    file.ApplianceKernel,
-		Distro:             file.Defaults.Distro,
-		Memory:             file.Defaults.Memory,
-		MaxMemory:          file.Defaults.MaxMemory,
-		Disk:               file.Defaults.Disk,
-		Network:            file.Defaults.Network,
-		Bridge:             file.Network.Bridge.Interface,
-		NATNetwork:         file.Network.NAT.Name,
-		GuestUser:          file.Guest.User,
-		SSHKeys:            file.Guest.SSHKeys,
-		GitHubOrg:          file.GitHub.Org,
-		PiHoleURL:          file.PiHole.URL,
-		PiHolePasswordFile: file.PiHole.PasswordFile,
-		PiHoleDomain:       file.PiHole.Domain,
+		StateDir:               file.StateDir,
+		LibvirtURI:             file.LibvirtURI,
+		ApplianceKernel:        file.ApplianceKernel,
+		Distro:                 file.Defaults.Distro,
+		Memory:                 file.Defaults.Memory,
+		MaxMemory:              file.Defaults.MaxMemory,
+		Disk:                   file.Defaults.Disk,
+		Network:                file.Defaults.Network,
+		Bridge:                 file.Network.Bridge.Interface,
+		NATNetwork:             file.Network.NAT.Name,
+		GuestUser:              file.Guest.User,
+		SSHKeys:                file.Guest.SSHKeys,
+		GitHubOrg:              file.GitHub.Org,
+		PiHoleURL:              file.PiHole.URL,
+		PiHolePasswordFile:     file.PiHole.PasswordFile,
+		PiHoleDomain:           file.PiHole.Domain,
+		TailscaleAuthKeyFile:   file.Tailscale.AuthKeyFile,
+		TailscaleHostname:      file.Tailscale.Hostname,
+		TailscaleLoginServer:   file.Tailscale.LoginServer,
+		TailscaleAdvertiseTags: file.Tailscale.AdvertiseTags,
 	}
 	// Whether vcpus was written is asked of the file, not inferred from the
 	// value: `vcpus = 0` is a mistake to report, not an absent key.
@@ -126,6 +142,13 @@ func loadFile(path string) (Overrides, bool, error) {
 	// bool cannot tell "left out" from "set to false".
 	if meta.IsDefined("pihole", "insecure") {
 		o.PiHoleInsecure = strconv.FormatBool(file.PiHole.Insecure)
+	}
+	// An absent bool must not override a higher-precedence true.
+	if meta.IsDefined("tailscale", "ephemeral") {
+		o.TailscaleEphemeral = strconv.FormatBool(file.Tailscale.Ephemeral)
+	}
+	if meta.IsDefined("tailscale", "ssh") {
+		o.TailscaleSSH = strconv.FormatBool(file.Tailscale.SSH)
 	}
 	return o, true, nil
 }

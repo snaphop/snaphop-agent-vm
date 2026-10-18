@@ -395,10 +395,13 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 ### `internal/tailscale`
 
 - **Responsibility:** Join one guest to a Tailscale network after SSH accepts
-  a login, when `create --tailscale-auth-key-file` names a file (ADR-0014).
-  The auth key is read from that file and passed on the stdin of the guest's
-  `up` command. Install runs first, with no key, and fetches Tailscale's
-  installer only when `tailscale` is not already on `PATH`.
+  a login, when `create --tailscale` or `create --tailscale-auth-key-file`
+  asks for it (ADR-0014). The auth key is read from a file — the flag, or
+  `tailscale.auth_key_file`, or `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`, or
+  `~/.config/agent-vm/tailscale-auth-key` when none of those is set — and
+  passed on the stdin of the guest's `up` command. The file is mode 600.
+  A file at that path does not join a VM on its own. Install runs first, with no key, and fetches
+  Tailscale's installer only when `tailscale` is not already on `PATH`.
 - **Public interface:** the optional `tailscale` object in `vm.json`, and the
   `+tailscale` suffix `list` and `info` add to the network. The guest command
   vector is built here; `internal/cli` only decides when to run it.
@@ -406,9 +409,10 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   bad file is a usage error that names the path and not the contents. A
   failure after the VM exists leaves the VM in place and does not record a
   join. The key is not retried from disk, because it was not stored.
-- **Compatibility constraints:** the key is not a flag value, not an
-  environment variable, and not written into a base image, a cloud-init seed,
-  `vm.json`, a log, or an argument vector. `schemaVersion` stays 1. `destroy`
+- **Compatibility constraints:** the key is not a flag value, not a config
+  value, not an environment variable, and not written into a base image, a
+  cloud-init seed, `vm.json`, a log, or an argument vector. The path of the
+  key file is not stored. `schemaVersion` stays 1. `destroy`
   does not remove the tailnet node. SSH continues to use the address libvirt
   reported; the tailnet address is display only.
 
@@ -574,9 +578,12 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
     not continue to the Tailscale or GitHub steps. A DNS name already recorded
     stays. The base image is not
     modified.
-13. **Join a tailnet, when asked.** If `--tailscale-auth-key-file` was given,
-    copy the join script over SSH, install Tailscale when the guest does not
-    already have it, then run `tailscale up` with the auth key on stdin.
+13. **Join a tailnet, when asked.** If `--tailscale` or
+    `--tailscale-auth-key-file` was given, copy the join script over SSH,
+    install Tailscale when the guest does not already have it, then run
+    `tailscale up` with the auth key on stdin. The key file is
+    `~/.config/agent-vm/tailscale-auth-key` unless the command or the config
+    names another one.
     Save the non-secret result into `vm.json`. A failure here leaves the VM
     in place and does not store the key.
 14. **Register with GitHub, when asked.** `--github-ssh-key`, when given, runs
@@ -790,7 +797,7 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
 - Data that must never cross into a guest: host SSH private keys, cloud
   credentials, the operator's home directory, and the state directory itself.
   A Tailscale auth key is not one of those. It crosses only on stdin, and only
-  for the guest whose `create` named the file. A GitHub Actions registration
+  for the guest whose `create` asked for the join. A GitHub Actions registration
   token is not one of those either. It crosses only on stdin, and only for the
   `-runner` guest whose `create` named an organization. The operator's `gh`
   credential does not cross.

@@ -145,6 +145,14 @@ url = "https://pi.hole"   # used only when create is given --pihole
 password_file = "~/.config/agent-vm/pihole-password"   # mode 600, one password
 domain = "agent"   # optional; the record is <name>.agent
 insecure = false   # optional; skip TLS verification only when set true
+
+[tailscale]
+auth_key_file = "~/.config/agent-vm/tailscale-auth-key"   # mode 600, one key. This path is also the default when the setting is omitted.
+hostname = "build-01"   # optional; default is the VM name
+login_server = "https://headscale.example.com"   # optional
+advertise_tags = ["tag:ci"]   # optional
+ephemeral = true   # optional
+ssh = false   # optional; Tailscale SSH
 ```
 
 A key the file does not support — including a misspelled key or table name —
@@ -183,6 +191,12 @@ the **client** home directory, so use absolute remote paths.
 | `AGENT_VM_PIHOLE_PASSWORD_FILE` | `create --pihole-password-file` and `destroy --pihole-password-file` |
 | `AGENT_VM_PIHOLE_DOMAIN` | `create --pihole-domain` |
 | `AGENT_VM_PIHOLE_INSECURE` | `create --pihole-insecure` and `destroy --pihole-insecure` (`true`, `false`, `yes`, `no`, `on`, `off`, `1`, or `0`) |
+| `AGENT_VM_TAILSCALE_AUTH_KEY_FILE` | `create --tailscale-auth-key-file`. The variable does not join a VM; `create` still needs `--tailscale` or `--tailscale-auth-key-file` |
+| `AGENT_VM_TAILSCALE_HOSTNAME` | `create --tailscale-hostname` |
+| `AGENT_VM_TAILSCALE_LOGIN_SERVER` | `create --tailscale-login-server` |
+| `AGENT_VM_TAILSCALE_ADVERTISE_TAGS` | `create --tailscale-advertise-tag`, comma-separated |
+| `AGENT_VM_TAILSCALE_EPHEMERAL` | `create --tailscale-ephemeral` (`true`, `false`, `yes`, `no`, `on`, `off`, `1`, or `0`) |
+| `AGENT_VM_TAILSCALE_SSH` | `create --tailscale-ssh` (`true`, `false`, `yes`, `no`, `on`, `off`, `1`, or `0`) |
 
 ## Commands
 
@@ -1330,12 +1344,13 @@ and must not already exist.
 | `--update-timeout <duration>` | `45m` | How long that guest update may take. Every step shares this one budget. Exceeding it exits `6` and leaves the VM in place. |
 | `--github-ssh-key` | off | Add the SSH public key the guest generated for itself to your GitHub account, using `gh`. Requires a wait. |
 | `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots, labeled with `<org>`, `<family>-latest`, and `<family>-<tag>`. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
-| `--tailscale-auth-key-file <path>` | none | Join the guest to a Tailscale network after it boots. The file holds one auth key. No flag takes the key itself, and no config key or environment variable turns this on. Requires a wait. |
-| `--tailscale-hostname <name>` | the VM name | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. |
-| `--tailscale-login-server <url>` | Tailscale's coordination server | `https` URL of another coordination server. No user, password, query, or fragment. |
-| `--tailscale-advertise-tag <tag>` | none | ACL tag to advertise, such as `tag:ci`. Repeatable. |
-| `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. |
-| `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. |
+| `--tailscale` | off | Join the guest to a Tailscale network after it boots. The auth key file is `~/.config/agent-vm/tailscale-auth-key` when `--tailscale-auth-key-file` and the config omit a path. A file at that path does not do this on its own. Requires a wait. |
+| `--tailscale-auth-key-file <path>` | `~/.config/agent-vm/tailscale-auth-key` | File containing one auth key, mode `600`. Also requests the join. No flag takes the key itself. Also `[tailscale] auth_key_file` and `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`. Requires a wait. |
+| `--tailscale-hostname <name>` | the VM name, or `[tailscale] hostname` | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. Also `AGENT_VM_TAILSCALE_HOSTNAME`. |
+| `--tailscale-login-server <url>` | Tailscale's coordination server, or `[tailscale] login_server` | `https` URL of another coordination server. No user, password, query, or fragment. Also `AGENT_VM_TAILSCALE_LOGIN_SERVER`. |
+| `--tailscale-advertise-tag <tag>` | config value | ACL tag to advertise, such as `tag:ci`. Repeatable. Also `[tailscale] advertise_tags` and `AGENT_VM_TAILSCALE_ADVERTISE_TAGS` (comma-separated). |
+| `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. Also `[tailscale] ephemeral` and `AGENT_VM_TAILSCALE_EPHEMERAL`. The flag forces this on and does not turn a configured `true` back off. |
+| `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. Also `[tailscale] ssh` and `AGENT_VM_TAILSCALE_SSH`. The flag forces this on and does not turn a configured `true` back off. |
 | `--pihole` | off | Register `<name>.agent` on a Pi-hole v6 DNS server after libvirt reports an address. A configured URL does not do this on its own. Requires a wait. |
 | `--pihole-url <URL>` | config value | Pi-hole base URL, such as `https://pi.hole`. `http` or `https`, with a host, and no user, query, or path. Also `[pihole] url` and `AGENT_VM_PIHOLE_URL`. |
 | `--pihole-password-file <path>` | config value | File containing the Pi-hole web password or an application password. Mode `600`, one line. Also `[pihole] password_file` and `AGENT_VM_PIHOLE_PASSWORD_FILE`. |
@@ -1696,8 +1711,9 @@ domain. See [destroy](#agent-vm-destroy-name).
 
 #### Tailscale
 
-`--tailscale-auth-key-file` joins that guest to a Tailscale network after SSH
-accepts a login ([ADR-0014](./decisions/0014-join-a-tailscale-network-from-the-guest.md)).
+`--tailscale` or `--tailscale-auth-key-file` joins that guest to a Tailscale
+network after SSH accepts a login
+([ADR-0014](./decisions/0014-join-a-tailscale-network-from-the-guest.md)).
 It does not change `--network`. NAT stays the default libvirt attachment, and
 `--network bridge` is unchanged. The join is an overlay the guest brings up
 for itself, using whichever of those attachments can reach the coordination
@@ -1705,19 +1721,36 @@ server. Nothing is installed on the host, and the host's routes and firewall
 are left alone.
 
 ```console
-$ agent-vm create build-01 --tailscale-auth-key-file ~/keys/tskey
-$ agent-vm create build-01 --tailscale-auth-key-file ~/keys/tskey \
+$ agent-vm create build-01 --tailscale
+$ agent-vm create build-01 --tailscale-auth-key-file ~/.config/agent-vm/tailscale-auth-key
+$ agent-vm create build-01 --tailscale \
     --tailscale-hostname build-01 --tailscale-ephemeral --tailscale-ssh \
     --tailscale-advertise-tag tag:ci \
     --tailscale-login-server https://headscale.example.com
 ```
 
+The auth key file defaults to `~/.config/agent-vm/tailscale-auth-key`, the
+same directory as the Pi-hole password file. An absolute `XDG_CONFIG_HOME`
+uses `$XDG_CONFIG_HOME/agent-vm/tailscale-auth-key` instead. The file is
+mode `600` and holds one key. The hostname, the login server, the tags, and
+whether the node is ephemeral or has Tailscale SSH come from `[tailscale]`
+in the config file and from `AGENT_VM_TAILSCALE_HOSTNAME`,
+`AGENT_VM_TAILSCALE_LOGIN_SERVER`, `AGENT_VM_TAILSCALE_ADVERTISE_TAGS`
+(comma-separated), `AGENT_VM_TAILSCALE_EPHEMERAL`, and
+`AGENT_VM_TAILSCALE_SSH`. The auth key path comes from
+`--tailscale-auth-key-file`, then `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`, then
+`[tailscale] auth_key_file`, then that default file. The other settings
+follow flags, then environment variables, then the file. A configured file
+does not join a VM.
+`--tailscale` is the request, and `--tailscale-auth-key-file` is too. Any
+other `--tailscale-*` flag without one of those exits `2`.
+`--tailscale-ephemeral` and `--tailscale-ssh` turn those settings on. They
+cannot turn a configured `true` back off.
+
 The file holds one auth key and nothing else: no quotes, no second line. The
-key is not a flag value. There is no config key and no `AGENT_VM_*` variable
-for it, so a join cannot be inherited from the environment. Any other
-`--tailscale-*` flag without the file exits `2`. The file is read before
-anything is created, including under `--dry-run`, which prints the path and
-the guest commands and does not print the key.
+key is not a flag value, not a config value, and not an environment variable.
+The file is read before anything is created, including under `--dry-run`,
+which prints the path and the guest commands and does not print the key.
 
 The flag needs a boot wait. `--wait-for-ssh 0` exits `2`, because there is no
 SSH session to join through.
@@ -1741,12 +1774,13 @@ stops; an auth key that is itself ephemeral does the same. `destroy` does
 not log the node out. A node that was not ephemeral stays on the tailnet
 until it is removed in the admin console.
 
-`--tailscale-hostname` defaults to the VM name. `--tailscale-login-server`
+`--tailscale-hostname` defaults to the VM name, or to `[tailscale] hostname`
+when that is set. `--tailscale-login-server`
 is an `https` URL with a host and no user, password, query, or fragment, for
 a coordination server other than Tailscale's. `--tailscale-advertise-tag`
 may be repeated; each value looks like `tag:ci`, and a duplicate is sent
-once. `--tailscale-ssh` turns on Tailscale SSH. It is off unless the flag is
-given. The login user (`[guest] user` in the config file, default `agent`)
+once. `--tailscale-ssh` turns on Tailscale SSH. It is off unless the flag,
+the config file, or the environment asks for it. The login user (`[guest] user` in the config file, default `agent`)
 is passed as `--operator`, so that account can run `tailscale` in the guest
 afterwards.
 
@@ -2225,7 +2259,7 @@ table below is the summary.
 | `image build` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a pull, including when the image is already cached), then a `PATH` check for `newuidmap` and `pasta` before a pull (neither is executed; a cached image skips that check), then `podman pull`, `podman image inspect` (to pin the digest), `podman build`, `podman create`, `podman export`, `podman rm --force`, `virt-make-fs --type=ext4 --format=qcow2 --partition --size=+1G`, `virt-ls`, `virt-copy-out`, `virt-sysprep` |
 | `create --github-ssh-key` | the `create` tools, plus `gh auth status`, `ssh <guest> cat .ssh/id_ed25519.pub`, `gh api --method POST user/keys` |
 | `create --github-org` | the `create` tools, plus `gh auth status`, `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token`, `ssh <guest> sudo -n /usr/local/sbin/agent-vm-github-runner configure --url https://github.com/<org> --name <vm> --labels <org>,<family>-latest,<family>-<tag> --token-file - --replace` (the token on stdin, not in the argument vector), and `gh api --paginate orgs/<org>/actions/runners` (the runner id, by name) |
-| `create --tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
+| `create --tailscale` / `--tailscale-auth-key-file` | the `create` tools, then, after SSH accepts a login, four commands on the guest: `ssh <guest> sudo -n tee /usr/local/sbin/agent-vm-tailscale-join` (the script on stdin), `ssh <guest> sudo -n chmod 755` of that path, `ssh <guest> sudo -n … install`, and `ssh <guest> sudo -n … up` (the auth key on stdin, not in the argument vector) |
 | `create --pihole` | the `create` tools, then, after libvirt reports an address and before the guest update, HTTP from the client to Pi-hole v6: `POST /api/auth` (the password in the JSON body), `GET /api/config/dns/hosts`, and `PUT /api/config/dns/hosts/<address>%20<name>`. No host tool is spawned. The password is not in the URL or an argument vector. Redirects are not followed |
 | `destroy` of a recorded Pi-hole name | HTTP from the client, before `virsh undefine`: `POST /api/auth`, `GET /api/config/dns/hosts`, and `DELETE /api/config/dns/hosts/<address>%20<name>`. A missing name is success. No host tool is spawned. The password is not in the URL or an argument vector |
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
@@ -2376,7 +2410,7 @@ answer that goes stale.
 | `guest.user` | The account to SSH in as. |
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |
 | `guest.githubKey` | Present only for a VM created with `--github-ssh-key`: `id`, `title`, `publicKey`, `addedAt`. The `id` is what `destroy --github-ssh-key` removes the key by. |
-| `tailscale` | Present only for a VM created with `--tailscale-auth-key-file`: `hostname`, and, when set, `loginServer`, `advertiseTags`, `ephemeral`, `ssh`, and `ipv4`. The auth key and the path of its file are not stored. `ipv4` is the address the guest reported and is not an SSH destination. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
+| `tailscale` | Present only for a VM created with `--tailscale` or `--tailscale-auth-key-file`: `hostname`, and, when set, `loginServer`, `advertiseTags`, `ephemeral`, `ssh`, and `ipv4`. The auth key and the path of its file are not stored. `ipv4` is the address the guest reported and is not an SSH destination. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
 | `pihole` | Present only for a VM created with `--pihole`: `url`, `name` (usually `<vm>.agent`), `address`, `passwordFile`, and `insecure` when TLS verification was skipped. The password is not stored. `address` is the address libvirt reported and is not an SSH destination. `destroy` and a later `start` use `url` and `passwordFile`. Absent on every other VM, including records written before this field existed. `schemaVersion` stays 1. |
 | `githubRunner` | Present only when `create` registered this VM as a GitHub Actions runner: `org`, `name`, `id` (omitted when it was not recorded), and `url` (`https://github.com/<org>`). The registration token is not stored. `destroy` deletes that runner by `id`, or by `name` when `id` is absent. Absent on every other VM, including records written before this field existed and runner VMs created with no organization. `schemaVersion` stays 1. |
 | `paths` | Absolute paths inside the state directory: the VM's directory, its overlay, the seed directory and the two files in it, the seed disk built from them, the captured `domain.xml`, and `console.log`. |

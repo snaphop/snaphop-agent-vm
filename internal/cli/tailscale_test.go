@@ -181,6 +181,227 @@ func TestCreate_JoinsATailscaleNetworkWithoutStoringTheAuthKey(t *testing.T) {
 	}
 }
 
+// The default config file is $HOME/.config/agent-vm/config.toml. create
+// --tailscale uses the auth key file and the other join settings from that
+// file when the matching flags are absent.
+func TestCreate_ReadsTailscaleDefaultsFromTheHomeConfig(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	authPath := filepath.Join(home, "tskey")
+	if err := os.WriteFile(authPath, []byte(tailscaleCanary+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeConfig(t, home, `
+[tailscale]
+auth_key_file = "~/tskey"
+hostname = "from-file"
+login_server = "https://headscale.example.com"
+advertise_tags = ["tag:ci", "tag:ci"]
+ephemeral = true
+ssh = true
+`)
+
+	stateDir, keyPath := createEnv(t)
+	fake := withTailscale(createHost(t), "100.64.0.2")
+	code, stdout, stderr := cliRunCustom(t, fake, homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--no-update", "--tailscale")...,
+	)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	joined := false
+	for _, call := range fake.Calls() {
+		if strings.Contains(strings.Join(call.Argv(), " "), tailscaleCanary) {
+			t.Errorf("the auth key is in argv: %s", strings.Join(call.Argv(), " "))
+		}
+		if !isTailscaleUp(call) {
+			continue
+		}
+		joined = true
+		if commandStdin(t, call) != tailscaleCanary {
+			t.Errorf("up stdin = %q", commandStdin(t, call))
+		}
+		got := strings.Join(sshRemote(call), " ")
+		for _, want := range []string{
+			"--hostname=from-file",
+			"--ephemeral",
+			"--ssh",
+			"--advertise-tags=tag:ci",
+			"--login-server=https://headscale.example.com",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("up command missing %q: %s", want, got)
+			}
+		}
+		if strings.Contains(got, "tag:ci,tag:ci") {
+			t.Errorf("duplicate tag was sent twice: %s", got)
+		}
+	}
+	if !joined {
+		t.Fatal("tailscale up did not run")
+	}
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Tailscale == nil || vm.Tailscale.Hostname != "from-file" || !vm.Tailscale.Ephemeral || !vm.Tailscale.SSH {
+		t.Fatalf("recorded join = %+v", vm.Tailscale)
+	}
+	if strings.Contains(readVMJSON(t, stateDir, "agent-01"), tailscaleCanary) || strings.Contains(stdout+stderr, tailscaleCanary) {
+		t.Fatal("the auth key was stored or printed")
+	}
+}
+
+func TestCreate_ReadsTheDefaultTailscaleAuthKeyFile(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	authPath := filepath.Join(home, ".config", "agent-vm", "tailscale-auth-key")
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, []byte(tailscaleCanary+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir, keyPath := createEnv(t)
+	fake := withTailscale(createHost(t), "100.64.0.2")
+	code, stdout, stderr := cliRunCustom(t, fake, homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--no-update", "--tailscale")...,
+	)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	joined := false
+	for _, call := range fake.Calls() {
+		if strings.Contains(strings.Join(call.Argv(), " "), tailscaleCanary) {
+			t.Errorf("the auth key is in argv: %s", strings.Join(call.Argv(), " "))
+		}
+		if !isTailscaleUp(call) {
+			continue
+		}
+		joined = true
+		if commandStdin(t, call) != tailscaleCanary {
+			t.Errorf("up stdin = %q", commandStdin(t, call))
+		}
+	}
+	if !joined {
+		t.Fatal("tailscale up did not run")
+	}
+	if strings.Contains(readVMJSON(t, stateDir, "agent-01"), tailscaleCanary) || strings.Contains(readVMJSON(t, stateDir, "agent-01"), authPath) || strings.Contains(stdout+stderr, tailscaleCanary) {
+		t.Fatal("the auth key or its path was stored or the key was printed")
+	}
+
+	readable := filepath.Join(home, ".config", "agent-vm", "wide")
+	if err := os.WriteFile(readable, []byte(tailscaleCanary+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readable, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr = cliRunCustom(t, createHost(t), homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--tailscale-auth-key-file", readable)...,
+	)...)
+	if code != ExitUsage || !strings.Contains(stderr, "chmod 600") {
+		t.Fatalf("exit code = %d, want a mode error: %s", code, stderr)
+	}
+	if strings.Contains(stderr, tailscaleCanary) {
+		t.Fatalf("the error quotes the key:\n%s", stderr)
+	}
+}
+
+func TestCreate_ConfiguredTailscaleDoesNotJoinUntilAsked(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "tskey"), []byte(tailscaleCanary+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeConfig(t, home, "[tailscale]\nauth_key_file = \"~/tskey\"\nephemeral = true\n")
+
+	stateDir, keyPath := createEnv(t)
+	fake := withTailscale(createHost(t), "100.64.0.2")
+	code, stdout, stderr := cliRunCustom(t, fake, homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--no-update")...,
+	)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\n%s\n%s", code, stdout, stderr)
+	}
+	for _, call := range fake.Calls() {
+		if isTailscaleUp(call) {
+			t.Fatal("a configured auth key file joined the guest without --tailscale")
+		}
+	}
+	if vm := loadVM(t, stateDir, "agent-01"); vm.Tailscale != nil {
+		t.Fatalf("an unrequested join was recorded: %+v", vm.Tailscale)
+	}
+	if strings.Contains(stdout+stderr, tailscaleCanary) {
+		t.Fatal("the auth key was printed")
+	}
+
+	code, _, stderr = cliRunCustom(t, createHost(t), homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--tailscale-ssh")...,
+	)...)
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d: %s", code, ExitUsage, stderr)
+	}
+}
+
+func TestCreate_TailscaleFlagsOverrideTheHomeConfig(t *testing.T) {
+	t.Parallel()
+	const otherKey = "tskey-auth-test-OTHERKEY1234567890"
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "tskey"), []byte(otherKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeConfig(t, home, `
+[tailscale]
+auth_key_file = "~/tskey"
+hostname = "from-file"
+login_server = "https://headscale.example.com"
+advertise_tags = ["tag:ci"]
+ephemeral = true
+`)
+	flagKey := writeTailscaleKey(t, tailscaleCanary+"\n")
+
+	stateDir, keyPath := createEnv(t)
+	fake := withTailscale(createHost(t), "100.64.0.2")
+	code, stdout, stderr := cliRunCustom(t, fake, homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--no-update", "--tailscale-auth-key-file", flagKey, "--tailscale-hostname", "from-flag")...,
+	)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\n%s\n%s", code, stdout, stderr)
+	}
+	joined := false
+	for _, call := range fake.Calls() {
+		stdin := commandStdin(t, call)
+		if strings.Contains(stdin, otherKey) || strings.Contains(strings.Join(call.Argv(), " "), otherKey) {
+			t.Errorf("the configured key was used: %s", strings.Join(call.Argv(), " "))
+		}
+		if !isTailscaleUp(call) {
+			continue
+		}
+		joined = true
+		if stdin != tailscaleCanary {
+			t.Errorf("up stdin = %q, want the flag file", stdin)
+		}
+		got := strings.Join(sshRemote(call), " ")
+		for _, want := range []string{"--hostname=from-flag", "--ephemeral", "--login-server=https://headscale.example.com", "--advertise-tags=tag:ci"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("up command missing %q: %s", want, got)
+			}
+		}
+	}
+	if !joined {
+		t.Fatal("tailscale up did not run")
+	}
+	if strings.Contains(stdout+stderr, tailscaleCanary) || strings.Contains(stdout+stderr, otherKey) {
+		t.Fatal("an auth key was printed")
+	}
+}
+
 func TestCreate_TailscaleInstallFailureDoesNotSendTheAuthKey(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
@@ -272,6 +493,11 @@ func TestCreate_TailscaleRequiresABootWaitAndAKeyFile(t *testing.T) {
 	code, _, stderr = cliRun(t, createHost(t), stateDir, createArgs(keyPath, "--tailscale-ephemeral")...)
 	if code != ExitUsage {
 		t.Fatalf("exit code = %d, want %d for a join with no key file: %s", code, ExitUsage, stderr)
+	}
+
+	code, _, stderr = cliRun(t, createHost(t), stateDir, createArgs(keyPath, "--tailscale")...)
+	if code != ExitUsage || !strings.Contains(stderr, "auth key file") {
+		t.Fatalf("exit code = %d, want %d for --tailscale with no key file: %s", code, ExitUsage, stderr)
 	}
 
 	code, stdout, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath,

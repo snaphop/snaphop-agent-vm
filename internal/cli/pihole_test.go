@@ -57,6 +57,105 @@ func TestCreate_RegistersTheGuestOnPiHole(t *testing.T) {
 	}
 }
 
+// The default config file is $HOME/.config/agent-vm/config.toml. create --pihole
+// uses the Pi-hole URL, password file, domain, and TLS setting from that file
+// when the matching flags are absent.
+func TestCreate_ReadsPiHoleDefaultsFromTheHomeConfig(t *testing.T) {
+	t.Parallel()
+	secret := "s3cret-pihole-password"
+	api := newPiHoleAPI(secret)
+	server := httptest.NewServer(api)
+	defer server.Close()
+
+	home := t.TempDir()
+	passPath := filepath.Join(home, "pihole-password")
+	if err := os.WriteFile(passPath, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeConfig(t, home, `
+[pihole]
+url = "`+server.URL+`/"
+password_file = "~/pihole-password"
+domain = "Lab."
+insecure = true
+`)
+
+	stateDir, keyPath := createEnv(t)
+	code, stdout, stderr := cliRunCustom(t, createHost(t), homeEnv(home), append(
+		[]string{"--state-dir", stateDir},
+		createArgs(keyPath, "--no-update", "--pihole")...,
+	)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.PiHole == nil {
+		t.Fatal("vm.json has no pihole record")
+	}
+	if vm.PiHole.Name != "agent-01.lab" || vm.PiHole.URL != server.URL || vm.PiHole.PasswordFile != passPath || !vm.PiHole.Insecure {
+		t.Errorf("pihole = %+v, want name agent-01.lab url %s password %s insecure", vm.PiHole, server.URL, passPath)
+	}
+	if !api.hasHost("192.168.122.3 agent-01.lab") {
+		t.Fatalf("hosts = %v", api.hosts())
+	}
+	assertNoSecret(t, secret, stdout, stderr, readVMJSON(t, stateDir, "agent-01"))
+}
+
+// destroy takes the password file from the same default config when this
+// invocation does not pass one. The URL stays the one vm.json recorded.
+func TestDestroy_ReadsThePiHolePasswordFromTheHomeConfig(t *testing.T) {
+	t.Parallel()
+	secret := "s3cret-pihole-password"
+	api := newPiHoleAPI(secret)
+	stateDir := createPiHoleVMOn(t, api, secret)
+	vm := loadVM(t, stateDir, "agent-01")
+	if err := os.Remove(vm.PiHole.PasswordFile); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	passPath := filepath.Join(home, "pihole-password")
+	if err := os.WriteFile(passPath, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeConfig(t, home, `
+[pihole]
+url = "http://127.0.0.1:1"
+password_file = "~/pihole-password"
+`)
+
+	code, stdout, stderr := cliRunCustom(t, ownedBy(runningHost(t, "agent-01"), stateDir, "agent-01"), homeEnv(home),
+		"--state-dir", stateDir, "--yes", "destroy", "agent-01", "--force")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d\n%s\n%s", code, stdout, stderr)
+	}
+	if api.hasHost("192.168.122.3 agent-01.agent") {
+		t.Fatalf("the name is still registered: %v", api.hosts())
+	}
+	assertNoSecret(t, secret, stdout, stderr)
+}
+
+func homeEnv(home string) func(string) string {
+	return func(key string) string {
+		if key == "HOME" {
+			return home
+		}
+		return ""
+	}
+}
+
+func writeHomeConfig(t *testing.T, home, body string) {
+	t.Helper()
+	dir := filepath.Join(home, ".config", "agent-vm")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreate_PiHoleOnABridgeSaysOtherMachinesCanOpenTheName(t *testing.T) {
 	t.Parallel()
 	secret := "s3cret-pihole-password"

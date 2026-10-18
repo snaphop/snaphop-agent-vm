@@ -66,7 +66,8 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	updateTimeout := flags.Duration("update-timeout", defaultUpdateTimeout, "how long the guest update may take")
 	githubSSHKey := flags.Bool("github-ssh-key", false, "add the SSH public key the guest generates for itself to your GitHub account, using gh")
 	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; labels are the org, <family>-latest, and <family>-<tag>; requires a -runner image and gh")
-	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "file containing a Tailscale auth key; the guest joins that network after it boots")
+	tailscaleOn := flags.Bool("tailscale", false, "join the guest to a Tailscale network after it boots")
+	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "`file` containing a Tailscale auth key (default ~/.config/agent-vm/tailscale-auth-key); also requests the join")
 	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: the VM name)")
 	tailscaleLoginServer := flags.String("tailscale-login-server", "", "https URL of a coordination server other than Tailscale's")
 	tailscaleEphemeral := flags.Bool("tailscale-ephemeral", false, "remove the tailnet node when the VM stops")
@@ -104,19 +105,25 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	}
 
 	cfg, err := app.ConfigWith(config.Overrides{
-		Distro:             *distroRef,
-		VCPUs:              *vcpus,
-		Memory:             *memory,
-		MaxMemory:          *maxMemory,
-		Disk:               *disk,
-		Network:            *networkMode,
-		Bridge:             *bridge,
-		SSHKeys:            sshKeys,
-		GitHubOrg:          *githubOrgFlag,
-		PiHoleURL:          *piholeURL,
-		PiHolePasswordFile: *piholePasswordFile,
-		PiHoleDomain:       *piholeDomain,
-		PiHoleInsecure:     piholeInsecureOverride(*piholeInsecure),
+		Distro:                 *distroRef,
+		VCPUs:                  *vcpus,
+		Memory:                 *memory,
+		MaxMemory:              *maxMemory,
+		Disk:                   *disk,
+		Network:                *networkMode,
+		Bridge:                 *bridge,
+		SSHKeys:                sshKeys,
+		GitHubOrg:              *githubOrgFlag,
+		PiHoleURL:              *piholeURL,
+		PiHolePasswordFile:     *piholePasswordFile,
+		PiHoleDomain:           *piholeDomain,
+		PiHoleInsecure:         piholeInsecureOverride(*piholeInsecure),
+		TailscaleAuthKeyFile:   *tailscaleAuthKeyFile,
+		TailscaleHostname:      *tailscaleHostname,
+		TailscaleLoginServer:   *tailscaleLoginServer,
+		TailscaleAdvertiseTags: tailscaleTags,
+		TailscaleEphemeral:     tailscaleBoolOverride(*tailscaleEphemeral),
+		TailscaleSSH:           tailscaleBoolOverride(*tailscaleSSH),
 	})
 	if err != nil {
 		return err
@@ -179,7 +186,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	if err := userData.Validate(); err != nil {
 		return err
 	}
-	join, err := resolveTailscale(name, cfg.GuestUser, *tailscaleAuthKeyFile, *tailscaleHostname, *tailscaleLoginServer, *tailscaleEphemeral, *tailscaleSSH, tailscaleTags)
+	join, err := resolveTailscale(name, cfg, *tailscaleOn || *tailscaleAuthKeyFile != "", *tailscaleAuthKeyFile, *tailscaleHostname, *tailscaleLoginServer, *tailscaleEphemeral, *tailscaleSSH, tailscaleTags, app.Env)
 	if err != nil {
 		return err
 	}
@@ -188,7 +195,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	// it in.
 	if join != nil && *waitForSSH <= 0 {
 		return exitf(ExitUsage,
-			"--tailscale-auth-key-file needs --wait-for-ssh: the guest is joined over SSH after it boots.")
+			"--tailscale needs --wait-for-ssh: the guest is joined over SSH after it boots.")
 	}
 	reg, err := resolvePiHole(name, cfg, *piholeOn, *piholeURL, *piholePasswordFile, *piholeDomain, *piholeInsecure)
 	if err != nil {
