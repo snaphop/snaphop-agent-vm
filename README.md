@@ -193,8 +193,9 @@ is where it is, is in [`docs/cli.md`](./docs/cli.md#guest-tooling).
   [host firewall guidance](./docs/host-setup.md#host-firewalls-and-the-virbrn-bridge).
 - **Bridged.** The VM attaches to a host bridge and gets an address from your
   LAN's DHCP, like any other machine on the network. Useful when something else
-  must connect *to* the agent's VM. It also removes the NAT boundary, so it is
-  never the default and always requires `--network bridge`:
+  must connect *to* the agent's VM. Once it has booted, other machines on that
+  LAN can open it as `ssh <user>@<name>.local`. It also removes the NAT boundary,
+  so it is never the default and always requires `--network bridge`:
 
 ```bash
 agent-vm create agent-04 --network bridge --bridge br0

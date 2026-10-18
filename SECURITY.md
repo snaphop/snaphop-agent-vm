@@ -301,6 +301,10 @@ section named here.
   reachable by every host on it. It MUST require an explicit `--network bridge`
   and MUST NEVER be selected implicitly by fallback, auto-detection, or because
   NAT setup failed.
+- A bridged guest publishes its hostname and SSH on that LAN with mDNS
+  (`<name>.local` and `_ssh._tcp`). That publication is part of choosing
+  `--network bridge`. A NAT guest does not publish. A VM created before this
+  publication existed does not start publishing until it is created again.
 - The tool MUST NOT create host port forwards, publish guest services on host
   interfaces, or expose a guest beyond the selected network mode.
 - Joining a Tailscale network is not a libvirt network mode and MUST NOT
@@ -326,6 +330,8 @@ section named here.
   guest agent. On a bridge, where the guest agent is the only source, only the
   interface whose MAC is recorded in `vm.json` is used. A guest that lies about
   that interface's address can still misdirect the connection on a bridge.
+  mDNS publication does not change that destination. `agent-vm ssh` MUST NOT
+  connect to `<name>.local`. A peer on the LAN can answer for that name.
 - The ssh connection to a guest runs on the client and uses the operator's
   keys. It is not a channel from the guest back to the host.
 
@@ -464,7 +470,9 @@ section named here.
   isolates the guest from the host. It does not decide that a file inside the
   guest is safe.
 - Use bridged networking only when the guest is meant to be directly reachable
-  on that LAN. NAT blocks unsolicited LAN connections to the guest, but permits
+  on that LAN. A bridged guest also announces `<name>.local` and an SSH
+  service with mDNS, so anyone on that LAN who resolves mDNS can find it.
+  NAT blocks unsolicited LAN connections to the guest, but permits
   guest-initiated access to the host, LAN, and other guests. Apply the
   [host firewall policy](./docs/host-setup.md#host-firewalls-and-the-virbrn-bridge)
   your workloads require before running untrusted guests; NAT alone does not

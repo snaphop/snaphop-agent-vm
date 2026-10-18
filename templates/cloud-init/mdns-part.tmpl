@@ -1,0 +1,8 @@
+#cloud-config
+# Applied after the settings part. That part replaces every list it names, so
+# this publication is its own part: list(append) keeps an operator bootcmd and
+# runs it before the script below (ADR-0020).
+merge_how: "dict(recurse_array)+list(append)"
+bootcmd:
+  - |
+{{ indent 4 . }}

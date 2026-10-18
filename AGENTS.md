@@ -342,7 +342,8 @@ Major modules and responsibilities:
   and builder tool versions.
 - `internal/guestinit` — generates the two files the NoCloud seed carries: the
   **user-data** (hostname, SSH public key, agent user, optional user-supplied
-  user-data) and the **meta-data** (instance id and hostname). We own their
+  user-data; a bridged guest's user-data also publishes the hostname and SSH
+  with mDNS) and the **meta-data** (instance id and hostname). We own their
   content; writing them onto a `cidata`-labelled filesystem is `virt-make-fs`'s
   job, driven from `internal/domain` (ADR-0011).
 - `internal/domain` — builds the `virt-install` argument vector and drives
@@ -392,7 +393,8 @@ any versioned kernel in `/boot` is readable, unless `appliance_kernel` is set �
 check required tool versions (not the full `doctor` report) → lock and check the VM
 name → ensure base image (build if the cache misses) → allocate the VM's state
 directory → generate cloud-init user-data and meta-data and build the NoCloud
-seed with `virt-make-fs` → `qemu-img create` the overlay with the base as backing
+seed with `virt-make-fs` (a bridged guest's user-data publishes the hostname
+and SSH with mDNS) → `qemu-img create` the overlay with the base as backing
 file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
@@ -458,7 +460,8 @@ adding a supported distro family, adding a base image variant or changing where
 guest tooling comes from (ADR-0012, ADR-0013, ADR-0016, ADR-0019), the Actions runner
 account (ADR-0017), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
-(ADR-0015), preparing a host with `agent-vm setup` (ADR-0018), or
+(ADR-0015), preparing a host with `agent-vm setup` (ADR-0018),
+publishing mDNS from a bridged guest (ADR-0020), or
 **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 
@@ -597,7 +600,9 @@ The essentials, which `SECURITY.md` states precisely:
   files, environment variables, registry metadata, guest agent responses, DHCP
   leases, and the stdout of every helper process.
 - Bridged networking puts the guest directly on the operator's LAN. It is never
-  the default and always requires an explicit flag. Joining a tailnet is also
+  the default and always requires an explicit flag. A bridged guest publishes
+  its hostname and SSH with mDNS; `agent-vm ssh` still uses the address
+  libvirt reports (ADR-0020). Joining a tailnet is also
   explicit, on `create`, and is not a third `--network` value. It does not
   install Tailscale on the host or change host routes or firewalls.
 - Report vulnerabilities through the private process in `SECURITY.md`; do not

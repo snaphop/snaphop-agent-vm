@@ -1,0 +1,52 @@
+#!/bin/sh
+# Publish SSH on this guest's ethernet interfaces with mDNS.
+# cloud-init runs this on every boot, after the network is up and before SSH.
+set -eu
+name='{{ . }}'
+printf '%s\n' "$name" > /etc/hostname
+if command -v hostnamectl >/dev/null 2>&1; then
+  hostnamectl set-hostname "$name" || true
+fi
+if command -v hostname >/dev/null 2>&1; then
+  hostname "$name" || true
+fi
+mkdir -p /etc/systemd/resolved.conf.d /etc/systemd/dnssd
+write_if_changed() {
+  dest=$1
+  mkdir -p "$(dirname "$dest")"
+  tmp=${dest}.tmp
+  cat > "$tmp"
+  if [ -f "$dest" ] && [ "$(cat "$dest")" = "$(cat "$tmp")" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$dest"
+  return 0
+}
+changed=0
+if write_if_changed /etc/systemd/resolved.conf.d/10-agent-vm-mdns.conf <<'EOF'
+[Resolve]
+MulticastDNS=yes
+EOF
+then
+  changed=1
+fi
+if write_if_changed /etc/systemd/dnssd/ssh.dnssd <<'EOF'
+[Service]
+Name=%H
+Type=_ssh._tcp
+Port=22
+EOF
+then
+  changed=1
+fi
+if [ "$changed" -eq 1 ] && systemctl is-active --quiet systemd-resolved; then
+  systemctl restart systemd-resolved
+fi
+n=0
+for path in /sys/class/net/en* /sys/class/net/eth*; do
+  [ -e "$path" ] || continue
+  resolvectl mdns "${path##*/}" yes
+  n=$((n + 1))
+done
+[ "$n" -gt 0 ]

@@ -162,6 +162,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		OpencodeConfig:    opencodeJSON,
 		OpencodeSource:    *opencodeConfig,
 		AgentVMVersion:    Version,
+		PublishMDNS:       cfg.BridgeMode(),
 	}
 	// The same checks Generate makes later, run here so they precede the
 	// tool checks, the lock, and any base image build — and so a dry run
@@ -1059,6 +1060,9 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	}
 	if update {
 		notes = append(notes, "bring the guest's packages and tooling up to date over SSH, the same steps as `agent-vm update`")
+	}
+	if cfg.BridgeMode() {
+		notes = append(notes, fmt.Sprintf("publish SSH on the LAN as %s.local (_ssh._tcp) with mDNS", name))
 	}
 	for _, note := range notes {
 		a.out.Printf("# %s\n", note)
