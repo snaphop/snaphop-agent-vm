@@ -135,6 +135,7 @@ Each family also has a **runner** variant (`ubuntu-runner`, `fedora-runner`,
 and Docker. The runner is installed and not registered. Jobs run as
 `github-runner`, which has passwordless sudo and can use the Docker daemon.
 The guest has `git` and `gh`. Ubuntu runner images install `build-essential`.
+Every runner image installs the OpenSSL headers and `pkg-config`.
 Before each job the guest removes checkouts unused for 72 hours and, when
 disk is low, unused Docker data. The job still runs if that cleanup cannot.
 With `gh` logged in on the

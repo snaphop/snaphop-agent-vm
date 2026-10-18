@@ -571,6 +571,14 @@ cached keeps the old `runner` account, which cannot sudo, until
 `agent-vm image build <family>-runner --force`. Create the VM again from
 that image.
 
+Every runner image installs the OpenSSL headers and `pkg-config`, so a job
+can compile against OpenSSL. Ubuntu installs `libssl-dev` and `pkg-config`.
+Fedora installs `openssl-devel` and `pkgconf-pkg-config`. Arch installs
+`openssl`, which includes the headers, and `pkgconf`, which provides the
+`pkg-config` command. The build fails when `pkg-config` cannot find
+`libssl`. An image already cached gains them when it is rebuilt with
+`agent-vm image build <family>-runner --force`.
+
 Docker comes from the distro's own packages, the same ones a full image
 uses. Ubuntu installs `docker.io`, `docker-compose-v2`, and `docker-buildx`.
 Fedora installs `moby-engine`, `containerd`, `docker-compose`, and
@@ -784,7 +792,8 @@ changes what every script that SSHes into these VMs can assume.
 The table and installation details below describe **full images**. Slim
 images keep the common Linux packages but omit the agent and service tooling.
 Runner images are that slim set plus the GitHub Actions self-hosted runner,
-Docker, `git`, and `gh` described above. Nix images use the different sources and
+Docker, `git`, `gh`, the OpenSSL headers, and `pkg-config` described above.
+Nix images use the different sources and
 interfaces described above. Slim and runner images include `tmux` but do not
 install the custom session menu, tmux configuration, or per-account setup
 service.

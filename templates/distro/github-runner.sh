@@ -82,12 +82,42 @@ fi
 
 # Jobs compile C and C++. build-essential is the Debian package for gcc,
 # g++, make, and the headers. Fedora and Arch already install that toolchain
-# in the slim recipe (gcc/make and base-devel). A second package transaction
-# there could upgrade the kernel after the initramfs this image direct-boots
-# was built.
+# in the slim recipe (gcc/make and base-devel). This step does not install
+# it again there: a broader package transaction could upgrade the kernel
+# after the initramfs this image direct-boots was built.
+#
+# Jobs also compile against OpenSSL. That needs the headers and a pkg-config
+# that can see libssl. Ubuntu installs libssl-dev and pkg-config. Fedora
+# installs openssl-devel and pkgconf-pkg-config. Arch's openssl package
+# includes the headers, and pkgconf provides the pkg-config command. Each
+# family installs only those named packages, for the same reason: a full
+# upgrade here would replace the kernel the slim recipe already built.
 if [ -e /etc/debian_version ]; then
     DEBIAN_FRONTEND=noninteractive apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        libssl-dev \
+        pkg-config
+elif [ -e /etc/fedora-release ]; then
+    dnf -y install \
+        openssl-devel \
+        pkgconf-pkg-config
+elif [ -f /etc/arch-release ]; then
+    pacman -S --noconfirm --needed \
+        openssl \
+        pkgconf
+else
+    echo "github-runner: no OpenSSL development install for this distro" >&2
+    exit 1
+fi
+
+if ! command -v pkg-config >/dev/null 2>&1; then
+    echo "github-runner: pkg-config is not on PATH" >&2
+    exit 1
+fi
+if ! pkg-config --exists libssl; then
+    echo "github-runner: libssl is not visible to pkg-config" >&2
+    exit 1
 fi
 
 if [ -e /etc/debian_version ]; then
