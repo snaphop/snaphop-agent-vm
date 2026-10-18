@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snaphop/snaphop-agent-vm/internal/config"
 	"github.com/snaphop/snaphop-agent-vm/internal/domain"
 	"github.com/snaphop/snaphop-agent-vm/internal/hostexec"
 	"github.com/snaphop/snaphop-agent-vm/internal/state"
@@ -23,39 +24,63 @@ type tailscaleJoin struct {
 	keyPath string
 }
 
-// resolveTailscale turns the create flags into a join, or nil when the
-// operator did not ask for one. The auth key is read here, before anything
-// on the host changes, and a bad file is a usage error.
-func resolveTailscale(vmName, guestUser, keyPath, hostname, loginServer string, ephemeral, sshOn bool, tags []string) (*tailscaleJoin, error) {
-	requested := keyPath != "" || hostname != "" || loginServer != "" || ephemeral || sshOn || len(tags) > 0
+// tailscaleBoolOverride is "true" when the flag is set and empty otherwise.
+// An empty override leaves a config-file or environment value in place; the
+// flag can turn the setting on and cannot turn it back off.
+func tailscaleBoolOverride(on bool) string {
+	if !on {
+		return ""
+	}
+	return "true"
+}
+
+// resolveTailscale turns a requested join into the auth key and options, or
+// nil when the operator did not ask for one. requested is --tailscale or
+// --tailscale-auth-key-file. Settings in the config file do not count as a
+// request. The auth key is read here, before anything on the host changes,
+// and a bad file is a usage error.
+func resolveTailscale(vmName string, cfg *config.Config, requested bool, keyFlag, hostnameFlag, loginFlag string, ephemeralFlag, sshFlag bool, tagFlags []string, env config.Environ) (*tailscaleJoin, error) {
 	if !requested {
+		if keyFlag != "" || hostnameFlag != "" || loginFlag != "" || ephemeralFlag || sshFlag || len(tagFlags) > 0 {
+			return nil, exitf(ExitUsage,
+				"joining a Tailscale network needs --tailscale or --tailscale-auth-key-file.\n"+
+					"  The other --tailscale-* flags apply only once a join is requested.")
+		}
 		return nil, nil
 	}
-	if keyPath == "" {
-		return nil, exitf(ExitUsage,
-			"joining a Tailscale network needs --tailscale-auth-key-file.\n"+
-				"  The other --tailscale-* flags apply only once that file is named.")
+	settings := cfg.Tailscale
+	path := settings.AuthKeyFile
+	if path == "" {
+		var err error
+		path, err = config.DefaultTailscaleAuthKeyPath(env)
+		if err != nil {
+			return nil, exitf(ExitUsage,
+				"joining a Tailscale network needs an auth key file.\n"+
+					"  The default is ~/.config/agent-vm/tailscale-auth-key, and that path could not be resolved: %v\n"+
+					"  Pass --tailscale-auth-key-file, or set tailscale.auth_key_file in the config file or AGENT_VM_TAILSCALE_AUTH_KEY_FILE.", err)
+		}
 	}
 
-	key, err := tailscale.ReadAuthKey(keyPath)
+	key, err := tailscale.ReadAuthKey(path)
 	if err != nil {
 		return nil, err
 	}
+	hostname := settings.Hostname
 	if hostname == "" {
 		hostname = vmName
 	}
 	opts, err := tailscale.Prepare(tailscale.Options{
 		Hostname:      hostname,
-		Operator:      guestUser,
-		LoginServer:   loginServer,
-		AdvertiseTags: tags,
-		Ephemeral:     ephemeral,
-		SSH:           sshOn,
+		Operator:      cfg.GuestUser,
+		LoginServer:   settings.LoginServer,
+		AdvertiseTags: settings.AdvertiseTags,
+		Ephemeral:     settings.Ephemeral,
+		SSH:           settings.SSH,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &tailscaleJoin{opts: opts, key: key, keyPath: keyPath}, nil
+	return &tailscaleJoin{opts: opts, key: key, keyPath: path}, nil
 }
 
 // joinTailscale installs Tailscale in the guest and logs it in. The VM

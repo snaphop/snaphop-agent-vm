@@ -119,6 +119,11 @@ type Config struct {
 	// is not a field here: it is read from PasswordFile at the moment of use
 	// and is not retained (ADR-0021).
 	PiHole PiHoleSettings
+
+	// Tailscale is how create --tailscale joins a tailnet. The auth key is
+	// not a field here: it is read from AuthKeyFile at the moment of use and
+	// is not retained (ADR-0014).
+	Tailscale TailscaleSettings
 }
 
 // PiHoleSettings is the non-secret Pi-hole configuration. URL and PasswordFile
@@ -130,6 +135,19 @@ type PiHoleSettings struct {
 	PasswordFile string
 	Domain       string
 	Insecure     bool
+}
+
+// TailscaleSettings is the non-secret Tailscale configuration. AuthKeyFile is
+// empty unless the operator set it. Hostname is empty when the VM name should
+// be used. LoginServer is empty when Tailscale's coordination server should
+// be used. Ephemeral and SSH are true only when the operator asked for them.
+type TailscaleSettings struct {
+	AuthKeyFile   string
+	Hostname      string
+	LoginServer   string
+	AdvertiseTags []string
+	Ephemeral     bool
+	SSH           bool
 }
 
 // Overrides carries values from one source as the operator wrote them. An
@@ -161,6 +179,15 @@ type Overrides struct {
 	// PiHoleInsecure is "true" or "false" when this source set it, and empty
 	// when it did not. A bool cannot tell unset from false.
 	PiHoleInsecure string
+
+	TailscaleAuthKeyFile   string
+	TailscaleHostname      string
+	TailscaleLoginServer   string
+	TailscaleAdvertiseTags []string
+	// TailscaleEphemeral and TailscaleSSH are "true" or "false" when this
+	// source set them, and empty when it did not.
+	TailscaleEphemeral string
+	TailscaleSSH       string
 }
 
 // Environ is a lookup of environment variables, so tests do not mutate the
@@ -292,7 +319,29 @@ func environOverrides(env Environ) Overrides {
 	o.PiHolePasswordFile = env("AGENT_VM_PIHOLE_PASSWORD_FILE")
 	o.PiHoleDomain = env("AGENT_VM_PIHOLE_DOMAIN")
 	o.PiHoleInsecure = env("AGENT_VM_PIHOLE_INSECURE")
+	o.TailscaleAuthKeyFile = env("AGENT_VM_TAILSCALE_AUTH_KEY_FILE")
+	o.TailscaleHostname = env("AGENT_VM_TAILSCALE_HOSTNAME")
+	o.TailscaleLoginServer = env("AGENT_VM_TAILSCALE_LOGIN_SERVER")
+	o.TailscaleEphemeral = env("AGENT_VM_TAILSCALE_EPHEMERAL")
+	o.TailscaleSSH = env("AGENT_VM_TAILSCALE_SSH")
+	if tags := env("AGENT_VM_TAILSCALE_ADVERTISE_TAGS"); tags != "" {
+		o.TailscaleAdvertiseTags = splitCSV(tags)
+	}
 	return o
+}
+
+// splitCSV splits a comma-separated setting. Empty pieces are dropped, so a
+// trailing comma does not become a value.
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // apply layers one source over the config. Values are parsed here, so a bad
@@ -421,6 +470,36 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 		}
 		cfg.PiHole.Insecure = insecure
 	}
+	if o.TailscaleAuthKeyFile != "" {
+		path, err := expandPath(env, o.TailscaleAuthKeyFile)
+		if err != nil {
+			return err
+		}
+		cfg.Tailscale.AuthKeyFile = path
+	}
+	if o.TailscaleHostname != "" {
+		cfg.Tailscale.Hostname = o.TailscaleHostname
+	}
+	if o.TailscaleLoginServer != "" {
+		cfg.Tailscale.LoginServer = o.TailscaleLoginServer
+	}
+	if len(o.TailscaleAdvertiseTags) > 0 {
+		cfg.Tailscale.AdvertiseTags = append([]string(nil), o.TailscaleAdvertiseTags...)
+	}
+	if o.TailscaleEphemeral != "" {
+		ephemeral, err := parseBoolFlag("tailscale ephemeral", o.TailscaleEphemeral)
+		if err != nil {
+			return err
+		}
+		cfg.Tailscale.Ephemeral = ephemeral
+	}
+	if o.TailscaleSSH != "" {
+		sshOn, err := parseBoolFlag("tailscale ssh", o.TailscaleSSH)
+		if err != nil {
+			return err
+		}
+		cfg.Tailscale.SSH = sshOn
+	}
 	return nil
 }
 
@@ -431,6 +510,25 @@ func (c *Config) BridgeMode() bool { return c.Network == NetworkBridge }
 // directory. It is named separately from the default itself so that the same
 // layout can be built against a remote account's home.
 const DefaultStateDirSuffix = ".local/share/agent-vm"
+
+// DefaultTailscaleAuthKeyFile is the auth key file in the config directory,
+// next to the Pi-hole password file. create --tailscale reads it when no
+// other path is set. The file holds one key and is mode 600.
+const DefaultTailscaleAuthKeyFile = "tailscale-auth-key"
+
+// DefaultTailscaleAuthKeyPath is $XDG_CONFIG_HOME/agent-vm/tailscale-auth-key
+// when that variable is absolute, and $HOME/.config/agent-vm/tailscale-auth-key
+// otherwise. A relative XDG_CONFIG_HOME is ignored, as it is for the config file.
+func DefaultTailscaleAuthKeyPath(env Environ) (string, error) {
+	if env == nil {
+		env = os.Getenv
+	}
+	dir, err := userConfigDir(env)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "agent-vm", DefaultTailscaleAuthKeyFile), nil
+}
 
 // ImagesDir and VMsDir are the two top-level areas of the state directory.
 func (c *Config) ImagesDir() string { return filepath.Join(c.StateDir, "images") }

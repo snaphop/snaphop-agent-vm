@@ -205,11 +205,15 @@ See [ADR-0005](./docs/decisions/0005-support-nat-and-bridged-networking.md) and
 the bridge setup section of [`docs/host-setup.md`](./docs/host-setup.md).
 
 - **Tailscale.** This does not change the libvirt network. After the VM
-  boots, `create` can install Tailscale in that guest and join a tailnet.
-  Name a file that holds one auth key. The key is not stored with the VM:
+  boots, `create --tailscale` can install Tailscale in that guest and join a
+  tailnet. The auth key file is `~/.config/agent-vm/tailscale-auth-key`,
+  mode `600`, in the same directory as the Pi-hole password. Another path
+  can be set under `[tailscale]` in `~/.config/agent-vm/config.toml` or with
+  `--tailscale-auth-key-file`. The key stays in that file. A file there does
+  not join a VM on its own:
 
 ```bash
-agent-vm create agent-05 --tailscale-auth-key-file ~/keys/tskey
+agent-vm create agent-05 --tailscale
 ```
 
 Use a one-time ephemeral key: the guest can read it while it logs in, and

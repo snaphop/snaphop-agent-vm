@@ -4,7 +4,7 @@ Date: 2026-10-04
 
 ## Status
 
-Accepted
+Accepted. Amended 2026-10-18: see [Amendment](#amendment).
 
 Extends [ADR-0005](./0005-support-nat-and-bridged-networking.md) (NAT and bridged
 networking). The libvirt attachment is unchanged. Tailscale is an overlay the
@@ -98,3 +98,28 @@ Harder:
   reusable admin key is the wrong key to give it.
 - A node that was not ephemeral survives `destroy` and has to be removed in
   the tailnet.
+
+## Amendment
+
+2026-10-18. The original decision said no config key and no environment
+variable turns the join on. That rule still holds for the join itself.
+`create --tailscale` is a second way to request it, alongside
+`--tailscale-auth-key-file`. When the request omits
+`--tailscale-auth-key-file`, the auth-key path comes from
+`[tailscale] auth_key_file` or `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`. The
+hostname, login server, tags, ephemeral setting, and Tailscale SSH follow
+the same precedence: flag, then environment, then the config file. A
+configured file does not join a VM. The other `--tailscale-*` flags still
+exit `2` unless `--tailscale` or `--tailscale-auth-key-file` is also set.
+
+The key itself stays out of the flag, the config file, the environment,
+the image, the seed, `vm.json`, a log, and every argument vector. The
+path of the key file is not stored in `vm.json`. `--tailscale-ephemeral`
+and `--tailscale-ssh` can turn those settings on and cannot turn a
+configured `true` back off. NAT remains the default libvirt network mode.
+
+When no path is set, the file is `~/.config/agent-vm/tailscale-auth-key`
+(`$XDG_CONFIG_HOME/agent-vm/tailscale-auth-key` when that variable is an
+absolute path). It is mode `600` and holds one key. That is the same
+directory as the Pi-hole password file. A file at that path does not join
+a VM.
