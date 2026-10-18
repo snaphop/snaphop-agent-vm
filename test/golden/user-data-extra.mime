@@ -18,9 +18,10 @@ Content-Type: text/cloud-config; charset="utf-8"
 # regenerated from the VM's configuration and is kept only as a record of what
 # the guest was configured with.
 #
-# This is the whole guest-side contract. It authorizes public keys, creates the
-# login user and the groups that let it reach the Docker socket and libvirt,
-# and does nothing else — no packages, no commands, no credentials.
+# This is the whole guest-side contract. It authorizes public keys and creates
+# the login user and the groups that let it reach the Docker socket and libvirt.
+# It installs no packages and carries no credentials. A bridged guest also
+# publishes its hostname and SSH with mDNS. A NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 

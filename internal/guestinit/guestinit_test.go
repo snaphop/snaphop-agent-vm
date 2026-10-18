@@ -7,6 +7,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,6 +36,164 @@ func TestGenerate_MatchesTheUserDataContract(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	golden.Assert(t, "user-data-default.yaml", got)
+}
+
+func TestGenerate_LeavesNATWithoutMDNS(t *testing.T) {
+	t.Parallel()
+	got, err := Generate(options())
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// A NAT guest is not a LAN host. Publishing its name would advertise an
+	// address the LAN cannot route to, and it would change the seed every
+	// existing NAT VM was created with.
+	for _, forbidden := range []string{"MulticastDNS", "bootcmd:", "_ssh._tcp", "resolvectl", "systemd/dnssd"} {
+		if strings.Contains(string(got), forbidden) {
+			t.Errorf("NAT user-data publishes mDNS via %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestGenerate_PublishesSSHWithMDNSOnABridge(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.PublishMDNS = true
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	script := mdnsBootcmdScript(t, string(got))
+	for _, want := range []string{
+		"name='agent-01'",
+		"MulticastDNS=yes",
+		"Name=%H",
+		"Type=_ssh._tcp",
+		"Port=22",
+		"resolvectl mdns",
+		"/sys/class/net/en*",
+		"/sys/class/net/eth*",
+		"systemctl restart systemd-resolved",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("mDNS script is missing %q:\n%s", want, script)
+		}
+	}
+	// cloud-init's shellify writes this string into a script unchanged, so the
+	// heredoc terminator has to sit at column 0 after YAML removes the block
+	// indent. An indented EOF would swallow the rest of the boot.
+	if !strings.Contains(script, "\nEOF\n") {
+		t.Errorf("the mDNS script's heredoc terminator is not at column 0:\n%s", script)
+	}
+	// shellify prepends its own shebang and runs the file with /bin/sh.
+	cmd := exec.Command("sh", "-n", "-c", "#!/bin/sh\n"+script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("mDNS bootcmd is not valid shell: %v: %s\n%s", err, out, script)
+	}
+	golden.Assert(t, "user-data-bridge-mdns.yaml", got)
+}
+
+func TestGenerate_PublishesMDNSAlongsideAnOpencodeConfig(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.PublishMDNS = true
+	opts.OpencodeConfig = []byte(testOpencodeConfig)
+	opts.OpencodeSource = "/home/operator/opencode.json"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "bootcmd:") || !strings.Contains(text, "write_files:") {
+		t.Errorf("bridge user-data with an opencode config dropped one of the two sections:\n%s", text)
+	}
+}
+
+func TestGenerate_PublishesMDNSAlongsideOperatorUserData(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.PublishMDNS = true
+	// The operator's bootcmd has to survive. The settings part replaces every
+	// list it names, so the publication is a later part whose merge rule
+	// appends bootcmd. cloud-init then runs their commands and then the script.
+	opts.ExtraUserData = []byte("#cloud-config\nbootcmd:\n  - echo operator-boot\npackages:\n  - ripgrep\n")
+	opts.ExtraSource = "/home/operator/extra.yaml"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	golden.Assert(t, "user-data-bridge-extra.mime", got)
+	types, bodies := parseParts(t, got, 3)
+	if want := []string{"text/cloud-config", "text/cloud-config", "text/cloud-config"}; !equal(types, want) {
+		t.Errorf("part content types = %v, want %v", types, want)
+	}
+	if !strings.Contains(bodies[0], "echo operator-boot") {
+		t.Errorf("the operator's bootcmd was not kept in their part:\n%s", bodies[0])
+	}
+	if strings.Contains(bodies[0], "resolvectl") || strings.Contains(bodies[1], "resolvectl") || strings.Contains(bodies[1], "bootcmd:") {
+		t.Errorf("the publication leaked into a part that would replace the operator bootcmd:\noperator:\n%s\nsettings:\n%s", bodies[0], bodies[1])
+	}
+	if !strings.Contains(bodies[1], testKey) || !strings.Contains(bodies[1], `merge_how: "dict(recurse_array,replace)+list(append)"`) {
+		t.Errorf("the settings part dropped its own merge rule or the authorized key:\n%s", bodies[1])
+	}
+	if !strings.Contains(bodies[2], `merge_how: "dict(recurse_array)+list(append)"`) || strings.Contains(bodies[2], "dict(recurse_array,replace)") {
+		t.Errorf("the publication part must append bootcmd and leave other keys alone:\n%s", bodies[2])
+	}
+	script := mdnsBootcmdScript(t, bodies[2])
+	if !strings.Contains(script, "name='agent-01'") || !strings.Contains(script, "\nEOF\n") {
+		t.Errorf("the publication script is missing from the appended part:\n%s", script)
+	}
+}
+
+// mdnsBootcmdScript returns the bootcmd shell script the way PyYAML hands it
+// to cloud-init: the literal block's common indent removed, and nothing after
+// the block.
+func mdnsBootcmdScript(t *testing.T, userData string) string {
+	t.Helper()
+	const marker = "bootcmd:\n  - |\n"
+	start := strings.Index(userData, marker)
+	if start < 0 {
+		t.Fatalf("user-data has no literal bootcmd script:\n%s", userData)
+	}
+	body := userData[start+len(marker):]
+	var lines []string
+	for _, line := range strings.Split(body, "\n") {
+		if line != "" && !strings.HasPrefix(line, " ") {
+			break
+		}
+		lines = append(lines, line)
+	}
+	indent := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		n := 0
+		for n < len(line) && line[n] == ' ' {
+			n++
+		}
+		indent = n
+		break
+	}
+	if indent == 0 {
+		t.Fatal("the bootcmd script is not indented")
+	}
+	pad := strings.Repeat(" ", indent)
+	var b strings.Builder
+	for _, line := range lines {
+		switch {
+		case line == "":
+			b.WriteByte('\n')
+		case strings.HasPrefix(line, pad):
+			b.WriteString(line[indent:])
+			b.WriteByte('\n')
+		default:
+			t.Fatalf("script line is indented less than %d spaces: %q", indent, line)
+		}
+	}
+	return b.String()
 }
 
 func TestGenerate_StartsWithTheCloudConfigHeader(t *testing.T) {
@@ -225,7 +384,7 @@ func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
 	}
 	golden.Assert(t, "user-data-extra.mime", got)
 
-	types, bodies := parseParts(t, got)
+	types, bodies := parseParts(t, got, 2)
 	if want := []string{"text/cloud-config", "text/cloud-config"}; !equal(types, want) {
 		t.Errorf("part content types = %v, want %v", types, want)
 	}
@@ -251,7 +410,7 @@ func TestGenerate_ClassifiesAShellScriptUserData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	types, _ := parseParts(t, got)
+	types, _ := parseParts(t, got, 2)
 	if types[0] != "text/x-shellscript" {
 		t.Errorf("first part content type = %q, want text/x-shellscript", types[0])
 	}
@@ -446,7 +605,7 @@ func writeFile(t *testing.T, dir, name, contents string) string {
 
 // parseParts reads the generated document back with the standard MIME reader,
 // which is the same thing cloud-init does with it.
-func parseParts(t *testing.T, doc []byte) (contentTypes, bodies []string) {
+func parseParts(t *testing.T, doc []byte, want int) (contentTypes, bodies []string) {
 	t.Helper()
 
 	header, body, ok := strings.Cut(string(doc), "\r\n\r\n")
@@ -476,8 +635,8 @@ func parseParts(t *testing.T, doc []byte) (contentTypes, bodies []string) {
 		contentTypes = append(contentTypes, mediaType)
 		bodies = append(bodies, string(content))
 	}
-	if len(contentTypes) != 2 {
-		t.Fatalf("got %d parts, want 2:\n%s", len(contentTypes), doc)
+	if len(contentTypes) != want {
+		t.Fatalf("got %d parts, want %d:\n%s", len(contentTypes), want, doc)
 	}
 	return contentTypes, bodies
 }

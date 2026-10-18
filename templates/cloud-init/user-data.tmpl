@@ -3,9 +3,10 @@
 # regenerated from the VM's configuration and is kept only as a record of what
 # the guest was configured with.
 #
-# This is the whole guest-side contract. It authorizes public keys, creates the
-# login user and the groups that let it reach the Docker socket and libvirt,
-# and does nothing else — no packages, no commands, no credentials.
+# This is the whole guest-side contract. It authorizes public keys and creates
+# the login user and the groups that let it reach the Docker socket and libvirt.
+# It installs no packages and carries no credentials. A bridged guest also
+# publishes its hostname and SSH with mDNS. A NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -52,6 +53,18 @@ users:
 # Passwords are never accepted: the only way in is a key listed above.
 ssh_pwauth: false
 disable_root: true
+{{- if and .PublishMDNS (not .HasExtraUserData) }}
+
+# This guest is on a bridge. Publish the VM name and SSH with mDNS so other
+# machines on the LAN can open it as <user>@<name>.local (ADR-0020). The base
+# image already runs systemd-resolved. The hostname is set before resolved is
+# restarted, because %H is expanded when resolved loads the service file, and
+# resolved is restarted only when that configuration changed.
+# The name below is a validated VM name: lowercase letters, digits, and hyphens.
+bootcmd:
+  - |
+{{ indent 4 .MDNSScript }}
+{{- end }}
 {{ if .HasExtraUserData }}
 # This part is applied after the operator's own user-data, and these merge
 # rules make that ordering mean something: their lists are added to ours, and

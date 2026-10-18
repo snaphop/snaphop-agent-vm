@@ -18,6 +18,13 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- A VM created with `--network bridge` publishes its hostname and SSH on the
+  LAN with mDNS. Other machines can open it as `ssh <user>@<name>.local`.
+  The guest uses systemd-resolved, which the base images already run, so a
+  cached image does not need a rebuild. A NAT guest stays unpublished.
+  `agent-vm ssh` still uses the address libvirt reports. A VM created before
+  this change publishes when you create it again. Operator `bootcmd` passed
+  with `--user-data` still runs, and the publication runs after it.
 - `agent-vm setup` prepares a host to run agent-vm. It installs QEMU, libvirt,
   podman, and libguestfs, starts libvirt, and adds you to the `kvm` and
   `libvirt` groups. On a system connection it also lets libvirt's QEMU account

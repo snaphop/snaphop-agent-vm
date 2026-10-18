@@ -813,6 +813,55 @@ func TestCreate_BridgeModeValidatesTheBridgeAndCreatesNothing(t *testing.T) {
 	}
 }
 
+func TestCreate_BridgeModePublishesSSHWithMDNS(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+	fake.Respond("ip -d -json link show type bridge", hostexec.FakeResponse{
+		Stdout: readToolout(t, "ip-d-json-link-show-type-bridge.txt"),
+	})
+
+	code, _, stderr := cliRun(t, fake, stateDir,
+		createArgs(keyPath, "--network", "bridge", "--bridge", "br40")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	userData := readVMUserData(t, stateDir, "agent-01")
+	for _, want := range []string{"bootcmd:", "name='agent-01'", "MulticastDNS=yes", "Type=_ssh._tcp", "resolvectl mdns"} {
+		if !strings.Contains(userData, want) {
+			t.Errorf("bridged user-data is missing %q:\n%s", want, userData)
+		}
+	}
+}
+
+func TestCreate_NATModeDoesNotPublishMDNS(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+
+	userData := readVMUserData(t, stateDir, "agent-01")
+	for _, forbidden := range []string{"MulticastDNS", "bootcmd:", "_ssh._tcp", "resolvectl"} {
+		if strings.Contains(userData, forbidden) {
+			t.Errorf("NAT user-data publishes mDNS via %q:\n%s", forbidden, userData)
+		}
+	}
+}
+
+func readVMUserData(t *testing.T, stateDir, name string) string {
+	t.Helper()
+	vm := loadVM(t, stateDir, name)
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	return string(userData)
+}
+
 // TestCreate_NATModeRecordsTheNetworkAndNoBridge is the mirror of the bridged
 // case: a bridge can be configured — through the config file or AGENT_VM_BRIDGE
 // — while NAT stays the mode, and recording it would claim a LAN attachment the
@@ -1203,6 +1252,36 @@ func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	for _, want := range []string{"qemu-img create", "virt-install --connect", "user-data"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the plan does not mention %q:\n%s", want, stdout)
+		}
+	}
+	// NAT is the default. The plan must not tell the operator the guest will
+	// appear on the LAN.
+	if strings.Contains(stdout, "mDNS") || strings.Contains(stdout, ".local") {
+		t.Errorf("a NAT plan publishes mDNS:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("--dry-run created state: %v", err)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install --connect") || strings.HasPrefix(argv, "qemu-img create") {
+			t.Errorf("--dry-run must not run a mutating command: %v", argv)
+		}
+	}
+}
+
+func TestCreate_DryRunNamesMDNSOnlyForABridge(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, stdout, stderr := cliRun(t, fake, stateDir,
+		append([]string{"--dry-run"}, createArgs(keyPath, "--network", "bridge", "--bridge", "br40")...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	for _, want := range []string{"agent-01.local", "_ssh._tcp", "mDNS"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the bridge plan does not mention %q:\n%s", want, stdout)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {

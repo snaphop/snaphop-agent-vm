@@ -520,6 +520,13 @@ ip -br link show type bridge
 agent-vm create agent-04 --network bridge --bridge br0
 ```
 
+Once the guest has booted, other machines on that LAN can open it as
+`ssh <user>@<name>.local`. The guest publishes that name and an `_ssh._tcp`
+record with mDNS. A VM created before this publication existed starts
+publishing when you create it again. `agent-vm ssh` still uses the address
+libvirt reports. See
+[mDNS on a bridged guest](./cli.md#mdns-on-a-bridged-guest).
+
 Wireless interfaces cannot be bridged in the usual way; use NAT on laptops.
 
 ### Turn Off The Spanning Tree Forward Delay

@@ -1307,7 +1307,7 @@ and must not already exist.
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
 | `--disk <size>` | `50G` | Virtual root disk size (thin overlay), from `1G` to `8T`. Cloud-init grows the guest's root partition to this size at first boot. |
-| `--network <nat\|bridge>` | `nat` | Network mode. |
+| `--network <nat\|bridge>` | `nat` | Network mode. `bridge` also publishes the guest's hostname and SSH on the LAN with mDNS. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
 | `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
 | `--host-authorized-keys` | off | Also authorize every key in this host account's `~/.ssh/authorized_keys` and `~/.ssh/authorized-keys/authorized_keys`. Combines with `--ssh-key`. |
@@ -1384,6 +1384,31 @@ its address. A cached image picks the drop-in up on the next
 The host's own serial numbers are not copied into the guest. Two VMs get
 different serials. A VM defined before this change keeps the identity it was
 created with; recreate it to pick up the new one.
+
+#### mDNS on a bridged guest
+
+A VM created with `--network bridge` publishes its hostname and SSH on the
+LAN with mDNS ([ADR-0020](./decisions/0020-publish-ssh-with-mdns-on-a-bridged-guest.md)).
+Other machines on that LAN can open it as `ssh <user>@<name>.local`. The
+guest also advertises `_ssh._tcp` on port 22. A NAT guest does not publish
+either record.
+
+The publication is `bootcmd` in the generated cloud-init user-data. It turns
+on systemd-resolved's multicast DNS, which every base image already runs, and
+it enables mDNS on the guest's ethernet interfaces (`en*` and `eth*`). No
+package is added and no base image has to be rebuilt. A VM created before
+this change publishes when you create it again. `--dry-run` of a bridged
+create names `<name>.local`.
+
+When `--user-data` is set as well, the publication is a later cloud-config
+part. That part appends its `bootcmd` to the operator's, so their commands
+still run, and then the publication does.
+
+`agent-vm ssh` and `create`'s own login still use the address libvirt
+reports. They do not resolve `<name>.local`. A NIC whose name does not start
+with `en` or `eth` is not published. When no such interface exists, the
+guest's cloud-init log records the failure, and SSH through the guest agent
+still works.
 
 #### Growable Memory
 
@@ -1784,8 +1809,11 @@ forwards its exit status. Resolves the address with
 `virsh domifaddr --source lease` for a NAT VM — the address libvirt's own DHCP
 server handed out — and `virsh domifaddr --source agent` for a bridged VM, whose
 DHCP server is the LAN's. Either way only the interface libvirt defined, by the
-MAC recorded in `vm.json`, is used. The guest is untrusted and is never asked
-where it is on NAT. Recreating a NAT VM keeps that MAC and the new guest takes
+MAC recorded in `vm.json`, is used. A bridged guest also publishes
+`<name>.local` for other machines on the LAN. This command still connects
+to the address libvirt reported
+([mDNS on a bridged guest](#mdns-on-a-bridged-guest)). The guest is untrusted
+and is never asked where it is on NAT. Recreating a NAT VM keeps that MAC and the new guest takes
 a new lease, while dnsmasq keeps the previous leases until they expire. When
 more than one lease matches the MAC, the one with the latest expiry from
 `virsh net-dhcp-leases` is the address. This is a

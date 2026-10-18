@@ -132,7 +132,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Domain lifecycle | `virsh start` / `shutdown` / `destroy` / `undefine` |
 | Domain inspection | `virsh list --all --name`, `domstate`, `dumpxml`, `domblklist`, `domiflist` |
 | Hypervisor architecture | `virsh capabilities` |
-| Guest address | `virsh domifaddr --source lease` (NAT) or `--source agent` (bridged), filtered to the recorded MAC. When a NAT guest has more than one lease for that MAC, `virsh net-dhcp-leases` supplies the expiry and the latest one is used. `create` reads it again before each SSH probe |
+| Guest address | `virsh domifaddr --source lease` (NAT) or `--source agent` (bridged), filtered to the recorded MAC. When a NAT guest has more than one lease for that MAC, `virsh net-dhcp-leases` supplies the expiry and the latest one is used. `create` reads it again before each SSH probe. A bridged guest also publishes `<name>.local` for other machines on the LAN; this tool does not look that name up |
 | Serial console | `virsh console` (exec'd directly, not proxied) |
 | NAT network | `virsh net-list` / `net-define` / `net-start` / `net-autostart` |
 | Host bridge validation | `ip -d -json link show type bridge` |
@@ -483,7 +483,9 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 5. **Build the cloud-init seed.** Create `vms/agent-01/`, write `seed/user-data`
    with hostname, guest user and authorized keys, and `seed/meta-data` with the
    instance id, then `virt-make-fs --type=vfat --label=cidata seed/ seed.img`.
-   The seed is attached as a read-only virtio disk (ADR-0011).
+   The seed is attached as a read-only virtio disk (ADR-0011). When the VM
+   uses a bridge, that user-data also publishes the hostname and SSH with
+   mDNS (ADR-0020). A NAT guest's user-data does not.
 6. **Create the overlay.**
    `qemu-img create -f qcow2 -b <base.qcow2> -F qcow2 root.qcow2 50G`. The base
    file is opened read-only; VM creation does not mutate it.
@@ -510,7 +512,10 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
     keeps the MAC, the new guest takes a new lease, and the older leases
     stay until they expire. The address is read again before each SSH
     probe, bounded by `--wait-for-ssh`, because the previous boot's lease
-    is the newest one until the new guest is handed an address. A timeout
+    is the newest one until the new guest is handed an address. That address
+    is how this tool reaches the guest. On a bridge the guest also publishes
+    `<name>.local` for other machines on the LAN. `create` and `agent-vm ssh`
+    do not look that name up. A timeout
     exits `6` — and by default leaves the VM in place
     with the console log, because "it booted slowly" and "it failed to boot" need
     the same evidence.
@@ -705,7 +710,9 @@ The full, binding rules are in [`../SECURITY.md`](../SECURITY.md). In summary:
   enforce isolation of those destinations. Operators must supply the host
   firewall policy required by their workloads before running untrusted guests
   ([host setup](./host-setup.md#host-firewalls-and-the-virbrn-bridge)). Bridged
-  networking is opt-in per VM and documented as a trust-boundary change. Host
+  networking is opt-in per VM and documented as a trust-boundary change. A
+  bridged guest publishes its hostname and SSH on that LAN with mDNS
+  (ADR-0020). A NAT guest does not. Host
   path sharing is not implemented; adding it would require an ADR and the
   per-VM, explicit, default-read-only handling `SECURITY.md` mandates.
 - Credentials this tool places in a guest are an SSH **public** key path,
