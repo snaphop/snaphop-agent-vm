@@ -22,6 +22,10 @@ run as `github-runner`, and that account has passwordless sudo. The account
 name `runner` and the rule that the account is not in sudoers, in the
 decision below, are no longer in force.
 
+Extended by [ADR-0019](./0019-clean-runner-disk-before-each-job.md). The
+shared section also installs a job-started hook that clears old checkouts
+and, when disk is low, unused Docker data.
+
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided
 guest tooling) with another variant of each existing family. Bounded by

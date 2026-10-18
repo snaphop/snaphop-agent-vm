@@ -33,6 +33,7 @@ configure options:
                       A local configuration is cleared first, without a token.
 
 Jobs run as github-runner. That account may sudo without a prompt.
+configure keeps the image's job-started disk hook in the runner's .env.
 --token-file may be - to read the value from stdin, and a file must be
 readable only by its owner. Destroying the VM does not unregister the runner.
 EOF
@@ -135,6 +136,28 @@ uninstall_service() {
     if [ -x "$prefix/svc.sh" ]; then
         run_svc uninstall
     fi
+}
+
+# The disk hook is part of the image. config.sh keeps an existing .env and
+# may append to it. Put the two lines back without dropping the lines
+# config.sh wrote. Tests point AGENT_VM_RUNNER_HOOK_DIR at a stand-in;
+# sudo clears the environment, so a guest keeps the directory below.
+ensure_job_hook() {
+    hook_dir=${AGENT_VM_RUNNER_HOOK_DIR:-/usr/local/libexec/snaphop-runner}
+    hook=$hook_dir/job-started.sh
+    if [ ! -x "$hook" ]; then
+        return 0
+    fi
+    env_file=$prefix/.env
+    tmp=$(mktemp)
+    if [ -f "$env_file" ]; then
+        grep -vE '^(ACTIONS_RUNNER_HOOK_JOB_STARTED|SNAPHOP_RUNNER_ROOT)=' "$env_file" > "$tmp" || true
+    fi
+    printf 'ACTIONS_RUNNER_HOOK_JOB_STARTED=%s\nSNAPHOP_RUNNER_ROOT=%s\n' "$hook" "$prefix" >> "$tmp"
+    cat "$tmp" > "$env_file"
+    rm -f "$tmp"
+    chown github-runner:github-runner "$env_file"
+    chmod 0644 "$env_file"
 }
 
 cmd=${1:-}
@@ -316,6 +339,7 @@ if [ "$replace" -eq 1 ]; then
 fi
 
 run_as_runner "$prefix/config.sh" "$@"
+ensure_job_hook
 if [ ! -x "$prefix/svc.sh" ]; then
     die "config.sh did not write svc.sh"
 fi

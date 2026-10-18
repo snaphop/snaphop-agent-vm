@@ -857,7 +857,18 @@ func TestBuild_SlimAndFullImagesOfOneFamilyCoexist(t *testing.T) {
 func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *testing.T) {
 	t.Parallel()
 	fake := ubuntuHost(t)
-	var recipe, install, configure, dockerScript, gitScript []byte
+	var recipe []byte
+	scripts := map[string][]byte{}
+	contextNames := []string{
+		"github-runner.sh",
+		"github-runner-configure.sh",
+		"runner-docker.sh",
+		"runner-git.sh",
+		"runner-cleanup.sh",
+		"runner-disk-headroom.py",
+		"runner-disk-job-started.py",
+		"runner-disk-job-started.sh",
+	}
 	fake.RespondPrefix("podman build", hostexec.FakeResponse{
 		Do: func(c hostexec.Command) error {
 			// The workspace is removed once the build commits, so the recipe
@@ -869,17 +880,14 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 			if recipe, err = os.ReadFile(file); err != nil {
 				return err
 			}
-			if install, err = os.ReadFile(filepath.Join(dir, "github-runner.sh")); err != nil {
-				return err
+			for _, name := range contextNames {
+				body, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					return err
+				}
+				scripts[name] = body
 			}
-			if configure, err = os.ReadFile(filepath.Join(dir, "github-runner-configure.sh")); err != nil {
-				return err
-			}
-			if dockerScript, err = os.ReadFile(filepath.Join(dir, "runner-docker.sh")); err != nil {
-				return err
-			}
-			gitScript, err = os.ReadFile(filepath.Join(dir, "runner-git.sh"))
-			return err
+			return nil
 		},
 	})
 	builder, store := newBuilder(t, fake)
@@ -909,21 +917,14 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 	if string(recipe) != string(wanted) {
 		t.Errorf("podman was given a recipe of %d bytes, want the embedded ubuntu-runner.Containerfile (%d bytes)", len(recipe), len(wanted))
 	}
-	for _, got := range []struct {
-		name string
-		got  []byte
-	}{
-		{"github-runner.sh", install},
-		{"github-runner-configure.sh", configure},
-		{"runner-docker.sh", dockerScript},
-		{"runner-git.sh", gitScript},
-	} {
-		want, err := templates.FS.ReadFile("distro/" + got.name)
+	for _, name := range contextNames {
+		want, err := templates.FS.ReadFile("distro/" + name)
 		if err != nil {
-			t.Fatalf("reading %s: %v", got.name, err)
+			t.Fatalf("reading %s: %v", name, err)
 		}
-		if string(got.got) != string(want) {
-			t.Errorf("build context %s is %d bytes, want the embedded file (%d bytes)", got.name, len(got.got), len(want))
+		got := scripts[name]
+		if string(got) != string(want) {
+			t.Errorf("build context %s is %d bytes, want the embedded file (%d bytes)", name, len(got), len(want))
 		}
 	}
 }

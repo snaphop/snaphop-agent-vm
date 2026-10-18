@@ -2,13 +2,17 @@ package image
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeEmbeddedScript copies an embedded guest script out to a temp file so a
@@ -69,7 +73,7 @@ func refuseRealRunner(t *testing.T) {
 
 func TestGitHubRunnerScripts_AreValidShell(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh"} {
+	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh", "runner-cleanup.sh", "runner-disk-job-started.sh"} {
 		path := writeEmbeddedScript(t, name)
 		out, err := exec.Command("sh", "-n", path).CombinedOutput()
 		if err != nil {
@@ -272,6 +276,10 @@ func TestGitHubRunnerConfigure_CarriesNoCredentialMaterial(t *testing.T) {
 		"remove --local",
 		"removal token",
 		"prefix=${AGENT_VM_RUNNER_PREFIX:-/opt/actions-runner}",
+		"/usr/local/libexec/snaphop-runner",
+		"ACTIONS_RUNNER_HOOK_JOB_STARTED",
+		"SNAPHOP_RUNNER_ROOT",
+		"ensure_job_hook",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("github-runner-configure.sh does not contain %q", want)
@@ -296,7 +304,7 @@ func TestGitHubRunnerConfigure_HelpSucceedsAndPrintsTheRegistrationFlags(t *test
 	if code != 0 {
 		t.Fatalf("exit %d, want 0\n%s", code, stderr)
 	}
-	for _, want := range []string{"--url", "--token", "configure", "ephemeral", "registration token", "removal token", "github-runner", "sudo without a prompt"} {
+	for _, want := range []string{"--url", "--token", "configure", "ephemeral", "registration token", "removal token", "github-runner", "sudo without a prompt", "job-started disk hook"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help does not mention %q:\n%s", want, stdout)
 		}
@@ -447,6 +455,15 @@ printf '%s\n' "id stub: unexpected invocation" >&2
 exit 99
 `
 
+// stubChown records the configure script's ownership fix for .env. The test
+// host has no github-runner account, so the real chown cannot run.
+const stubChown = `#!/bin/sh
+if [ -n "${AGENT_VM_RUNNER_PREFIX:-}" ]; then
+  printf '%s\n' "$*" >> "$AGENT_VM_RUNNER_PREFIX/chown.log"
+fi
+exit 0
+`
+
 func writeStub(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
@@ -491,11 +508,15 @@ func parseArgvLog(log []byte) [][]string {
 // runConfigureAgainstFakeRunner runs the configure script with id and runuser
 // stubbed on PATH. prefix is the runner directory the script should use; an
 // empty prefix leaves the default, /opt/actions-runner.
-func runConfigureAgainstFakeRunner(t *testing.T, prefix, script string, args ...string) (stdout, stderr string, code int, invocations [][]string) {
+func runConfigureAgainstFakeRunner(t *testing.T, prefix, hookDir, script string, args ...string) (stdout, stderr string, code int, invocations [][]string) {
 	t.Helper()
 	bin := t.TempDir()
 	writeStub(t, bin, "id", stubID)
 	writeStub(t, bin, "runuser", stubRunuser)
+	writeStub(t, bin, "chown", stubChown)
+	if hookDir == "" {
+		hookDir = t.TempDir()
+	}
 	cmd := exec.Command("sh", append([]string{script}, args...)...)
 	env := make([]string, 0, len(os.Environ())+2)
 	for _, entry := range os.Environ() {
@@ -505,6 +526,7 @@ func runConfigureAgainstFakeRunner(t *testing.T, prefix, script string, args ...
 		env = append(env, entry)
 	}
 	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	env = append(env, "AGENT_VM_RUNNER_HOOK_DIR="+hookDir)
 	if prefix != "" {
 		env = append(env, "AGENT_VM_RUNNER_PREFIX="+prefix)
 	}
@@ -543,7 +565,7 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 		if _, err := os.Stat("/opt/actions-runner/config.sh"); err == nil {
 			t.Fatal("/opt/actions-runner/config.sh is installed on this host; refusing to run the configure script against it")
 		}
-		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, "", script, configure...)
+		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, "", "", script, configure...)
 		if code == 0 {
 			t.Fatal("configure exited 0 with no runner install")
 		}
@@ -559,7 +581,7 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 	t.Run("replace", func(t *testing.T) {
 		t.Parallel()
 		dir := fakeRunnerDir(t, true)
-		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, script, append(append([]string{}, configure...), "--replace")...)
+		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, "", script, append(append([]string{}, configure...), "--replace")...)
 		if code != 0 {
 			t.Fatalf("exit %d\n%s", code, stderr)
 		}
@@ -579,7 +601,15 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 	t.Run("remove", func(t *testing.T) {
 		t.Parallel()
 		dir := fakeRunnerDir(t, true)
-		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, script, "remove", "--token", removal)
+		hook := t.TempDir()
+		if err := os.WriteFile(filepath.Join(hook, "job-started.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		original := "LANG=C.UTF-8\nACTIONS_RUNNER_HOOK_JOB_STARTED=/old/job-started.sh\nSNAPHOP_RUNNER_ROOT=/not-this-prefix\n"
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, hook, script, "remove", "--token", removal)
 		if code != 0 {
 			t.Fatalf("exit %d\n%s", code, stderr)
 		}
@@ -594,12 +624,19 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("invocations:\n got %q\nwant %q", got, want)
 		}
+		gotEnv, err := os.ReadFile(filepath.Join(dir, ".env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(gotEnv) != original {
+			t.Errorf(".env after remove =\n%s\nwant it unchanged:\n%s", gotEnv, original)
+		}
 	})
 
 	t.Run("first configure", func(t *testing.T) {
 		t.Parallel()
 		dir := fakeRunnerDir(t, false)
-		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, script, configure...)
+		stdout, stderr, code, got := runConfigureAgainstFakeRunner(t, dir, "", script, configure...)
 		if code != 0 {
 			t.Fatalf("exit %d\n%s", code, stderr)
 		}
@@ -613,4 +650,513 @@ func TestGitHubRunnerConfigure_ReplaceClearsLocalFilesAndRemoveUsesItsOwnToken(t
 			t.Errorf("invocations:\n got %q\nwant %q", got, want)
 		}
 	})
+
+	t.Run("configure restores the disk hook", func(t *testing.T) {
+		t.Parallel()
+		dir := fakeRunnerDir(t, false)
+		hook := t.TempDir()
+		if err := os.WriteFile(filepath.Join(hook, "job-started.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		seed := "LANG=C.UTF-8\nACTIONS_RUNNER_HOOK_JOB_STARTED=/old/job-started.sh\nSNAPHOP_RUNNER_ROOT=/not-this-prefix\nEXTRA=1\n"
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(seed), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, code, _ := runConfigureAgainstFakeRunner(t, dir, hook, script, configure...)
+		if code != 0 {
+			t.Fatalf("exit %d\n%s", code, stderr)
+		}
+		assertRegistrationHidden(t, stdout, stderr)
+		got, err := os.ReadFile(filepath.Join(dir, ".env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "LANG=C.UTF-8\nEXTRA=1\n" +
+			"ACTIONS_RUNNER_HOOK_JOB_STARTED=" + filepath.Join(hook, "job-started.sh") + "\n" +
+			"SNAPHOP_RUNNER_ROOT=" + dir + "\n"
+		if string(got) != want {
+			t.Errorf(".env =\n%s\nwant\n%s", got, want)
+		}
+		info, err := os.Stat(filepath.Join(dir, ".env"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Errorf(".env mode = %o, want 644", info.Mode().Perm())
+		}
+		chownLog, err := os.ReadFile(filepath.Join(dir, "chown.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(chownLog), "github-runner:github-runner "+filepath.Join(dir, ".env")) {
+			t.Errorf("chown log = %q", chownLog)
+		}
+	})
+}
+
+// The hashes are the copies of snaphop-build-deploy .github/actions/runner-disk
+// at c68e4b2821de81f4d599fdbb48b162097e90b046. That is the commit
+// snaphop-ai-stack's installer pins.
+func TestRunnerDiskHook_IsThePinnedUpstreamCopy(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{
+		"runner-disk-headroom.py":    "c040d4753b3ebe122752be1d8372b3a564b54965254c7c23e70e83d74962904c",
+		"runner-disk-job-started.py": "35f65abff156d639027263571dd2a208dcbcf8c4b7c3eefa3b16cee37e7312d1",
+		"runner-disk-job-started.sh": "459d82c14cea0d085e49be8af4610ef9017d0bbab7f360763955c65a5a7a8a31",
+	}
+	for name, sum := range want {
+		body := readTemplate(t, "distro/"+name)
+		got := sha256.Sum256([]byte(body))
+		if hex.EncodeToString(got[:]) != sum {
+			t.Errorf("%s sha256 = %s, want the pinned copy %s", name, hex.EncodeToString(got[:]), sum)
+		}
+	}
+	script := readTemplate(t, "distro/runner-cleanup.sh")
+	for _, needle := range []string{
+		"c68e4b2821de81f4d599fdbb48b162097e90b046",
+		"/usr/local/libexec/snaphop-runner",
+		"ACTIONS_RUNNER_HOOK_JOB_STARTED",
+		"SNAPHOP_RUNNER_ROOT",
+		"chown root:root",
+		"chown github-runner:github-runner",
+		"the hook must live outside",
+		"python3 is not on PATH",
+		"docker is not on PATH",
+		"the github-runner account is missing",
+		"RUNNER_DISK_PRUNE_BELOW_GIB=0",
+	} {
+		if !strings.Contains(script, needle) {
+			t.Errorf("runner-cleanup.sh does not contain %q", needle)
+		}
+	}
+	lower := strings.ToLower(script)
+	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-cleanup.sh contains %q", forbidden)
+		}
+	}
+}
+
+func TestRunnerDiskHook_RemovesStaleWorkAndPrunesDockerWhenLow(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatal("python3 is not installed; the runner image runs the disk hook with it")
+	}
+	hook := writeInstalledHook(t)
+	root := t.TempDir()
+	work := filepath.Join(root, "_work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := filepath.Join(work, "old-checkout", "src")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "main.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ageTree(t, filepath.Join(work, "old-checkout"), 73*time.Hour)
+
+	busy := filepath.Join(work, "busy", "src")
+	if err := os.MkdirAll(busy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(busy, "main.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agePath(t, filepath.Join(work, "busy"), 73*time.Hour)
+	agePath(t, busy, 73*time.Hour)
+
+	current := filepath.Join(work, "demo")
+	if err := os.MkdirAll(current, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(current, "keep.txt"), []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ageTree(t, current, 73*time.Hour)
+
+	actions := filepath.Join(work, "_actions")
+	if err := os.MkdirAll(actions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ageTree(t, actions, 73*time.Hour)
+
+	if err := os.WriteFile(filepath.Join(work, "notes.txt"), []byte("loose"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agePath(t, filepath.Join(work, "notes.txt"), 73*time.Hour)
+
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "precious.txt")
+	if err := os.WriteFile(outsideFile, []byte("stay"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(work, "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	diag := filepath.Join(root, "_diag")
+	if err := os.MkdirAll(diag, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldLog := filepath.Join(diag, "old.log")
+	if err := os.WriteFile(oldLog, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agePath(t, oldLog, 8*24*time.Hour)
+	newLog := filepath.Join(diag, "new.log")
+	if err := os.WriteFile(newLog, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkedLog := filepath.Join(diag, "linked.log")
+	if err := os.Symlink(outsideFile, linkedLog); err != nil {
+		t.Fatal(err)
+	}
+	agePath(t, outsideFile, 8*24*time.Hour)
+
+	stdout, dockerLog := runJobStarted(t, hook, root, []string{
+		"GITHUB_REPOSITORY=snaphop/demo",
+		"RUNNER_DISK_PRUNE_BELOW_GIB=1000000",
+		"RUNNER_DISK_FAIL_BELOW_GIB=1000000",
+		"RUNNER_NAME=runner-test",
+	})
+	if _, err := os.Stat(filepath.Join(work, "old-checkout")); !os.IsNotExist(err) {
+		t.Errorf("stale checkout still present: %v", err)
+	}
+	for _, keep := range []string{
+		filepath.Join(work, "busy", "src", "main.txt"),
+		filepath.Join(work, "demo", "keep.txt"),
+		actions,
+		filepath.Join(work, "notes.txt"),
+		filepath.Join(work, "linked"),
+		outsideFile,
+		newLog,
+		linkedLog,
+	} {
+		if _, err := os.Stat(keep); err != nil {
+			t.Errorf("hook removed %s: %v", keep, err)
+		}
+	}
+	if _, err := os.Lstat(linkedLog); err != nil {
+		t.Errorf("hook removed the diag symlink: %v", err)
+	}
+	if _, err := os.Stat(oldLog); !os.IsNotExist(err) {
+		t.Errorf("old diag log still present: %v", err)
+	}
+	if !strings.Contains(stdout, "Removed checkout _work/old-checkout") {
+		t.Errorf("stdout does not report the removed checkout:\n%s", stdout)
+	}
+	for _, want := range []string{
+		"builder prune --force --filter until=72h",
+		"image prune --force --filter until=72h",
+		"volume prune --force --filter all=false",
+		"builder prune --all --force",
+	} {
+		if !strings.Contains(dockerLog, want) {
+			t.Errorf("docker log does not contain %q:\n%s", want, dockerLog)
+		}
+	}
+
+	// Plenty of free space: files still age out, Docker is left alone.
+	fresh := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(fresh, "_work", "old-checkout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ageTree(t, filepath.Join(fresh, "_work", "old-checkout"), 73*time.Hour)
+	_, quiet := runJobStarted(t, hook, fresh, []string{
+		"GITHUB_REPOSITORY=snaphop/other",
+		"RUNNER_DISK_PRUNE_BELOW_GIB=0",
+		"RUNNER_NAME=runner-test",
+	})
+	if strings.Contains(quiet, "builder prune") {
+		t.Errorf("docker was pruned while free space was above the threshold:\n%s", quiet)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "_work", "old-checkout")); !os.IsNotExist(err) {
+		t.Errorf("stale checkout kept when Docker pruning was skipped: %v", err)
+	}
+}
+
+func TestRunnerDiskHook_ShellNeverFailsTheJob(t *testing.T) {
+	t.Parallel()
+	hook := writeInstalledHook(t)
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "python.log")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "python3"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(hook, "job-started.sh"))
+	cmd.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("job-started.sh exit: %v\n%s", err, out)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), filepath.Join(hook, "job-started.py")) {
+		t.Errorf("python3 was not pointed at the sibling script:\n%s", logged)
+	}
+}
+
+func TestRunnerCleanup_InstallsTheHookOutsideTheRunnerDirectory(t *testing.T) {
+	t.Parallel()
+	script := writeEmbeddedScript(t, "runner-cleanup.sh")
+	src := t.TempDir()
+	for embedded, installed := range map[string]string{
+		"runner-disk-headroom.py":    "agent-vm-runner-headroom.py",
+		"runner-disk-job-started.py": "agent-vm-runner-job-started.py",
+		"runner-disk-job-started.sh": "agent-vm-runner-job-started.sh",
+	} {
+		if err := os.WriteFile(filepath.Join(src, installed), []byte(readTemplate(t, "distro/"+embedded)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("installs and keeps other env lines", func(t *testing.T) {
+		prefix := t.TempDir()
+		dest := t.TempDir()
+		bin, chownLog := runnerCleanupPATH(t, true, true)
+		stdout, stderr, code := runCleanup(t, script, src, prefix, dest, bin, chownLog)
+		if code != 0 {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+		for embedded, name := range map[string]string{
+			"runner-disk-headroom.py":    "headroom.py",
+			"runner-disk-job-started.py": "job-started.py",
+			"runner-disk-job-started.sh": "job-started.sh",
+		} {
+			got, err := os.ReadFile(filepath.Join(dest, name))
+			if err != nil {
+				t.Fatalf("reading installed %s: %v", name, err)
+			}
+			if string(got) != readTemplate(t, "distro/"+embedded) {
+				t.Errorf("installed %s differs from the embedded copy", name)
+			}
+		}
+		shInfo, err := os.Stat(filepath.Join(dest, "job-started.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if shInfo.Mode().Perm() != 0o755 {
+			t.Errorf("job-started.sh mode = %o, want 755", shInfo.Mode().Perm())
+		}
+		pyInfo, err := os.Stat(filepath.Join(dest, "headroom.py"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pyInfo.Mode().Perm() != 0o644 {
+			t.Errorf("headroom.py mode = %o, want 644", pyInfo.Mode().Perm())
+		}
+		envPath := filepath.Join(prefix, ".env")
+		got, err := os.ReadFile(envPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "ACTIONS_RUNNER_HOOK_JOB_STARTED=" + filepath.Join(dest, "job-started.sh") + "\n" +
+			"SNAPHOP_RUNNER_ROOT=" + prefix + "\n"
+		if string(got) != want {
+			t.Errorf(".env =\n%s\nwant\n%s", got, want)
+		}
+		if err := os.WriteFile(envPath, []byte("LANG=C.UTF-8\n"+string(got)+"ACTIONS_RUNNER_HOOK_JOB_STARTED=/old\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stdout, stderr, code = runCleanup(t, script, src, prefix, dest, bin, chownLog)
+		if code != 0 {
+			t.Fatalf("second exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		}
+		got, err = os.ReadFile(envPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = "LANG=C.UTF-8\n" + want
+		if string(got) != want {
+			t.Errorf(".env after a second install =\n%s\nwant\n%s", got, want)
+		}
+		if strings.Count(string(got), "ACTIONS_RUNNER_HOOK_JOB_STARTED=") != 1 {
+			t.Errorf(".env repeats the hook line:\n%s", got)
+		}
+		chownLogBody, err := os.ReadFile(chownLog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(chownLogBody), "root:root") || !strings.Contains(string(chownLogBody), "github-runner:github-runner") {
+			t.Errorf("chown log = %q", chownLogBody)
+		}
+	})
+
+	t.Run("refuses a hook inside the runner directory", func(t *testing.T) {
+		prefix := t.TempDir()
+		dest := filepath.Join(prefix, "inside")
+		bin, chownLog := runnerCleanupPATH(t, true, true)
+		_, stderr, code := runCleanup(t, script, src, prefix, dest, bin, chownLog)
+		if code == 0 {
+			t.Fatal("install inside the runner directory exited 0")
+		}
+		if !strings.Contains(stderr, "must live outside") {
+			t.Errorf("stderr =\n%s", stderr)
+		}
+	})
+
+	t.Run("refuses a missing runner account", func(t *testing.T) {
+		prefix := t.TempDir()
+		dest := t.TempDir()
+		bin, chownLog := runnerCleanupPATH(t, true, false)
+		_, stderr, code := runCleanup(t, script, src, prefix, dest, bin, chownLog)
+		if code == 0 {
+			t.Fatal("missing account exited 0")
+		}
+		if !strings.Contains(stderr, "github-runner account is missing") {
+			t.Errorf("stderr =\n%s", stderr)
+		}
+	})
+
+	t.Run("refuses a missing docker command", func(t *testing.T) {
+		prefix := t.TempDir()
+		dest := t.TempDir()
+		bin, chownLog := runnerCleanupPATH(t, false, true)
+		_, stderr, code := runCleanup(t, script, src, prefix, dest, bin, chownLog)
+		if code == 0 {
+			t.Fatal("missing docker exited 0")
+		}
+		if !strings.Contains(stderr, "docker is not on PATH") {
+			t.Errorf("stderr =\n%s", stderr)
+		}
+	})
+}
+
+func writeInstalledHook(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for embedded, name := range map[string]string{
+		"runner-disk-headroom.py":    "headroom.py",
+		"runner-disk-job-started.py": "job-started.py",
+		"runner-disk-job-started.sh": "job-started.sh",
+	} {
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(name, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(readTemplate(t, "distro/"+embedded)), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func agePath(t *testing.T, path string, age time.Duration) {
+	t.Helper()
+	when := time.Now().Add(-age)
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatalf("chtimes %s: %v", path, err)
+	}
+}
+
+func ageTree(t *testing.T, root string, age time.Duration) {
+	t.Helper()
+	var paths []string
+	if err := filepath.Walk(root, func(path string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		paths = append(paths, path)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A child's timestamp updates its parent, so the parents go last.
+	for i := len(paths) - 1; i >= 0; i-- {
+		agePath(t, paths[i], age)
+	}
+}
+
+func runJobStarted(t *testing.T, hook, root string, extra []string) (stdout, dockerLog string) {
+	t.Helper()
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "docker.log")
+	stub := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %s\ncase \"$1\" in\ninfo)\n  printf '%%s\\n' %s\n  ;;\nvolume)\n  if [ \"$2\" = prune ]; then printf '%%s\\n' 'Total reclaimed space: 0B'; fi\n  ;;\nbuilder|image)\n  printf '%%s\\n' 'Total reclaimed space: 0B'\n  ;;\nesac\nexit 0\n", shellQuote(logPath), shellQuote(root))
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", filepath.Join(hook, "job-started.py"))
+	env := []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"SNAPHOP_RUNNER_ROOT=" + root,
+	}
+	env = append(env, extra...)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("job-started.py: %v\n%s", err, out)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(out), string(logged)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func runnerCleanupPATH(t *testing.T, withDocker, withRunner bool) (dir, chownLog string) {
+	t.Helper()
+	dir = t.TempDir()
+	chownLog = filepath.Join(t.TempDir(), "chown.log")
+	for _, name := range []string{"python3", "install", "grep", "mktemp", "chmod", "cat", "rm", "mkdir", "touch", "env"} {
+		real, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf("%s is not installed; the disk-hook install runs it", name)
+		}
+		if err := os.Symlink(real, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idBody := "#!/bin/sh\nexit 1\n"
+	if withRunner {
+		idBody = "#!/bin/sh\nif [ \"$1\" = github-runner ]; then exit 0; fi\nprintf '%s\\n' 'id stub: unexpected invocation' >&2\nexit 99\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "id"), []byte(idBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chownBody := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(chownLog) + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "chown"), []byte(chownBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if withDocker {
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, chownLog
+}
+
+func runCleanup(t *testing.T, script, src, prefix, dest, bin, chownLog string) (stdout, stderr string, code int) {
+	t.Helper()
+	cmd := exec.Command(script, src)
+	cmd.Env = []string{
+		"PATH=" + bin,
+		"HOME=" + t.TempDir(),
+		"AGENT_VM_RUNNER_PREFIX=" + prefix,
+		"AGENT_VM_RUNNER_HOOK_DIR=" + dest,
+		"CHOWN_LOG=" + chownLog,
+	}
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err == nil {
+		return out.String(), errb.String(), 0
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return out.String(), errb.String(), exit.ExitCode()
+	}
+	t.Fatalf("running cleanup install: %v\n%s", err, errb.String())
+	return "", "", -1
 }

@@ -83,6 +83,10 @@ var buildContextFiles = []string{
 	"github-runner-configure.sh",
 	"runner-docker.sh",
 	"runner-git.sh",
+	"runner-cleanup.sh",
+	"runner-disk-headroom.py",
+	"runner-disk-job-started.py",
+	"runner-disk-job-started.sh",
 }
 
 // Builder produces base images.

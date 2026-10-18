@@ -50,6 +50,16 @@ migration or rebuild step a user has to take.
   are left logged out, and a job that calls `gh` supplies its own
   credentials. An image already cached stays as it is until
   `agent-vm image build <family>-runner --force`.
+- A runner image clears disk before each job. It removes checkouts under
+  `/opt/actions-runner/_work` that no job has touched for 72 hours, except
+  the checkout the current job is using and directories whose names start
+  with `_`. It removes `_diag` logs older than seven days. When less than
+  20 GiB is free, it also removes unused Docker data, including buildx
+  builders left from earlier jobs. When less than 5 GiB is free, it removes
+  the rest of the unused build cache. The job still runs if the cleanup
+  cannot. An image already cached stays as it is until
+  `agent-vm image build <family>-runner --force`. Create the VM again from
+  that image.
 - A runner VM can join a GitHub organization when it is created, when `gh` is
   installed and logged in. `agent-vm create ci --distro ubuntu-runner
   --github-org <org>` waits until SSH works, asks GitHub for a short-lived

@@ -32,6 +32,7 @@ Documentation for SnapHop Agent VM.
 | [0016](./decisions/0016-install-docker-on-the-runner-image.md) | Install Docker on the runner image |
 | [0017](./decisions/0017-run-the-github-actions-runner-as-github-runner.md) | Run the GitHub Actions runner as `github-runner` with passwordless sudo |
 | [0018](./decisions/0018-set-up-a-supported-host.md) | Set up a supported host from the command |
+| [0019](./decisions/0019-clean-runner-disk-before-each-job.md) | Clean runner disk before each job |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.
