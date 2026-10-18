@@ -44,6 +44,13 @@ migration or rebuild step a user has to take.
   privileged container. An image already cached stays as it is until
   `agent-vm image build <family>-runner --force`. Building for another CPU
   architecture with `docker build --platform` stays on full and nix images.
+- A runner image includes the OpenSSL headers and `pkg-config`, so a job
+  can compile against OpenSSL. Ubuntu installs `libssl-dev` and
+  `pkg-config`. Fedora installs `openssl-devel` and `pkgconf-pkg-config`.
+  Arch installs `openssl`, which includes the headers, and `pkgconf`, which
+  provides the `pkg-config` command. The build fails when `pkg-config`
+  cannot find `libssl`. An image already cached stays as it is until
+  `agent-vm image build <family>-runner --force`.
 - A runner image includes `git` and the GitHub CLI (`gh`). Ubuntu and Fedora
   install the packages `git` and `gh`. Arch installs `git` and `github-cli`,
   which provides the `gh` command. A workflow job can run both. The commands

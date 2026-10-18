@@ -11,8 +11,9 @@
 #
 # The job account is github-runner, with passwordless sudo and a nologin
 # shell. A workflow job runs as that account. The compiler toolchain comes
-# from the slim recipe. The account is in the docker group so the job can
-# use the daemon. The agent account is unchanged.
+# from the slim recipe. The runner install adds openssl and pkgconf so a
+# job can compile against OpenSSL. The account is in the docker group so
+# the job can use the daemon. The agent account is unchanged.
 # This recipe contains no GitHub URL and no registration value: a base image
 # is shared by every VM built on it (SECURITY.md).
 #
@@ -390,7 +391,11 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 # passwordless sudo. Docker is installed after that account exists,
 # because the account has to join the docker group and the group arrives
 # with the packages. git and gh are installed from the distro packages
-# and checked on PATH before the image is committed. The disk hook is
+# and checked on PATH before the image is committed. The runner install
+# also adds the OpenSSL headers and pkg-config on every family: libssl-dev
+# and pkg-config on Ubuntu, openssl-devel and pkgconf-pkg-config on
+# Fedora, and openssl and pkgconf on Arch. The build fails if pkg-config
+# cannot see libssl. The disk hook is
 # installed last, after that account and Docker exist.
 COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh
 COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner

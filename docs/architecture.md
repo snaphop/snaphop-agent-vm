@@ -233,7 +233,10 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   `/usr/local/libexec/snaphop-runner/job-started.sh` that removes checkouts
   untouched for 72 hours and, below 20 GiB free, unused Docker data
   (ADR-0019). Ubuntu runner images also install
-  `build-essential`. `create`
+  `build-essential`. Every runner image installs the OpenSSL headers and
+  `pkg-config` (`libssl-dev` and `pkg-config` on Ubuntu, `openssl-devel`
+  and `pkgconf-pkg-config` on Fedora, `openssl` and `pkgconf` on Arch).
+  `create`
   registers that guest after boot when an organization is set (ADR-0015).
   `<family>-nix.Containerfile` keeps all of
   it but takes the tooling from the shared `templates/distro/agent-tools.nix`
