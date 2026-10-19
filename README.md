@@ -216,6 +216,9 @@ the bridge setup section of [`docs/host-setup.md`](./docs/host-setup.md).
 agent-vm create agent-05 --tailscale
 ```
 
+The machine name on the tailnet defaults to `<name>.agent`, so that VM is
+`agent-05.agent`. Set `--tailscale-hostname` to use another name.
+
 Use a one-time ephemeral key: the guest can read it while it logs in, and
 `destroy` does not remove a node that was not ephemeral. See
 [ADR-0014](./docs/decisions/0014-join-a-tailscale-network-from-the-guest.md).

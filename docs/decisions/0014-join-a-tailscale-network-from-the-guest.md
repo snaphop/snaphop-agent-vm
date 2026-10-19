@@ -57,7 +57,7 @@ default libvirt network mode, and `--network bridge` is unchanged.
   runs `tailscale up --auth-key=file:… --reset`, so this join is the whole
   configuration, and removes the file before it exits. The key is sent only
   to `up`, after install has returned.
-- **What else may be set, all opt-in:** `--tailscale-hostname` (the VM name
+- **What else may be set, all opt-in:** `--tailscale-hostname` (`<vm>.agent`
   when omitted), `--tailscale-login-server` (an `https` coordination server,
   for a network other than Tailscale's), `--tailscale-advertise-tag`
   (repeatable), `--tailscale-ephemeral`, and `--tailscale-ssh`.
@@ -123,3 +123,10 @@ When no path is set, the file is `~/.config/agent-vm/tailscale-auth-key`
 absolute path). It is mode `600` and holds one key. That is the same
 directory as the Pi-hole password file. A file at that path does not join
 a VM.
+
+When `--tailscale-hostname` is omitted and `[tailscale] hostname` is empty,
+the machine name is `<vm>.agent`. That string is what `tailscale up
+--hostname` receives. A name set by the flag, the environment, or the
+config file is used as written. A name may contain dots. Each label is
+lowercase letters, digits, and hyphens, and the whole name is at most 63
+characters.

@@ -376,7 +376,7 @@ Major modules and responsibilities:
   stdin. The file path may come from the flag, from `tailscale.auth_key_file`
   in the config file, from `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`, or, when none
   of those is set, from `~/.config/agent-vm/tailscale-auth-key`. The file is
-  mode 600. The key
+  mode 600. The tailnet machine name defaults to `<name>.agent`. The key
   itself is not a flag value, not a config value, not an environment
   variable, and not written into the image, the seed, or `vm.json`. A
   configured file does not join a VM on its own. The guest command's

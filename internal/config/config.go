@@ -138,9 +138,10 @@ type PiHoleSettings struct {
 }
 
 // TailscaleSettings is the non-secret Tailscale configuration. AuthKeyFile is
-// empty unless the operator set it. Hostname is empty when the VM name should
-// be used. LoginServer is empty when Tailscale's coordination server should
-// be used. Ephemeral and SSH are true only when the operator asked for them.
+// empty unless the operator set it. Hostname is empty when the tailnet
+// machine name should be <vm>.agent. LoginServer is empty when Tailscale's
+// coordination server should be used. Ephemeral and SSH are true only when
+// the operator asked for them.
 type TailscaleSettings struct {
 	AuthKeyFile   string
 	Hostname      string

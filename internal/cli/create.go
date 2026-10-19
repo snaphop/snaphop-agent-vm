@@ -68,7 +68,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	githubOrgFlag := flags.String("github-org", "", "GitHub `org` whose Actions runners this VM joins; labels are the org, <family>-latest, and <family>-<tag>; requires a -runner image and gh")
 	tailscaleOn := flags.Bool("tailscale", false, "join the guest to a Tailscale network after it boots")
 	tailscaleAuthKeyFile := flags.String("tailscale-auth-key-file", "", "`file` containing a Tailscale auth key (default ~/.config/agent-vm/tailscale-auth-key); also requests the join")
-	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: the VM name)")
+	tailscaleHostname := flags.String("tailscale-hostname", "", "hostname on the tailnet (default: <name>.agent)")
 	tailscaleLoginServer := flags.String("tailscale-login-server", "", "https URL of a coordination server other than Tailscale's")
 	tailscaleEphemeral := flags.Bool("tailscale-ephemeral", false, "remove the tailnet node when the VM stops")
 	tailscaleSSH := flags.Bool("tailscale-ssh", false, "enable Tailscale SSH on the guest")
