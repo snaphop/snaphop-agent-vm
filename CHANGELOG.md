@@ -109,6 +109,15 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- `create --tailscale-ephemeral` joins the tailnet again. The join was
+  passing `--ephemeral` to `tailscale up`. That command has no such flag,
+  so it printed its usage and the SSH session exited 2, leaving the VM in
+  place. Ephemeral is a property of `tailscaled`: the join now restarts
+  the daemon with `--state=mem:` and then runs `tailscale up` without that
+  flag. A node registered that way is removed when the guest stops. Install
+  this build before creating the VM again. The copy already on `PATH` still
+  passes the rejected flag, and a guest that already failed still has the
+  old join script until you create it again.
 - `create` follows a NAT lease that appears while it is waiting for SSH.
   Recreating a VM leaves the previous boot's lease in place, and that lease
   is the newest one until the new guest is given an address. The wait was

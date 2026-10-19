@@ -8,7 +8,10 @@
 # exiting. The key is never printed.
 set -eu
 
-keyfile=/run/agent-vm-tailscale-authkey
+# Tests point these at writable paths. create invokes this script with
+# `sudo -n`, which does not keep the caller's environment.
+keyfile=${AGENT_VM_TAILSCALE_KEYFILE:-/run/agent-vm-tailscale-authkey}
+ephemeral_unit=${AGENT_VM_TAILSCALE_EPHEMERAL_UNIT:-/etc/systemd/system/tailscaled.service.d/agent-vm-ephemeral.conf}
 
 die() {
     printf '%s\n' "agent-vm-tailscale-join: $*" >&2
@@ -29,6 +32,31 @@ install_tailscale() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl enable --now tailscaled
     fi
+}
+
+# tailscale up has no --ephemeral flag. Passing one makes it print its
+# usage and exit 2. tailscaled --state=mem: is how the daemon registers an
+# ephemeral node and removes that node when the daemon stops.
+use_ephemeral_state() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        die "ephemeral join needs systemd to start tailscaled with --state=mem:"
+    fi
+    bin=$(command -v tailscaled) || die "tailscaled is not installed"
+    case $bin in
+        /*) ;;
+        *) die "tailscaled is not an absolute path" ;;
+    esac
+    mkdir -p "$(dirname "$ephemeral_unit")"
+    # The empty ExecStart= clears the packaged command. The next line
+    # replaces it, so the unit's own --state does not stay in effect.
+    cat > "$ephemeral_unit" << EOF
+[Service]
+ExecStart=
+ExecStart=${bin} --state=mem: --socket=/run/tailscale/tailscaled.sock
+EOF
+    systemctl daemon-reload
+    systemctl enable tailscaled
+    systemctl restart tailscaled
 }
 
 join_up() {
@@ -66,7 +94,9 @@ join_up() {
         die "the auth key was empty"
     fi
 
-    if command -v systemctl >/dev/null 2>&1; then
+    if [ "$ephemeral" -eq 1 ]; then
+        use_ephemeral_state
+    elif command -v systemctl >/dev/null 2>&1; then
         systemctl enable --now tailscaled
     fi
 
@@ -79,9 +109,6 @@ join_up() {
         --operator="$operator" \
         --timeout=90s \
         --reset
-    if [ "$ephemeral" -eq 1 ]; then
-        set -- "$@" --ephemeral
-    fi
     if [ "$enable_ssh" -eq 1 ]; then
         set -- "$@" --ssh
     fi

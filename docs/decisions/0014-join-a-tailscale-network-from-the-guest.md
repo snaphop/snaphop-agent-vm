@@ -130,3 +130,10 @@ the machine name is `<vm>.agent`. That string is what `tailscale up
 config file is used as written. A name may contain dots. Each label is
 lowercase letters, digits, and hyphens, and the whole name is at most 63
 characters.
+
+2026-10-18. `--tailscale-ephemeral` registers an ephemeral node by
+restarting `tailscaled` with `--state=mem:` before `tailscale up`.
+`tailscale up` has no `--ephemeral` flag, and passing one makes the join
+exit 2. `mem:` is the daemon's way to register an ephemeral node and to
+remove it when the daemon stops, which is when the guest stops. An auth
+key that is itself ephemeral still removes the node when this flag is off.
