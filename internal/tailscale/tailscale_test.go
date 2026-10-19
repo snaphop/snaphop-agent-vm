@@ -148,12 +148,28 @@ func TestPrepare_AcceptsAJoinAndDropsDuplicateTags(t *testing.T) {
 	}
 }
 
+func TestPrepare_AcceptsTheDefaultMachineName(t *testing.T) {
+	t.Parallel()
+	got, err := Prepare(Options{Hostname: DefaultHostname("agent-01"), Operator: "agent"})
+	if err != nil {
+		t.Fatalf("Prepare rejected the default machine name: %v", err)
+	}
+	if got.Hostname != "agent-01.agent" {
+		t.Fatalf("hostname = %q, want agent-01.agent", got.Hostname)
+	}
+}
+
 func TestPrepare_RejectsAJoinThatWouldChangeTheCommand(t *testing.T) {
 	t.Parallel()
 	ok := Options{Hostname: "agent-01", Operator: "agent"}
 	for _, opts := range []Options{
 		{Hostname: "Agent_01", Operator: "agent"},
 		{Hostname: "-agent", Operator: "agent"},
+		{Hostname: "agent-01.", Operator: "agent"},
+		{Hostname: ".agent", Operator: "agent"},
+		{Hostname: "agent..01", Operator: "agent"},
+		{Hostname: "agent-01.Agent", Operator: "agent"},
+		{Hostname: strings.Repeat("a", 64), Operator: "agent"},
 		{Hostname: "agent-01", Operator: "root;id"},
 		{Hostname: "agent-01", Operator: "agent", LoginServer: "http://headscale.example.com"},
 		{Hostname: "agent-01", Operator: "agent", LoginServer: "https://user:secret@headscale.example.com"},

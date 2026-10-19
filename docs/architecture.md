@@ -400,7 +400,8 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   `tailscale.auth_key_file`, or `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`, or
   `~/.config/agent-vm/tailscale-auth-key` when none of those is set — and
   passed on the stdin of the guest's `up` command. The file is mode 600.
-  A file at that path does not join a VM on its own. Install runs first, with no key, and fetches
+  A file at that path does not join a VM on its own. The machine name
+  defaults to `<name>.agent`. Install runs first, with no key, and fetches
   Tailscale's installer only when `tailscale` is not already on `PATH`.
 - **Public interface:** the optional `tailscale` object in `vm.json`, and the
   `+tailscale` suffix `list` and `info` add to the network. The guest command
@@ -581,7 +582,8 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 13. **Join a tailnet, when asked.** If `--tailscale` or
     `--tailscale-auth-key-file` was given, copy the join script over SSH,
     install Tailscale when the guest does not already have it, then run
-    `tailscale up` with the auth key on stdin. The key file is
+    `tailscale up` with the auth key on stdin. The machine name is
+    `<name>.agent` unless a hostname was set. The key file is
     `~/.config/agent-vm/tailscale-auth-key` unless the command or the config
     names another one.
     Save the non-secret result into `vm.json`. A failure here leaves the VM

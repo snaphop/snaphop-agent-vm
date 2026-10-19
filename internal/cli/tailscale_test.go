@@ -283,9 +283,16 @@ func TestCreate_ReadsTheDefaultTailscaleAuthKeyFile(t *testing.T) {
 		if commandStdin(t, call) != tailscaleCanary {
 			t.Errorf("up stdin = %q", commandStdin(t, call))
 		}
+		if !strings.Contains(strings.Join(call.Argv(), " "), "--hostname=agent-01.agent") {
+			t.Errorf("up command = %s, want --hostname=agent-01.agent", strings.Join(call.Argv(), " "))
+		}
 	}
 	if !joined {
 		t.Fatal("tailscale up did not run")
+	}
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Tailscale == nil || vm.Tailscale.Hostname != "agent-01.agent" {
+		t.Fatalf("recorded hostname = %+v, want agent-01.agent", vm.Tailscale)
 	}
 	if strings.Contains(readVMJSON(t, stateDir, "agent-01"), tailscaleCanary) || strings.Contains(readVMJSON(t, stateDir, "agent-01"), authPath) || strings.Contains(stdout+stderr, tailscaleCanary) {
 		t.Fatal("the auth key or its path was stored or the key was printed")

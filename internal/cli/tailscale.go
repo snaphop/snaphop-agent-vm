@@ -67,7 +67,7 @@ func resolveTailscale(vmName string, cfg *config.Config, requested bool, keyFlag
 	}
 	hostname := settings.Hostname
 	if hostname == "" {
-		hostname = vmName
+		hostname = tailscale.DefaultHostname(vmName)
 	}
 	opts, err := tailscale.Prepare(tailscale.Options{
 		Hostname:      hostname,

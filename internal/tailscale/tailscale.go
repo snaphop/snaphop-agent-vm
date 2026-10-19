@@ -35,9 +35,25 @@ const (
 	UpTimeout = 3 * time.Minute
 )
 
-// hostnamePattern is a DNS label Tailscale will accept as a machine name:
-// lowercase letters, digits, and hyphens, at most 63 characters.
-var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+// hostnameLabel is one DNS label: lowercase letters, digits, and hyphens,
+// not starting or ending with a hyphen, at most 63 characters.
+const hostnameLabel = `[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?`
+
+// hostnamePattern is a machine name `tailscale up --hostname` accepts: one
+// or more labels separated by dots. The whole name is also limited to
+// maxHostnameLength. The default is <vm>.agent.
+var hostnamePattern = regexp.MustCompile(`^` + hostnameLabel + `(?:\.` + hostnameLabel + `)*$`)
+
+// maxHostnameLength is the longest machine name this tool will send.
+// A VM name is at most 32 characters, so the default <vm>.agent fits.
+const maxHostnameLength = 63
+
+// DefaultHostname is the tailnet machine name used when the operator does
+// not set one: the VM name, a dot, and agent. An explicit hostname replaces
+// it. The result is the value passed to `tailscale up --hostname`.
+func DefaultHostname(vmName string) string {
+	return vmName + ".agent"
+}
 
 // operatorPattern is the guest account allowed to operate tailscaled. It is
 // the same shape as the login user cloud-init will create.
@@ -138,11 +154,11 @@ func Prepare(opts Options) (Options, error) {
 	opts.Operator = strings.TrimSpace(opts.Operator)
 	opts.LoginServer = strings.TrimSpace(opts.LoginServer)
 
-	if !hostnamePattern.MatchString(opts.Hostname) {
+	if len(opts.Hostname) > maxHostnameLength || !hostnamePattern.MatchString(opts.Hostname) {
 		return Options{}, &config.ValidationError{
 			Field: "tailscale hostname", Value: opts.Hostname,
-			Err:    fmt.Errorf("must be a lowercase name of at most 63 characters, using letters, digits, and hyphens"),
-			Remedy: "Omit --tailscale-hostname to use the VM name, or pass a name such as agent-01.",
+			Err:    fmt.Errorf("must be a lowercase DNS name of at most 63 characters, using letters, digits, hyphens, and dots"),
+			Remedy: "Omit --tailscale-hostname to use <name>.agent, or pass a name such as agent-01.agent.",
 		}
 	}
 	if !operatorPattern.MatchString(opts.Operator) {

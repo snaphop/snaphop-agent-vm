@@ -148,7 +148,7 @@ insecure = false   # optional; skip TLS verification only when set true
 
 [tailscale]
 auth_key_file = "~/.config/agent-vm/tailscale-auth-key"   # mode 600, one key. This path is also the default when the setting is omitted.
-hostname = "build-01"   # optional; default is the VM name
+hostname = "build-01"   # optional; default is <name>.agent
 login_server = "https://headscale.example.com"   # optional
 advertise_tags = ["tag:ci"]   # optional
 ephemeral = true   # optional
@@ -1346,7 +1346,7 @@ and must not already exist.
 | `--github-org <org>` | unset | Register this VM as a GitHub Actions runner in `<org>` after it boots, labeled with `<org>`, `<family>-latest`, and `<family>-<tag>`. Requires a `-runner` image, `gh`, and a wait. Also `[github] org` and `AGENT_VM_GITHUB_ORG`. |
 | `--tailscale` | off | Join the guest to a Tailscale network after it boots. The auth key file is `~/.config/agent-vm/tailscale-auth-key` when `--tailscale-auth-key-file` and the config omit a path. A file at that path does not do this on its own. Requires a wait. |
 | `--tailscale-auth-key-file <path>` | `~/.config/agent-vm/tailscale-auth-key` | File containing one auth key, mode `600`. Also requests the join. No flag takes the key itself. Also `[tailscale] auth_key_file` and `AGENT_VM_TAILSCALE_AUTH_KEY_FILE`. Requires a wait. |
-| `--tailscale-hostname <name>` | the VM name, or `[tailscale] hostname` | Name of this node on the tailnet. Lowercase letters, digits, and hyphens, at most 63 characters. Also `AGENT_VM_TAILSCALE_HOSTNAME`. |
+| `--tailscale-hostname <name>` | `<name>.agent`, or `[tailscale] hostname` | Machine name on the tailnet, passed to `tailscale up --hostname`. Lowercase letters, digits, hyphens, and dots, at most 63 characters. Also `AGENT_VM_TAILSCALE_HOSTNAME`. |
 | `--tailscale-login-server <url>` | Tailscale's coordination server, or `[tailscale] login_server` | `https` URL of another coordination server. No user, password, query, or fragment. Also `AGENT_VM_TAILSCALE_LOGIN_SERVER`. |
 | `--tailscale-advertise-tag <tag>` | config value | ACL tag to advertise, such as `tag:ci`. Repeatable. Also `[tailscale] advertise_tags` and `AGENT_VM_TAILSCALE_ADVERTISE_TAGS` (comma-separated). |
 | `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. Also `[tailscale] ephemeral` and `AGENT_VM_TAILSCALE_EPHEMERAL`. The flag forces this on and does not turn a configured `true` back off. |
@@ -1774,7 +1774,7 @@ stops; an auth key that is itself ephemeral does the same. `destroy` does
 not log the node out. A node that was not ephemeral stays on the tailnet
 until it is removed in the admin console.
 
-`--tailscale-hostname` defaults to the VM name, or to `[tailscale] hostname`
+`--tailscale-hostname` defaults to `<name>.agent`, or to `[tailscale] hostname`
 when that is set. `--tailscale-login-server`
 is an `https` URL with a host and no user, password, query, or fragment, for
 a coordination server other than Tailscale's. `--tailscale-advertise-tag`

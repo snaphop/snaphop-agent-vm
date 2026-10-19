@@ -140,6 +140,10 @@ migration or rebuild step a user has to take.
 
 ### Changed
 
+- A VM that joins Tailscale is named `<name>.agent` on the tailnet unless
+  you set another name with `--tailscale-hostname`,
+  `AGENT_VM_TAILSCALE_HOSTNAME`, or `[tailscale] hostname`. A name already
+  set in the config file is left as it is.
 - `agent-vm create` brings the new guest up to date once SSH accepts a login,
   before Tailscale or GitHub setup. It runs the same package and tooling
   steps as `agent-vm update`. The guest needs a network path to its package
