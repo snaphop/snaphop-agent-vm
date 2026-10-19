@@ -1349,7 +1349,7 @@ and must not already exist.
 | `--tailscale-hostname <name>` | `<name>.agent`, or `[tailscale] hostname` | Machine name on the tailnet, passed to `tailscale up --hostname`. Lowercase letters, digits, hyphens, and dots, at most 63 characters. Also `AGENT_VM_TAILSCALE_HOSTNAME`. |
 | `--tailscale-login-server <url>` | Tailscale's coordination server, or `[tailscale] login_server` | `https` URL of another coordination server. No user, password, query, or fragment. Also `AGENT_VM_TAILSCALE_LOGIN_SERVER`. |
 | `--tailscale-advertise-tag <tag>` | config value | ACL tag to advertise, such as `tag:ci`. Repeatable. Also `[tailscale] advertise_tags` and `AGENT_VM_TAILSCALE_ADVERTISE_TAGS` (comma-separated). |
-| `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. Also `[tailscale] ephemeral` and `AGENT_VM_TAILSCALE_EPHEMERAL`. The flag forces this on and does not turn a configured `true` back off. |
+| `--tailscale-ephemeral` | off | Remove the tailnet node when the guest stops. The join restarts `tailscaled` with `--state=mem:` before `tailscale up`. Also `[tailscale] ephemeral` and `AGENT_VM_TAILSCALE_EPHEMERAL`. The flag forces this on and does not turn a configured `true` back off. |
 | `--tailscale-ssh` | off | Enable Tailscale SSH on the guest. Also `[tailscale] ssh` and `AGENT_VM_TAILSCALE_SSH`. The flag forces this on and does not turn a configured `true` back off. |
 | `--pihole` | off | Register `<name>.agent` on a Pi-hole v6 DNS server after libvirt reports an address. A configured URL does not do this on its own. Requires a wait. |
 | `--pihole-url <URL>` | config value | Pi-hole base URL, such as `https://pi.hole`. `http` or `https`, with a host, and no user, query, or path. Also `[pihole] url` and `AGENT_VM_PIHOLE_URL`. |
@@ -1769,10 +1769,13 @@ from.
 
 The guest can read the key while `tailscale up` runs. Use a one-time key,
 and an ephemeral one when the node should disappear with the VM.
-`--tailscale-ephemeral` asks Tailscale to remove the node when the guest
-stops; an auth key that is itself ephemeral does the same. `destroy` does
-not log the node out. A node that was not ephemeral stays on the tailnet
-until it is removed in the admin console.
+`--tailscale-ephemeral` restarts `tailscaled` with `--state=mem:` before
+`tailscale up`. That is how Tailscale registers an ephemeral node and
+removes it when the daemon stops, which is when the guest stops.
+`tailscale up` has no `--ephemeral` flag. An auth key that is itself
+ephemeral removes the node too, including when this flag is off. `destroy`
+does not log the node out. A node that was not ephemeral stays on the
+tailnet until it is removed in the admin console.
 
 `--tailscale-hostname` defaults to `<name>.agent`, or to `[tailscale] hostname`
 when that is set. `--tailscale-login-server`

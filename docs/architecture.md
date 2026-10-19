@@ -582,7 +582,9 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 13. **Join a tailnet, when asked.** If `--tailscale` or
     `--tailscale-auth-key-file` was given, copy the join script over SSH,
     install Tailscale when the guest does not already have it, then run
-    `tailscale up` with the auth key on stdin. The machine name is
+    `tailscale up` with the auth key on stdin. When the join is ephemeral,
+    `tailscaled` is restarted with `--state=mem:` first, which registers
+    the node as ephemeral. The machine name is
     `<name>.agent` unless a hostname was set. The key file is
     `~/.config/agent-vm/tailscale-auth-key` unless the command or the config
     names another one.
