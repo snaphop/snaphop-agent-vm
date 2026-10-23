@@ -1,6 +1,7 @@
 package distro
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -214,6 +215,39 @@ func TestToolingUpdate_SkipsWhatAGuestDoesNotHave(t *testing.T) {
 		if step.Requires == "" {
 			t.Errorf("%q would fail an update in a guest built from an image without it", step.Name)
 		}
+	}
+}
+
+// TestToolingUpdate_HandsARunnersRustToolchainBackToItsJobAccount covers a
+// runner guest (ADR-0022): root's rustup update leaves what it replaced owned
+// by root, and a workflow step running rustup as github-runner then fails.
+func TestToolingUpdate_HandsARunnersRustToolchainBackToItsJobAccount(t *testing.T) {
+	t.Parallel()
+	steps := ToolingUpdate("agent")
+	update, handBack := -1, -1
+	for i, step := range steps {
+		if containsArg(step.Argv, "rustup") && containsArg(step.Argv, "update") {
+			update = i
+		}
+		if step.Argv[0] == "chown" && containsArg(step.Argv, "/usr/local/rustup") {
+			handBack = i
+			want := []string{"chown", "-R", "github-runner:github-runner", "--", "/usr/local/rustup"}
+			if !reflect.DeepEqual(step.Argv, want) {
+				t.Errorf("hand-back argv = %q, want %q", step.Argv, want)
+			}
+			if !step.Root {
+				t.Error("the hand-back chown does not run as root")
+			}
+			if step.Requires != "agent-vm-github-runner" {
+				t.Errorf("hand-back Requires = %q, want agent-vm-github-runner so only runner guests run it", step.Requires)
+			}
+		}
+	}
+	if update < 0 || handBack < 0 {
+		t.Fatalf("rustup update at %d, hand-back at %d; want both", update, handBack)
+	}
+	if handBack < update {
+		t.Error("the Rust toolchain is handed back before rustup update rewrites it")
 	}
 }
 

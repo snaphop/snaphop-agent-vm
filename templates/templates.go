@@ -21,6 +21,7 @@ import "embed"
 //go:embed distro/user-setup.sh distro/tmux-menu.sh distro/tmux-menu-profile.sh
 //go:embed distro/codex-remote-control.sh distro/herdr-server.sh
 //go:embed distro/github-runner.sh distro/github-runner-configure.sh distro/runner-docker.sh distro/runner-git.sh
+//go:embed distro/runner-java.sh distro/runner-rust.sh
 //go:embed distro/runner-cleanup.sh distro/runner-disk-headroom.py distro/runner-disk-job-started.py distro/runner-disk-job-started.sh
 //go:embed distro/tailscale-join.sh
 //go:embed cloud-init/*.tmpl

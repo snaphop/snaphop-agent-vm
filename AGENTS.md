@@ -176,8 +176,10 @@ Where new code belongs:
   `TestRunnerContainerfiles_KeepTheBootAndCloudInitContract` enforce. The
   runner recipe is the slim recipe plus one shared section that installs the
   GitHub Actions self-hosted runner unconfigured (ADR-0013), Docker
-  (ADR-0016), and a job-started hook that clears old checkouts and unused
-  Docker data when disk is low (ADR-0019). Jobs on that image run as
+  (ADR-0016), the current Temurin JDK LTS and Rust stable and nightly with
+  pinned cargo tools (ADR-0022), and a job-started hook that clears old
+  checkouts and unused Docker data when disk is low (ADR-0019). Jobs on
+  that image run as
   `github-runner` with passwordless sudo (ADR-0017). `create`
   registers that guest when an organization is set (ADR-0015).
   `TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner` requires that slim
@@ -479,7 +481,7 @@ boundary — specifically the virtualization stack, the boot method, the image
 cache format, guest-to-host sharing, network modes, where host tools run
 (ADR-0010), the default resource profile,
 adding a supported distro family, adding a base image variant or changing where
-guest tooling comes from (ADR-0012, ADR-0013, ADR-0016, ADR-0019), the Actions runner
+guest tooling comes from (ADR-0012, ADR-0013, ADR-0016, ADR-0019, ADR-0022), the Actions runner
 account (ADR-0017), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
 (ADR-0015), preparing a host with `agent-vm setup` (ADR-0018),

@@ -572,7 +572,8 @@ Every family also has a runner variant, named by appending `-runner`:
 `agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
 ubuntu-runner`. It is that family's slim image plus the GitHub Actions
 self-hosted runner (ADR-0013), Docker (ADR-0016), `git`, the GitHub CLI
-(`gh`), and a job-started disk hook (ADR-0019). It boots the same way —
+(`gh`), Java and Rust (ADR-0022), and a job-started disk hook (ADR-0019).
+It boots the same way —
 same kernel command line, same cloud-init contract, same SSH and clock
 guarantees — and carries the same common Linux tooling. It does not carry
 the coding agents, browser, or nested virtualization stack a full image adds.
@@ -623,6 +624,31 @@ cannot run. The commands are left logged out; a job that calls `gh`
 supplies its own credentials. `git` is also part of the slim recipe the
 runner image starts from. An image already cached gains both commands when
 it is rebuilt with `agent-vm image build <family>-runner --force`.
+
+A runner image installs Java and Rust (ADR-0022):
+
+| Tool | What is installed |
+|---|---|
+| Java | the newest Eclipse Temurin LTS JDK, from Adoptium, in `/usr/lib/jvm/temurin-<major>` |
+| Rust | `rustup` with the latest stable toolchain as the default (`rustc`, `cargo`, `rustfmt`, `clippy`, `llvm-tools`, and the `wasm32-unknown-unknown` target) and the latest nightly (`minimal` profile) |
+| cargo tools | `cargo-llvm-cov` 0.9.1, `cargo-audit` 0.22.1, `cargo-deny` 0.20.2, `cargo-fuzz` 0.13.2, and `worker-build` 0.8.7 |
+
+The JDK version and both Rust toolchains are the newest when the image is
+built. The JDK archive is checked against the SHA-256 Adoptium publishes for
+it. The cargo tools are pinned and built from crates.io with `--locked`.
+Every command is linked into `/usr/local/bin`. `JAVA_HOME` and
+`RUSTUP_HOME=/usr/local/rustup` are written to `/etc/environment` for SSH
+sessions and to `/opt/actions-runner/.env` for jobs. `/usr/local/rustup` is
+owned by `github-runner`, so a workflow step can run `rustup toolchain
+install`, `rustup component add`, or `rustup target add` without `sudo`.
+`CARGO_HOME` is not set, so `cargo install` writes into the account's own
+`~/.cargo`. The build fails when any of these cannot run as `github-runner`
+or when a cargo tool is not the pinned version. `agent-vm update` updates the
+Rust toolchains and then gives `/usr/local/rustup` back to `github-runner`.
+It does not update the JDK or the cargo tools; rebuild the image for those.
+An image already cached gains all of this when it is rebuilt with
+`agent-vm image build <family>-runner --force`. Create the VM again from that
+image.
 
 Before each job, the runner runs
 `/usr/local/libexec/snaphop-runner/job-started.sh` (ADR-0019). The hook
@@ -1484,7 +1510,8 @@ A VM created without `--max-memory` gets exactly the domain it always did: no
 Once SSH accepts a login, `create` brings the guest up to date before it
 joins Tailscale or registers anything with GitHub. The steps are the same
 ones [`agent-vm update`](#agent-vm-update-name---all) runs: the family's
-package update, then mise, codex, and the shared Rust toolchain, each skipped
+package update, then mise, codex, the shared Rust toolchain, and on a runner
+guest that toolchain's owner, each skipped
 when the guest has no such command. The guest's own output is streamed to
 stderr. The budget is `--update-timeout` (default 45 minutes), shared by
 every step. A guest that needs no refresh still runs the steps; they finish
@@ -2027,6 +2054,7 @@ Then the rest of what a guest carries, in this order:
 | the guest user's mise-managed tools | `mise upgrade --yes` with `MISE_MINIMUM_RELEASE_AGE=0s` | the guest user |
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` | root |
+| the Rust toolchain's owner, on a runner guest | `chown -R github-runner:github-runner -- /usr/local/rustup`, only when the guest has `agent-vm-github-runner` (ADR-0022) | root |
 
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
 `claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and

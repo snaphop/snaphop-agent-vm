@@ -2199,6 +2199,8 @@ func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
 			"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner",
 			"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh",
 			"COPY runner-git.sh /tmp/agent-vm-runner-git.sh",
+			"COPY runner-java.sh /tmp/agent-vm-runner-java.sh",
+			"COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh",
 			"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh",
 			"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py",
 			"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py",
@@ -2207,8 +2209,11 @@ func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
 			"/tmp/agent-vm-github-runner-install.sh",
 			// The account has to exist before it can join the docker group.
 			// git and gh are installed after that account and before Docker.
-			// The disk hook is last: it needs the account and the docker command.
-			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-docker.sh \\\n && /tmp/agent-vm-runner-cleanup.sh",
+			// Java and Rust follow git: the cargo tools compile against the
+			// OpenSSL headers the runner install adds, and both write into
+			// the runner's .env. The disk hook is last: it needs the account
+			// and the docker command.
+			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-java.sh \\\n && /tmp/agent-vm-runner-rust.sh \\\n && /tmp/agent-vm-runner-docker.sh \\\n && /tmp/agent-vm-runner-cleanup.sh",
 		} {
 			if !strings.Contains(rest, want) {
 				t.Errorf("%s runner section does not contain %q", d.RunnerContainerfile, want)
@@ -2244,8 +2249,10 @@ func TestRunnerContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
 }
 
 // TestRunnerContainerfiles_LeaveOutTheAgentTooling keeps the variant on the
-// slim promise for everything except Docker, which the shared section
-// installs (ADR-0016). The runner scripts are the only files it copies in.
+// slim promise for everything except Docker (ADR-0016), Java, and Rust
+// (ADR-0022), which the shared section's scripts install. The recipe itself
+// names none of that tooling, and the runner scripts are the only files it
+// copies in.
 func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 	t.Parallel()
 	excluded := []string{"mise", "rustup", "cargo", "golangci", "playwright", "chromium", "libvirt", "codex", "herdr", "npm"}
@@ -2254,6 +2261,8 @@ func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 		"COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner": true,
 		"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh":                   true,
 		"COPY runner-git.sh /tmp/agent-vm-runner-git.sh":                         true,
+		"COPY runner-java.sh /tmp/agent-vm-runner-java.sh":                       true,
+		"COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh":                       true,
 		"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh":                 true,
 		"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py":          true,
 		"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py":    true,

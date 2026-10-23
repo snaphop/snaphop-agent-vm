@@ -864,6 +864,8 @@ func TestBuild_RunnerImageIsCachedUnderItsOwnNameAndBuiltFromTheRunnerRecipe(t *
 		"github-runner-configure.sh",
 		"runner-docker.sh",
 		"runner-git.sh",
+		"runner-java.sh",
+		"runner-rust.sh",
 		"runner-cleanup.sh",
 		"runner-disk-headroom.py",
 		"runner-disk-job-started.py",

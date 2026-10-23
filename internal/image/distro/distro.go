@@ -380,8 +380,29 @@ func ToolingUpdate(user string) []UpdateStep {
 				"rustup", "update",
 			},
 		},
+		// A runner image hands RUSTUP_HOME to github-runner, so a workflow
+		// step can add a toolchain, component, or target without sudo
+		// (ADR-0022). The update above runs as root and leaves what it
+		// replaced owned by root, which would stop the next such step with
+		// "Permission denied". agent-vm-github-runner is installed only on
+		// runner images, so other guests skip this.
+		UpdateStep{
+			Name:     "handing the Rust toolchain back to " + runnerAccount,
+			Root:     true,
+			Requires: runnerCommand,
+			Argv: []string{
+				"chown", "-R", runnerAccount + ":" + runnerAccount, "--", rustupHome,
+			},
+		},
 	)
 }
+
+// The account a runner image's jobs run as (ADR-0017), and the command only
+// a runner image installs (ADR-0013).
+const (
+	runnerAccount = "github-runner"
+	runnerCommand = "agent-vm-github-runner"
+)
 
 // Default is the family used when the operator names none.
 var Default = Ubuntu
