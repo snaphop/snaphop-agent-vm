@@ -46,11 +46,13 @@ RUN pacman -Syu --noconfirm --needed \
 #
 # Arch's glibc ships locale-gen and the locale sources, with en_US.UTF-8
 # commented out in /etc/locale.gen. Uncommenting it and running locale-gen
-# makes the forwarded value a locale the guest has. It is also the guest's
+# makes the forwarded value a locale the guest has. Arch's file pads that
+# line with trailing spaces ("#en_US.UTF-8 UTF-8  "), so the expression
+# drops them too; left in place, the exact-line check below fails the build. It is also the guest's
 # own default, so a session that forwards nothing is still UTF-8.
 # /etc/locale.conf is what systemd reads.
 RUN set -eu; \
-    sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
+    sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8[[:space:]]*$/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
     grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen; \
     locale-gen; \
     printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf; \

@@ -3,7 +3,9 @@ package image
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -96,6 +98,7 @@ func TestContainerfiles_GenerateEnUSUTF8(t *testing.T) {
 	const check = `locale -a | grep -Eq '^en_US\.(utf8|UTF-8)$'`
 	const conf = `printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf`
 	const enable = `sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen`
+	const enableArch = `sed -i -e 's/^#[[:space:]]*en_US.UTF-8 UTF-8[[:space:]]*$/en_US.UTF-8 UTF-8/' /etc/locale.gen`
 
 	needles := map[string][]string{
 		distro.Ubuntu.Name: {
@@ -113,7 +116,7 @@ func TestContainerfiles_GenerateEnUSUTF8(t *testing.T) {
 			check,
 		},
 		distro.Arch.Name: {
-			enable,
+			enableArch,
 			"grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen",
 			"\n    locale-gen; \\\n",
 			conf,
@@ -137,6 +140,54 @@ func TestContainerfiles_GenerateEnUSUTF8(t *testing.T) {
 					t.Errorf("%s does not contain %q; an SSH session that forwards en_US.UTF-8 would warn that setlocale failed", file, needle)
 				}
 			}
+		}
+	}
+}
+
+// TestArchContainerfiles_EnableThePaddedLocaleGenLine runs each Arch recipe's
+// own sed expression against /etc/locale.gen as the Arch base image ships it.
+// That file pads the en_US line with trailing spaces, so an expression that
+// only strips the "#" leaves a line the recipe's `grep -qx` does not match,
+// and every Arch image build fails at the locale step.
+func TestArchContainerfiles_EnableThePaddedLocaleGenLine(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sed"); err != nil {
+		t.Skip("sed is not installed")
+	}
+	// Lines 171-173 of /etc/locale.gen in
+	// docker.io/library/archlinux:base-20260927.0.600689 (glibc 2.44).
+	const shipped = "#en_SG ISO-8859-1  \n#en_US.UTF-8 UTF-8  \n#en_US ISO-8859-1  \n"
+	const prefix = "sed -i -e '"
+	d := distro.Arch
+	for _, file := range []string{d.Containerfile, d.SlimContainerfile, d.NixContainerfile, d.RunnerContainerfile} {
+		recipe := readTemplate(t, "distro/"+file)
+		start := strings.Index(recipe, prefix)
+		if start < 0 {
+			t.Errorf("%s has no sed -i -e expression", file)
+			continue
+		}
+		rest := recipe[start+len(prefix):]
+		expression := rest[:strings.Index(rest, "'")]
+		if !strings.Contains(expression, "en_US.UTF-8") {
+			t.Errorf("%s: the first sed expression is %q, not the locale one", file, expression)
+			continue
+		}
+		path := filepath.Join(t.TempDir(), "locale.gen")
+		if err := os.WriteFile(path, []byte(shipped), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("sed", "-i", "-e", expression, path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: sed -e %q: %v\n%s", file, expression, err, out)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(strings.Split(string(got), "\n"), "en_US.UTF-8 UTF-8") {
+			t.Errorf("%s: after the recipe's sed, no line is exactly %q, so its grep -qx fails:\n%s", file, "en_US.UTF-8 UTF-8", got)
+		}
+		if strings.Contains(string(got), "\nen_US ISO-8859-1") {
+			t.Errorf("%s: the sed also enabled en_US ISO-8859-1:\n%s", file, got)
 		}
 	}
 }
