@@ -74,7 +74,7 @@ func runnerCreateArgs(keyPath string, extra ...string) []string {
 func configureCommand(t *testing.T, fake *hostexec.Fake) hostexec.Command {
 	t.Helper()
 	for _, c := range fake.Calls() {
-		if strings.Contains(strings.Join(c.Args, " "), "agent-vm-github-runner") {
+		if strings.Contains(strings.Join(c.Args, " "), "agent-vm-github-runner configure") {
 			return c
 		}
 	}
@@ -212,7 +212,7 @@ func TestCreate_ARunnerWithoutAnOrgIsNotRegistered(t *testing.T) {
 		t.Fatalf("exit code = %d: %s", code, stderr)
 	}
 	for _, argv := range fake.Argvs() {
-		if strings.Contains(argv, "registration-token") || strings.Contains(argv, "agent-vm-github-runner") {
+		if strings.Contains(argv, "registration-token") || strings.Contains(argv, "agent-vm-github-runner configure") {
 			t.Errorf("a runner with no organization was registered: %s", argv)
 		}
 	}
@@ -332,7 +332,7 @@ func TestCreate_AConfigureFailureRedactsTheTokenAndKeepsTheVM(t *testing.T) {
 	stateDir, keyPath := runnerEnv(t)
 	fake := withRunner(createHost(t))
 	fake.MatchFunc = func(c hostexec.Command) (hostexec.FakeResponse, bool) {
-		if c.Name == hostexec.SSH.Name && strings.Contains(strings.Join(c.Args, " "), "agent-vm-github-runner") {
+		if c.Name == hostexec.SSH.Name && strings.Contains(strings.Join(c.Args, " "), "agent-vm-github-runner configure") {
 			return hostexec.FakeResponse{ExitCode: 1, Stderr: "config.sh rejected " + runnerToken + "\n"}, true
 		}
 		return hostexec.FakeResponse{}, false

@@ -26,6 +26,12 @@ Extended by [ADR-0019](./0019-clean-runner-disk-before-each-job.md). The
 shared section also installs a job-started hook that clears old checkouts
 and, when disk is low, unused Docker data.
 
+Extended by [ADR-0022](./0022-install-java-and-rust-on-the-runner-image.md).
+The shared section also installs the current Temurin JDK LTS, Rust stable
+and nightly, and five pinned cargo tools. `agent-vm update` now also updates
+Rust on a runner guest, so the statement below that a runner guest gets only
+its distro packages updated is no longer in force.
+
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided
 guest tooling) with another variant of each existing family. Bounded by

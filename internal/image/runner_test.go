@@ -73,7 +73,7 @@ func refuseRealRunner(t *testing.T) {
 
 func TestGitHubRunnerScripts_AreValidShell(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh", "runner-cleanup.sh", "runner-disk-job-started.sh"} {
+	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh", "runner-java.sh", "runner-rust.sh", "runner-cleanup.sh", "runner-disk-job-started.sh"} {
 		path := writeEmbeddedScript(t, name)
 		out, err := exec.Command("sh", "-n", path).CombinedOutput()
 		if err != nil {
@@ -260,6 +260,102 @@ func TestRunnerGit_InstallsGitAndTheGitHubCLI(t *testing.T) {
 	for _, forbidden := range []string{"latest", "token", "secret", "password", "api_key", "bearer", "sk-"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("runner-git.sh contains %q; the image build must not carry a login or an unpinned release", forbidden)
+		}
+	}
+}
+
+func TestRunnerJava_InstallsTheCurrentTemurinLTSAfterCheckingItsChecksum(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-java.sh")
+	lower := strings.ToLower(script)
+
+	for _, want := range []string{
+		"https://api.adoptium.net/v3",
+		"$api/info/available_releases",
+		".most_recent_lts",
+		"image_type=jdk&os=linux&vendor=eclipse",
+		"x86_64) arch=x64",
+		"aarch64 | arm64) arch=aarch64",
+		".binary.package.checksum",
+		`printf '%s  %s\n' "$want" "$tmp" | sha256sum -c -`,
+		"java_home=$jvm_root/temurin-${major}",
+		`ln -sf "$tool" "/usr/local/bin/$(basename "$tool")"`,
+		"set_env_line /etc/environment JAVA_HOME",
+		`set_env_line "$prefix/.env" JAVA_HOME`,
+		"chown github-runner:github-runner \"$prefix/.env\"",
+		"grep -q Temurin",
+		"grep -q LTS",
+		"javac -version",
+		"install the runner first",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-java.sh does not contain %q", want)
+		}
+	}
+	// The JDK is checked before it is unpacked, and unpacked before it is
+	// linked onto PATH.
+	verify := strings.Index(script, "sha256sum -c -")
+	extract := strings.Index(script, "tar -xzf")
+	link := strings.Index(script, "ln -sf")
+	if verify < 0 || extract < 0 || link < 0 || verify > extract || extract > link {
+		t.Error("runner-java.sh must check the archive's SHA-256, then extract it, then link its commands")
+	}
+	for _, forbidden := range []string{"token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-java.sh contains %q; the image build must not carry a credential", forbidden)
+		}
+	}
+}
+
+func TestRunnerRust_InstallsBothToolchainsAndThePinnedCargoTools(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-rust.sh")
+	lower := strings.ToLower(script)
+
+	// The pins the runner image promises. Moving one is an edit here and in
+	// the script, and a rebuild of the image.
+	pins := "cargo-llvm-cov@0.9.1 cargo-audit@0.22.1 cargo-deny@0.20.2 cargo-fuzz@0.13.2 worker-build@0.8.7"
+	if got := strings.Count(script, pins); got != 1 {
+		t.Errorf("runner-rust.sh names the cargo tool pins %d times, want the one tools assignment %q", got, pins)
+	}
+	for _, want := range []string{
+		// The same shared paths agent-vm update already passes to rustup.
+		"rustup_home=/usr/local/rustup",
+		"cargo_home=/usr/local/cargo",
+		"https://sh.rustup.rs",
+		"--profile default --default-toolchain stable",
+		"rustup component add --toolchain stable llvm-tools",
+		"rustup target add --toolchain stable wasm32-unknown-unknown",
+		"rustup toolchain install nightly --profile minimal",
+		`cargo install --locked --root "$cargo_home" --version "$version" "$crate"`,
+		`ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"`,
+		`chown -R github-runner:github-runner "$rustup_home"`,
+		"set_env_line /etc/environment RUSTUP_HOME",
+		`set_env_line "$prefix/.env" RUSTUP_HOME`,
+		"runuser -u github-runner --",
+		"check rustc +nightly --version",
+		"check cargo llvm-cov --version",
+		"check cargo audit --version",
+		"check cargo deny --version",
+		"check cargo fuzz --version",
+		"check worker-build --version",
+		`grep -qx "${crate} v${version}:"`,
+		"the github-runner account is missing",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-rust.sh does not contain %q", want)
+		}
+	}
+	// CARGO_HOME stays unset in a job and an SSH session, so cargo install
+	// writes into that account's own ~/.cargo.
+	for _, forbidden := range []string{"set_env_line /etc/environment CARGO_HOME", `set_env_line "$prefix/.env" CARGO_HOME`} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("runner-rust.sh contains %q; CARGO_HOME stays per account", forbidden)
+		}
+	}
+	for _, forbidden := range []string{"token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-rust.sh contains %q; the image build must not carry a credential", forbidden)
 		}
 	}
 }

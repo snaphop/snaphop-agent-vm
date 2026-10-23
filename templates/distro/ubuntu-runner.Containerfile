@@ -1,10 +1,11 @@
 # Ubuntu runner base image for agent-vm.
 #
 # The slim recipe plus the GitHub Actions self-hosted runner (ADR-0013),
-# Docker (ADR-0016), git, and the GitHub CLI.
+# Docker (ADR-0016), git, the GitHub CLI, Java, and Rust (ADR-0022).
 # From ARG BASE_IMAGE through the end of the slim recipe, this file is that
 # recipe. The section after it installs the runner, unconfigured, the
-# command that registers a guest after boot, Docker, git, and gh.
+# command that registers a guest after boot, Docker, git, gh, the
+# current Temurin JDK LTS, and Rust with the pinned cargo tools.
 # TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner requires the slim
 # body to stay byte-identical and the runner section to stay the same on
 # every family.
@@ -379,33 +380,40 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 # agent-vm-runner-section
 #
 # GitHub Actions self-hosted runner (ADR-0013, ADR-0017), Docker
-# (ADR-0016), git, the GitHub CLI, and the job-started disk hook
-# (ADR-0019). The blocks above are the slim recipe. This section installs
-# the runner, unconfigured, the command that registers it after boot,
-# Docker from the distro's own packages, git and gh, and the hook that
-# clears old checkouts and unused Docker data before each job. Nothing in
-# this section is a credential. Jobs run as github-runner, which has
-# passwordless sudo. Docker is installed after that account exists,
-# because the account has to join the docker group and the group arrives
-# with the packages. git and gh are installed from the distro packages
-# and checked on PATH before the image is committed. The runner install
-# also adds the OpenSSL headers and pkg-config on every family: libssl-dev
-# and pkg-config on Ubuntu, openssl-devel and pkgconf-pkg-config on
-# Fedora, and openssl and pkgconf on Arch. The build fails if pkg-config
-# cannot see libssl. The disk hook is
-# installed last, after that account and Docker exist.
+# (ADR-0016), git, the GitHub CLI, Java and Rust (ADR-0022), and the
+# job-started disk hook (ADR-0019). The blocks above are the slim recipe.
+# This section installs the runner, unconfigured, the command that
+# registers it after boot, git and gh, the current Temurin JDK LTS, Rust
+# stable and nightly with the pinned cargo tools, Docker from the distro's
+# own packages, and the hook that clears old checkouts and unused Docker
+# data before each job. Nothing in this section is a credential. Jobs run
+# as github-runner, which has passwordless sudo. Docker is installed after
+# that account exists, because the account has to join the docker group
+# and the group arrives with the packages. git and gh are installed from
+# the distro packages and checked on PATH before the image is committed.
+# The runner install also adds the OpenSSL headers and pkg-config on every
+# family: libssl-dev and pkg-config on Ubuntu, openssl-devel and
+# pkgconf-pkg-config on Fedora, and openssl and pkgconf on Arch. The build
+# fails if pkg-config cannot see libssl. Java and Rust come after that, so
+# the cargo tools compile against those headers; each is run once as
+# github-runner before the image is committed. The disk hook is installed
+# last, after that account and Docker exist.
 COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh
 COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner
 COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh
 COPY runner-git.sh /tmp/agent-vm-runner-git.sh
+COPY runner-java.sh /tmp/agent-vm-runner-java.sh
+COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh
 COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh
 COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py
 COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py
 COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh
-RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-job-started.sh \
+RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-rust.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-job-started.sh \
  && ln -sf /usr/local/sbin/agent-vm-github-runner /usr/sbin/agent-vm-github-runner \
  && /tmp/agent-vm-github-runner-install.sh \
  && /tmp/agent-vm-runner-git.sh \
+ && /tmp/agent-vm-runner-java.sh \
+ && /tmp/agent-vm-runner-rust.sh \
  && /tmp/agent-vm-runner-docker.sh \
  && /tmp/agent-vm-runner-cleanup.sh \
- && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-headroom.py /tmp/agent-vm-runner-job-started.py /tmp/agent-vm-runner-job-started.sh
+ && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-rust.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-headroom.py /tmp/agent-vm-runner-job-started.py /tmp/agent-vm-runner-job-started.sh
