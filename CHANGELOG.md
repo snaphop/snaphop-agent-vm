@@ -109,6 +109,11 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- Arch base images build again. The current Arch Linux container image pads
+  the `en_US.UTF-8` line in `/etc/locale.gen` with trailing spaces, and the
+  build's locale step failed on it for every Arch image (`arch`, `arch-slim`,
+  `arch-nix`, and `arch-runner`). Ubuntu and Fedora images were not affected.
+  An Arch image already cached does not need rebuilding.
 - `create --tailscale-ephemeral` joins the tailnet again. The join was
   passing `--ephemeral` to `tailscale up`. That command has no such flag,
   so it printed its usage and the SSH session exited 2, leaving the VM in
