@@ -73,7 +73,7 @@ func refuseRealRunner(t *testing.T) {
 
 func TestGitHubRunnerScripts_AreValidShell(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh", "runner-java.sh", "runner-rust.sh", "runner-cleanup.sh", "runner-disk-job-started.sh"} {
+	for _, name := range []string{"github-runner.sh", "github-runner-configure.sh", "runner-docker.sh", "runner-git.sh", "runner-java.sh", "runner-maven.sh", "runner-rust.sh", "runner-go.sh", "runner-cleanup.sh", "runner-disk-job-started.sh"} {
 		path := writeEmbeddedScript(t, name)
 		out, err := exec.Command("sh", "-n", path).CombinedOutput()
 		if err != nil {
@@ -307,16 +307,19 @@ func TestRunnerJava_InstallsTheCurrentTemurinLTSAfterCheckingItsChecksum(t *test
 	}
 }
 
-func TestRunnerRust_InstallsBothToolchainsAndThePinnedCargoTools(t *testing.T) {
+func TestRunnerRust_InstallsBothToolchainsAndTheNewestCargoTools(t *testing.T) {
 	t.Parallel()
 	script := readTemplate(t, "distro/runner-rust.sh")
 	lower := strings.ToLower(script)
 
-	// The pins the runner image promises. Moving one is an edit here and in
-	// the script, and a rebuild of the image.
-	pins := "cargo-llvm-cov@0.9.1 cargo-audit@0.22.1 cargo-deny@0.20.2 cargo-fuzz@0.13.2 worker-build@0.8.7"
-	if got := strings.Count(script, pins); got != 1 {
-		t.Errorf("runner-rust.sh names the cargo tool pins %d times, want the one tools assignment %q", got, pins)
+	// The tools the runner image promises, at whatever version is newest
+	// when the image is built.
+	tools := `tools="cargo-llvm-cov cargo-audit cargo-deny cargo-fuzz worker-build"`
+	if got := strings.Count(script, tools); got != 1 {
+		t.Errorf("runner-rust.sh names the cargo tools %d times, want the one tools assignment %s", got, tools)
+	}
+	if strings.Contains(script, "--version \"$version\"") || strings.Contains(script, "@0.") {
+		t.Error("runner-rust.sh pins a cargo tool; they are installed at their newest versions")
 	}
 	for _, want := range []string{
 		// The same shared paths agent-vm update already passes to rustup.
@@ -327,7 +330,7 @@ func TestRunnerRust_InstallsBothToolchainsAndThePinnedCargoTools(t *testing.T) {
 		"rustup component add --toolchain stable llvm-tools",
 		"rustup target add --toolchain stable wasm32-unknown-unknown",
 		"rustup toolchain install nightly --profile minimal",
-		`cargo install --locked --root "$cargo_home" --version "$version" "$crate"`,
+		`cargo install --locked --root "$cargo_home" "$crate"`,
 		`ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"`,
 		`chown -R github-runner:github-runner "$rustup_home"`,
 		"set_env_line /etc/environment RUSTUP_HOME",
@@ -339,7 +342,7 @@ func TestRunnerRust_InstallsBothToolchainsAndThePinnedCargoTools(t *testing.T) {
 		"check cargo deny --version",
 		"check cargo fuzz --version",
 		"check worker-build --version",
-		`grep -qx "${crate} v${version}:"`,
+		`grep -q "^${crate} v[0-9]"`,
 		"the github-runner account is missing",
 	} {
 		if !strings.Contains(script, want) {
@@ -356,6 +359,121 @@ func TestRunnerRust_InstallsBothToolchainsAndThePinnedCargoTools(t *testing.T) {
 	for _, forbidden := range []string{"token", "secret", "password", "api_key", "bearer", "sk-"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("runner-rust.sh contains %q; the image build must not carry a credential", forbidden)
+		}
+	}
+}
+
+func TestRunnerGo_InstallsTheNewestStableGoAndItsToolsAfterCheckingChecksums(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-go.sh")
+	lower := strings.ToLower(script)
+
+	for _, want := range []string{
+		"https://go.dev/dl/?mode=json",
+		"[.[] | select(.stable)][0]",
+		`.os == "linux" and .arch == $arch and .kind == "archive"`,
+		"x86_64) arch=amd64",
+		"aarch64 | arm64) arch=arm64",
+		`"${version}.linux-${arch}.tar.gz"`,
+		`printf '%s  %s\n' "$want" "$archive" | sha256sum -c -`,
+		"go_root=/usr/local/go",
+		// A guest already on the newest release downloads nothing, which is
+		// what makes running this from agent-vm update cheap.
+		`if [ "$installed" = "$version" ]; then`,
+		`mv "$staged" "$go_root"`,
+		`ln -sf "$go_root/bin/$tool" "/usr/local/bin/$tool"`,
+		"runuser -u github-runner --",
+		"check go version",
+		"check gofmt -l",
+		`if [ "$reported" != "$version" ]; then`,
+		// golangci-lint from its own release, checked against the checksums
+		// published with it, never built with go install.
+		"https://github.com/golangci/golangci-lint/releases",
+		`"$golangci_releases/latest"`,
+		`golangci-lint-${lint_version}-checksums.txt`,
+		`printf '%s  %s\n' "$lint_want" "$scratch/${lint_name}.tar.gz" | sha256sum -c -`,
+		`if [ "$lint_installed" = "$lint_version" ]; then`,
+		// The tools built from source, at their modules' newest versions.
+		`go_tools="golang.org/x/vuln|golang.org/x/vuln/cmd/govulncheck golang.org/x/tools|golang.org/x/tools/cmd/goimports gotest.tools/gotestsum|gotest.tools/gotestsum"`,
+		`list -m -f '{{.Version}}' "${module}@latest"`,
+		`install "${package}@${latest}"`,
+		`if [ "$current" = "$latest" ]; then`,
+		"GOTOOLCHAIN=local",
+		// Outside GOROOT, so replacing Go does not remove them.
+		"tools_bin=/usr/local/lib/go-tools/bin",
+		`ln -sf "$bin" "/usr/local/bin/$(basename "$bin")"`,
+		"check golangci-lint version",
+		"check govulncheck -version",
+		"check goimports -l",
+		"check gotestsum --version",
+		"the github-runner account is missing",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-go.sh does not contain %q", want)
+		}
+	}
+	// The archive is checked before it is unpacked, and unpacked beside the
+	// toolchain a guest already has before it replaces it.
+	verify := strings.Index(script, "sha256sum -c -")
+	extract := strings.Index(script, "tar -xzf")
+	replace := strings.Index(script, `rm -rf "$go_root"`)
+	if verify < 0 || extract < 0 || replace < 0 || verify > extract || extract > replace {
+		t.Error("runner-go.sh must check the archive's SHA-256, then extract it, then replace the installed toolchain")
+	}
+	if strings.Contains(script, "golangci-lint@") {
+		t.Error("runner-go.sh builds golangci-lint with go install; it comes from its release")
+	}
+	// GOPATH, the module cache, and toolchains a go.mod asks for stay in each
+	// account's own ~/go: nothing is written to the environment a job or an
+	// SSH session gets.
+	for _, forbidden := range []string{"set_env_line", "/etc/environment\n", `"$prefix/.env"`} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("runner-go.sh contains %q; Go's environment stays per account", forbidden)
+		}
+	}
+	for _, forbidden := range []string{"token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-go.sh contains %q; the image build must not carry a credential", forbidden)
+		}
+	}
+}
+
+func TestRunnerMaven_InstallsTheNewestMavenReleaseAfterCheckingItsChecksum(t *testing.T) {
+	t.Parallel()
+	script := readTemplate(t, "distro/runner-maven.sh")
+	lower := strings.ToLower(script)
+
+	for _, want := range []string{
+		"https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven",
+		`"$repository/maven-metadata.xml"`,
+		// Only plain X.Y.Z: the listing also names alphas, betas, and
+		// release candidates, and its own <release> can be one of them.
+		`<version>\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)</version>`,
+		"sort -V | tail -n 1",
+		`"$repository/$version/$file.sha512"`,
+		`printf '%s  %s\n' "$want" "$tmp/$file" | sha512sum -c -`,
+		"maven_home=/opt/maven",
+		`ln -sf "$maven_home/bin/$tool" "/usr/local/bin/$tool"`,
+		"install the JDK first",
+		"runuser -u github-runner --",
+		`grep -q "Apache Maven ${version} "`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("runner-maven.sh does not contain %q", want)
+		}
+	}
+	if strings.Contains(script, "<release>") {
+		t.Error("runner-maven.sh reads <release>, which Maven Central sets to release candidates too")
+	}
+	verify := strings.Index(script, "sha512sum -c -")
+	extract := strings.Index(script, "tar -xzf")
+	link := strings.Index(script, "ln -sf")
+	if verify < 0 || extract < 0 || link < 0 || verify > extract || extract > link {
+		t.Error("runner-maven.sh must check the archive's SHA-512, then extract it, then link its commands")
+	}
+	for _, forbidden := range []string{"token", "secret", "password", "api_key", "bearer", "sk-"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("runner-maven.sh contains %q; the image build must not carry a credential", forbidden)
 		}
 	}
 }

@@ -137,8 +137,10 @@ and Docker. The runner is installed and not registered. Jobs run as
 The guest has `git` and `gh`. Ubuntu runner images install `build-essential`.
 Every runner image installs the OpenSSL headers and `pkg-config`.
 It also has the newest Temurin LTS JDK, Rust stable and nightly, and
-pinned `cargo-llvm-cov`, `cargo-audit`, `cargo-deny`, `cargo-fuzz`, and
-`worker-build`.
+the newest `cargo-llvm-cov`, `cargo-audit`, `cargo-deny`, `cargo-fuzz`, and
+`worker-build`, the newest Maven, and the newest stable Go with
+`golangci-lint`, `govulncheck`, `goimports`, and `gotestsum`, which
+`agent-vm update` keeps current.
 Before each job the guest removes checkouts unused for 72 hours and, when
 disk is low, unused Docker data. The job still runs if that cleanup cannot.
 With `gh` logged in on the
@@ -149,8 +151,9 @@ up. Without an organization, register it from inside the guest. See
 [ADR-0016](./docs/decisions/0016-install-docker-on-the-runner-image.md),
 [ADR-0017](./docs/decisions/0017-run-the-github-actions-runner-as-github-runner.md),
 [ADR-0019](./docs/decisions/0019-clean-runner-disk-before-each-job.md),
+[ADR-0022](./docs/decisions/0022-install-java-and-rust-on-the-runner-image.md),
 and
-[ADR-0022](./docs/decisions/0022-install-java-and-rust-on-the-runner-image.md).
+[ADR-0023](./docs/decisions/0023-install-go-and-maven-on-the-runner-image.md).
 
 ```bash
 agent-vm create ci-01 --distro ubuntu-runner

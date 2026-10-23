@@ -1,11 +1,13 @@
 # Arch Linux runner base image for agent-vm.
 #
 # The slim recipe plus the GitHub Actions self-hosted runner (ADR-0013),
-# Docker (ADR-0016), git, the GitHub CLI, Java, and Rust (ADR-0022).
+# Docker (ADR-0016), git, the GitHub CLI, Java and Rust (ADR-0022), and
+# Maven and Go with its tools (ADR-0023).
 # From ARG BASE_IMAGE through the end of the slim recipe, this file is that
 # recipe. The section after it installs the runner, unconfigured, the
 # command that registers a guest after boot, Docker, git, gh, the
-# current Temurin JDK LTS, and Rust with the pinned cargo tools.
+# current Temurin JDK LTS, Maven, Rust with the cargo tools, and Go
+# with golangci-lint, govulncheck, goimports, and gotestsum.
 # TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner requires the slim
 # body to stay byte-identical and the runner section to stay the same on
 # every family.
@@ -385,14 +387,16 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 # agent-vm-runner-section
 #
 # GitHub Actions self-hosted runner (ADR-0013, ADR-0017), Docker
-# (ADR-0016), git, the GitHub CLI, Java and Rust (ADR-0022), and the
-# job-started disk hook (ADR-0019). The blocks above are the slim recipe.
-# This section installs the runner, unconfigured, the command that
-# registers it after boot, git and gh, the current Temurin JDK LTS, Rust
-# stable and nightly with the pinned cargo tools, Docker from the distro's
-# own packages, and the hook that clears old checkouts and unused Docker
-# data before each job. Nothing in this section is a credential. Jobs run
-# as github-runner, which has passwordless sudo. Docker is installed after
+# (ADR-0016), git, the GitHub CLI, Java and Rust (ADR-0022), Maven and Go
+# with its tools (ADR-0023), and the job-started disk hook (ADR-0019). The
+# blocks above are the slim recipe. This section installs the runner,
+# unconfigured, the command that registers it after boot, git and gh, the
+# current Temurin JDK LTS, the newest Maven, Rust stable and nightly with
+# the newest cargo tools, the newest stable Go with golangci-lint,
+# govulncheck, goimports, and gotestsum, Docker from the distro's own
+# packages, and the hook that clears old checkouts and unused Docker data
+# before each job. Nothing in this section is a credential. Jobs run as
+# github-runner, which has passwordless sudo. Docker is installed after
 # that account exists, because the account has to join the docker group
 # and the group arrives with the packages. git and gh are installed from
 # the distro packages and checked on PATH before the image is committed.
@@ -400,25 +404,33 @@ RUN printf 'net.ipv4.ping_group_range = 0 2147483647\n' \
 # family: libssl-dev and pkg-config on Ubuntu, openssl-devel and
 # pkgconf-pkg-config on Fedora, and openssl and pkgconf on Arch. The build
 # fails if pkg-config cannot see libssl. Java and Rust come after that, so
-# the cargo tools compile against those headers; each is run once as
-# github-runner before the image is committed. The disk hook is installed
+# the cargo tools compile against those headers; Maven follows Java, which
+# it runs on. Each is run once as github-runner before the image is
+# committed. Go and its tools follow them and are checked the same way;
+# their installer stays in the image as agent-vm-runner-go, which
+# `agent-vm update` runs to keep them current. The disk hook is installed
 # last, after that account and Docker exist.
 COPY github-runner.sh /tmp/agent-vm-github-runner-install.sh
 COPY github-runner-configure.sh /usr/local/sbin/agent-vm-github-runner
 COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh
 COPY runner-git.sh /tmp/agent-vm-runner-git.sh
 COPY runner-java.sh /tmp/agent-vm-runner-java.sh
+COPY runner-maven.sh /tmp/agent-vm-runner-maven.sh
 COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh
+COPY runner-go.sh /usr/local/sbin/agent-vm-runner-go
 COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh
 COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py
 COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py
 COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh
-RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-rust.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-job-started.sh \
+RUN chmod 0755 /tmp/agent-vm-github-runner-install.sh /usr/local/sbin/agent-vm-github-runner /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-maven.sh /tmp/agent-vm-runner-rust.sh /usr/local/sbin/agent-vm-runner-go /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-job-started.sh \
  && ln -sf /usr/local/sbin/agent-vm-github-runner /usr/sbin/agent-vm-github-runner \
+ && ln -sf /usr/local/sbin/agent-vm-runner-go /usr/sbin/agent-vm-runner-go \
  && /tmp/agent-vm-github-runner-install.sh \
  && /tmp/agent-vm-runner-git.sh \
  && /tmp/agent-vm-runner-java.sh \
+ && /tmp/agent-vm-runner-maven.sh \
  && /tmp/agent-vm-runner-rust.sh \
+ && /usr/local/sbin/agent-vm-runner-go \
  && /tmp/agent-vm-runner-docker.sh \
  && /tmp/agent-vm-runner-cleanup.sh \
- && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-rust.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-headroom.py /tmp/agent-vm-runner-job-started.py /tmp/agent-vm-runner-job-started.sh
+ && rm /tmp/agent-vm-github-runner-install.sh /tmp/agent-vm-runner-docker.sh /tmp/agent-vm-runner-git.sh /tmp/agent-vm-runner-java.sh /tmp/agent-vm-runner-maven.sh /tmp/agent-vm-runner-rust.sh /tmp/agent-vm-runner-cleanup.sh /tmp/agent-vm-runner-headroom.py /tmp/agent-vm-runner-job-started.py /tmp/agent-vm-runner-job-started.sh

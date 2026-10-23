@@ -269,8 +269,9 @@ func (a *App) updateOutput() io.Writer {
 // updateSteps is everything one VM's update runs: the package update for the
 // family it was built from, then the tooling the base images install from
 // outside that family's repositories — mise and the tools it manages, codex,
-// and the shared Rust toolchain. A VM whose base image predates this command,
-// or whose family is no longer supported, is reported rather than guessed at.
+// the shared Rust toolchain, and a runner image's Go. A VM whose base image
+// predates this command, or whose family is no longer supported, is reported
+// rather than guessed at.
 func updateSteps(vm *state.VM) ([]distro.UpdateStep, error) {
 	family, _, ok := distro.LookupImage(vm.BaseImage.Distro)
 	if !ok {

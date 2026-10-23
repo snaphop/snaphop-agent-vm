@@ -18,12 +18,18 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Runner images (`<family>-runner`) now come with the newest stable Go,
+  `golangci-lint`, `govulncheck`, `goimports`, and `gotestsum`, and the
+  newest Maven, so a workflow job can build Go and Maven projects without
+  installing them first. `agent-vm update` moves a runner VM to the newest
+  Go and Go tools; Maven moves when the image is rebuilt. An image already
+  cached gains them after `agent-vm image build <family>-runner --force`,
+  and a VM gains them when it is created again from that image (ADR-0023).
 - Runner images (`<family>-runner`) now come with Java and Rust, so a
   workflow job can build Java and Rust projects without installing a
   toolchain first. They carry the newest Eclipse Temurin LTS JDK, Rust's
-  latest stable and nightly toolchains, and `cargo-llvm-cov` 0.9.1,
-  `cargo-audit` 0.22.1, `cargo-deny` 0.20.2, `cargo-fuzz` 0.13.2, and
-  `worker-build` 0.8.7. A job can add Rust toolchains, components, and
+  latest stable and nightly toolchains, and the newest `cargo-llvm-cov`,
+  `cargo-audit`, `cargo-deny`, `cargo-fuzz`, and `worker-build`. A job can add Rust toolchains, components, and
   targets without `sudo`. `agent-vm update` keeps Rust current on a runner
   VM; the JDK and the cargo tools move when the image is rebuilt. An image
   already cached gains them after `agent-vm image build <family>-runner
