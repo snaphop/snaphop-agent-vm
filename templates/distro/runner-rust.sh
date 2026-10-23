@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Rust and the pinned cargo tools into a runner image.
+# Install Rust and the cargo tools into a runner image.
 #
 # Runs as root during the image build, after github-runner.sh has created
 # the github-runner account and installed the C toolchain and OpenSSL
@@ -21,16 +21,19 @@
 # runner's .env for jobs. CARGO_HOME is left unset for both, so
 # `cargo install` writes into that account's own ~/.cargo.
 #
-# The cargo tools are pinned and built from crates.io with --locked into
-# /usr/local/cargo/bin. A rebuild of the image is how a pin moves.
+# The cargo tools are built from crates.io at their newest versions, with
+# --locked so each builds against the lockfile it was published with, into
+# /usr/local/cargo/bin. Like the toolchains they are not pinned, and a
+# rebuild of the image picks up new releases. `agent-vm update` does not
+# move them.
 set -eu
 
 prefix=${AGENT_VM_RUNNER_PREFIX:-/opt/actions-runner}
 rustup_home=/usr/local/rustup
 cargo_home=/usr/local/cargo
 
-# crate@version, installed in this order.
-tools="cargo-llvm-cov@0.9.1 cargo-audit@0.22.1 cargo-deny@0.20.2 cargo-fuzz@0.13.2 worker-build@0.8.7"
+# Crates, installed in this order.
+tools="cargo-llvm-cov cargo-audit cargo-deny cargo-fuzz worker-build"
 
 if ! id github-runner >/dev/null 2>&1; then
     echo "runner-rust: the github-runner account is missing; install the runner first" >&2
@@ -61,11 +64,9 @@ rustup toolchain install nightly --profile minimal
 # image, and a job fills its own ~/.cargo registry.
 build=$(mktemp -d)
 trap 'rm -rf "$build"' EXIT
-for tool in $tools; do
-    crate=${tool%@*}
-    version=${tool#*@}
+for crate in $tools; do
     CARGO_HOME="$build/home" CARGO_TARGET_DIR="$build/target" \
-        cargo install --locked --root "$cargo_home" --version "$version" "$crate"
+        cargo install --locked --root "$cargo_home" "$crate"
 done
 
 for bin in "$cargo_home"/bin/*; do
@@ -118,11 +119,10 @@ check cargo fuzz --version
 check worker-build --version
 
 installed=$(cargo install --list --root "$cargo_home")
-for tool in $tools; do
-    crate=${tool%@*}
-    version=${tool#*@}
-    if ! printf '%s\n' "$installed" | grep -qx "${crate} v${version}:"; then
-        echo "runner-rust: ${crate} ${version} is not the version installed" >&2
+for crate in $tools; do
+    if ! printf '%s\n' "$installed" | grep -q "^${crate} v[0-9]"; then
+        echo "runner-rust: cargo does not list ${crate} as installed" >&2
         exit 1
     fi
 done
+printf '%s\n' "$installed" | grep '^[a-z]'

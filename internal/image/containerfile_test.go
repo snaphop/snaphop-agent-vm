@@ -2251,20 +2251,25 @@ func TestRunnerContainerfiles_AreTheSlimRecipePlusTheRunner(t *testing.T) {
 			"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh",
 			"COPY runner-git.sh /tmp/agent-vm-runner-git.sh",
 			"COPY runner-java.sh /tmp/agent-vm-runner-java.sh",
+			"COPY runner-maven.sh /tmp/agent-vm-runner-maven.sh",
 			"COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh",
+			"COPY runner-go.sh /usr/local/sbin/agent-vm-runner-go",
 			"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh",
 			"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py",
 			"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py",
 			"COPY runner-disk-job-started.sh /tmp/agent-vm-runner-job-started.sh",
 			"/usr/sbin/agent-vm-github-runner",
+			// agent-vm update finds the Go installer by name (ADR-0023).
+			"ln -sf /usr/local/sbin/agent-vm-runner-go /usr/sbin/agent-vm-runner-go",
 			"/tmp/agent-vm-github-runner-install.sh",
 			// The account has to exist before it can join the docker group.
 			// git and gh are installed after that account and before Docker.
 			// Java and Rust follow git: the cargo tools compile against the
 			// OpenSSL headers the runner install adds, and both write into
-			// the runner's .env. The disk hook is last: it needs the account
-			// and the docker command.
-			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-java.sh \\\n && /tmp/agent-vm-runner-rust.sh \\\n && /tmp/agent-vm-runner-docker.sh \\\n && /tmp/agent-vm-runner-cleanup.sh",
+			// the runner's .env. Maven runs on the JDK, so it follows Java. Go
+			// needs only the account. The disk hook is last: it needs the
+			// account and the docker command.
+			"/tmp/agent-vm-github-runner-install.sh \\\n && /tmp/agent-vm-runner-git.sh \\\n && /tmp/agent-vm-runner-java.sh \\\n && /tmp/agent-vm-runner-maven.sh \\\n && /tmp/agent-vm-runner-rust.sh \\\n && /usr/local/sbin/agent-vm-runner-go \\\n && /tmp/agent-vm-runner-docker.sh \\\n && /tmp/agent-vm-runner-cleanup.sh",
 		} {
 			if !strings.Contains(rest, want) {
 				t.Errorf("%s runner section does not contain %q", d.RunnerContainerfile, want)
@@ -2300,8 +2305,9 @@ func TestRunnerContainerfiles_KeepTheBootAndCloudInitContract(t *testing.T) {
 }
 
 // TestRunnerContainerfiles_LeaveOutTheAgentTooling keeps the variant on the
-// slim promise for everything except Docker (ADR-0016), Java, and Rust
-// (ADR-0022), which the shared section's scripts install. The recipe itself
+// slim promise for everything except Docker (ADR-0016), Java and Rust
+// (ADR-0022), and Maven, Go, and golangci-lint (ADR-0023), which the shared
+// section's scripts install. The recipe itself
 // names none of that tooling, and the runner scripts are the only files it
 // copies in.
 func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
@@ -2313,7 +2319,9 @@ func TestRunnerContainerfiles_LeaveOutTheAgentTooling(t *testing.T) {
 		"COPY runner-docker.sh /tmp/agent-vm-runner-docker.sh":                   true,
 		"COPY runner-git.sh /tmp/agent-vm-runner-git.sh":                         true,
 		"COPY runner-java.sh /tmp/agent-vm-runner-java.sh":                       true,
+		"COPY runner-maven.sh /tmp/agent-vm-runner-maven.sh":                     true,
 		"COPY runner-rust.sh /tmp/agent-vm-runner-rust.sh":                       true,
+		"COPY runner-go.sh /usr/local/sbin/agent-vm-runner-go":                   true,
 		"COPY runner-cleanup.sh /tmp/agent-vm-runner-cleanup.sh":                 true,
 		"COPY runner-disk-headroom.py /tmp/agent-vm-runner-headroom.py":          true,
 		"COPY runner-disk-job-started.py /tmp/agent-vm-runner-job-started.py":    true,

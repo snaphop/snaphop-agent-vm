@@ -28,9 +28,14 @@ and, when disk is low, unused Docker data.
 
 Extended by [ADR-0022](./0022-install-java-and-rust-on-the-runner-image.md).
 The shared section also installs the current Temurin JDK LTS, Rust stable
-and nightly, and five pinned cargo tools. `agent-vm update` now also updates
+and nightly, and five cargo tools. `agent-vm update` now also updates
 Rust on a runner guest, so the statement below that a runner guest gets only
 its distro packages updated is no longer in force.
+
+Extended by [ADR-0023](./0023-install-go-and-maven-on-the-runner-image.md). The
+shared section also installs the newest Maven and the newest stable Go
+with four Go tools, and `agent-vm update` moves Go and those tools to the
+newest release on a runner guest.
 
 Extends [ADR-0006](./0006-initial-guest-distro-support.md) (initial guest distro
 support) and [ADR-0012](./0012-nix-provided-guest-tooling.md) (Nix-provided

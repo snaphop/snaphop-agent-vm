@@ -10,7 +10,10 @@ Extends [ADR-0013](./0013-self-hosted-github-actions-runner-variant.md),
 [ADR-0016](./0016-install-docker-on-the-runner-image.md), and
 [ADR-0017](./0017-run-the-github-actions-runner-as-github-runner.md). The
 runner variant stays the slim recipe plus one shared section. That section
-also installs a JDK, Rust, and five pinned cargo tools.
+also installs a JDK, Rust, and five cargo tools.
+
+Extended by [ADR-0023](./0023-install-go-and-maven-on-the-runner-image.md),
+which adds Maven after the JDK and Go with four Go tools after Rust.
 
 ## Context
 
@@ -69,17 +72,17 @@ in `.env` and adds `JAVA_HOME` only when it is missing.
   update`: `chown -R github-runner:github-runner -- /usr/local/rustup`, as
   root, run only when the guest has `agent-vm-github-runner`. Without it,
   what root's update replaced would be owned by root again.
-- **The cargo tools are pinned.** `cargo install --locked --version` from
-  crates.io into `/usr/local/cargo/bin`, linked into `/usr/local/bin`:
-  `cargo-llvm-cov` 0.9.1, `cargo-audit` 0.22.1, `cargo-deny` 0.20.2,
-  `cargo-fuzz` 0.13.2, and `worker-build` 0.8.7. The cargo registry and the
+- **The cargo tools are not pinned.** `cargo install --locked` from
+  crates.io, at each crate's newest version, into `/usr/local/cargo/bin`,
+  linked into `/usr/local/bin`: `cargo-llvm-cov`, `cargo-audit`,
+  `cargo-deny`, `cargo-fuzz`, and `worker-build`. The cargo registry and the
   build directory are scratch and are removed. `agent-vm update` does not
-  move these pins; a rebuild with a changed script does.
+  move them; a rebuild picks up new releases.
 - **Checked as the job account.** Before the image is committed, the
   script runs `rustc`, `cargo`, `rustup`, `cargo fmt`, `cargo clippy`,
   `rustc +nightly`, and each cargo tool as `github-runner`, with
   `HOME=/opt/actions-runner` and only the `RUSTUP_HOME` a job gets. It also
-  checks that `cargo install --list` reports each pinned version.
+  checks that `cargo install --list` reports each tool.
 - No new host tool, no manifest change, and no change to `configure`. The
   `.env` lines are written during the image build, and `configure` keeps
   lines it does not own.
@@ -99,8 +102,9 @@ Harder:
 
 - The runner image is larger by a JDK, two Rust toolchains, and the five
   tools, and its build is longer by the time it takes to compile them.
-- The JDK and the Rust toolchains are not pinned. A rebuild picks up a new
-  LTS major and new Rust releases. The manifest records only the source
+- The JDK, the Rust toolchains, and the cargo tools are not pinned. A
+  rebuild picks up a new LTS major, new Rust releases, and new tool
+  releases, which can change a tool's behaviour under a workflow. The manifest records only the source
   image's digest, so a rebuild is not reproducible (ADR-0006).
 - `agent-vm update` moves Rust but not the JDK. A new Temurin build reaches
   a runner VM when its image is rebuilt and the VM is created again.

@@ -36,6 +36,7 @@ Documentation for SnapHop Agent VM.
 | [0020](./decisions/0020-publish-ssh-with-mdns-on-a-bridged-guest.md) | Publish SSH with mDNS on a bridged guest |
 | [0021](./decisions/0021-register-a-guest-on-pi-hole.md) | Register a guest on a Pi-hole DNS server |
 | [0022](./decisions/0022-install-java-and-rust-on-the-runner-image.md) | Install Java and Rust on the runner image |
+| [0023](./decisions/0023-install-go-and-maven-on-the-runner-image.md) | Install Go, its tools, and Maven on the runner image |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.

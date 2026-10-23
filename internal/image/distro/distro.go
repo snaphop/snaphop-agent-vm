@@ -394,14 +394,26 @@ func ToolingUpdate(user string) []UpdateStep {
 				"chown", "-R", runnerAccount + ":" + runnerAccount, "--", rustupHome,
 			},
 		},
+		// A runner image has no mise, so its Go and Go tools come from the
+		// installer the image keeps (ADR-0023). Run again, it replaces
+		// /usr/local/go with go.dev's newest stable release and each tool with
+		// its newest version, leaving alone whatever is already current.
+		UpdateStep{
+			Name:     "updating Go",
+			Root:     true,
+			Requires: runnerGoCommand,
+			Argv:     []string{runnerGoCommand},
+		},
 	)
 }
 
-// The account a runner image's jobs run as (ADR-0017), and the command only
-// a runner image installs (ADR-0013).
+// The account a runner image's jobs run as (ADR-0017), the command only a
+// runner image installs (ADR-0013), and the Go installer it keeps
+// (ADR-0023).
 const (
-	runnerAccount = "github-runner"
-	runnerCommand = "agent-vm-github-runner"
+	runnerAccount   = "github-runner"
+	runnerCommand   = "agent-vm-github-runner"
+	runnerGoCommand = "agent-vm-runner-go"
 )
 
 // Default is the family used when the operator names none.

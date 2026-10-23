@@ -35,7 +35,8 @@ The full base images include guest-side agent tooling; slim images omit it, and
 nix images install it from one shared nix expression rather than from the
 family's package manager (ADR-0012). Runner images are that slim image plus an
 unconfigured GitHub Actions runner (ADR-0013), Docker (ADR-0016), the
-current Temurin JDK LTS and Rust with pinned cargo tools (ADR-0022), and a
+current Temurin JDK LTS and Rust with the newest cargo tools (ADR-0022), the
+newest Maven and the newest stable Go with its tools (ADR-0023), and a
 job-started hook that clears old checkouts and, when disk is low, unused
 Docker data (ADR-0019). Jobs
 run as `github-runner`, which has passwordless sudo (ADR-0017). When an
@@ -149,7 +150,7 @@ and QEMU emulator are not version-enforced separately from `virsh` and
 | Disk facts | `qemu-img info -U --output=json` |
 | cloud-init seed | `virt-make-fs --type=vfat --label=cidata seed/ seed.img` (ADR-0011) |
 | Guest shell | `ssh` (exec'd with the recorded key and address) |
-| Guest update (`update`, and `create` unless `--no-update` or `--wait-for-ssh 0`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update`, and on a runner guest a `chown` that hands `/usr/local/rustup` back to `github-runner` |
+| Guest update (`update`, and `create` unless `--no-update` or `--wait-for-ssh 0`) | `ssh` running the guest family's `apt-get`, `dnf`, or `pacman` under `sudo -n`, then `mise self-update`/`mise upgrade`, `codex update`, and `rustup update`, and on a runner guest a `chown` that hands `/usr/local/rustup` back to `github-runner` and `agent-vm-runner-go` |
 | Host preparation (`setup`) | the family's package manager, `systemctl enable --now`, `usermod -aG`, `setfacl -m u:<qemu user>:x`, and, when virt-aa-helper denies a hidden home state directory, `apparmor_parser -Q -K /dev/stdin` to see whether `priority=` parses, then either `tee` of one local `priority=` rule or, when the parser rejects it, `tee` of the main profile with that deny replaced plus `tee` of the local carve-out, and `apparmor_parser -r` (ADR-0018). Firewall rules, bridges, SELinux, and QEMU's profile are not touched |
 | GitHub SSH keys | `gh api user/keys` (`POST` on `create --github-ssh-key`, `DELETE` on `destroy --github-ssh-key`) |
 | GitHub Actions runners | `gh api --method POST orgs/<org>/actions/runners/registration-token --jq .token` on `create --github-org`, with the token on the stdin of the guest configure command. That command sets labels `<org>`, `<family>-latest`, and `<family>-<tag>` (for the default Ubuntu image, `ubuntu-latest` and `ubuntu-26.04`). `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` when `destroy` removes a recorded runner |
@@ -245,8 +246,14 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   Adoptium, checked against the published SHA-256, and Rust stable and
   nightly through rustup into the shared `/usr/local/rustup`, owned by
   `github-runner`, with `cargo-llvm-cov`, `cargo-audit`, `cargo-deny`,
-  `cargo-fuzz`, and `worker-build` at pinned versions (ADR-0022). It also
-  installs a job-started hook at
+  `cargo-fuzz`, and `worker-build` at their newest versions (ADR-0022). It
+  installs the newest Maven from Maven Central into `/opt/maven`, checked
+  against the published SHA-512, and the newest stable Go from go.dev into
+  `/usr/local/go`, checked against the published SHA-256, with
+  golangci-lint from its checksummed GitHub release and govulncheck,
+  goimports, and gotestsum built with `go install`. It keeps the Go
+  installer as `agent-vm-runner-go` so `agent-vm update` can move Go and
+  its tools to the newest release (ADR-0023). It also installs a job-started hook at
   `/usr/local/libexec/snaphop-runner/job-started.sh` that removes checkouts
   untouched for 72 hours and, below 20 GiB free, unused Docker data
   (ADR-0019). Ubuntu runner images also install

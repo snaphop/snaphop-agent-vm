@@ -251,6 +251,32 @@ func TestToolingUpdate_HandsARunnersRustToolchainBackToItsJobAccount(t *testing.
 	}
 }
 
+// TestToolingUpdate_KeepsARunnersGoCurrent covers a runner guest (ADR-0023):
+// it has no mise, so the installer the image keeps is what moves Go to the
+// newest stable release, and only a guest that has that installer runs it.
+func TestToolingUpdate_KeepsARunnersGoCurrent(t *testing.T) {
+	t.Parallel()
+	found := 0
+	for _, step := range ToolingUpdate("agent") {
+		if !containsArg(step.Argv, "agent-vm-runner-go") {
+			continue
+		}
+		found++
+		if want := []string{"agent-vm-runner-go"}; !reflect.DeepEqual(step.Argv, want) {
+			t.Errorf("Go update argv = %q, want %q", step.Argv, want)
+		}
+		if !step.Root {
+			t.Error("the Go update does not run as root; /usr/local/go is root-owned")
+		}
+		if step.Requires != "agent-vm-runner-go" {
+			t.Errorf("Go update Requires = %q, want agent-vm-runner-go so only runner guests run it", step.Requires)
+		}
+	}
+	if found != 1 {
+		t.Errorf("the runner's Go installer runs %d times in an update, want 1", found)
+	}
+}
+
 // TestToolingUpdate_KeepsRootOutOfTheGuestUsersMiseLockDirectory covers the
 // ordering hazard in an update: root's mise runs first, and mise's npm backend
 // locks each install under $TMPDIR/fslock -- a directory owned by whoever

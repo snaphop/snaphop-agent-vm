@@ -572,7 +572,8 @@ Every family also has a runner variant, named by appending `-runner`:
 `agent-vm image build ubuntu-runner`, `agent-vm create ci --distro
 ubuntu-runner`. It is that family's slim image plus the GitHub Actions
 self-hosted runner (ADR-0013), Docker (ADR-0016), `git`, the GitHub CLI
-(`gh`), Java and Rust (ADR-0022), and a job-started disk hook (ADR-0019).
+(`gh`), Java and Rust (ADR-0022), Maven and Go (ADR-0023), and a
+job-started disk hook (ADR-0019).
 It boots the same way —
 same kernel command line, same cloud-init contract, same SSH and clock
 guarantees — and carries the same common Linux tooling. It does not carry
@@ -631,11 +632,11 @@ A runner image installs Java and Rust (ADR-0022):
 |---|---|
 | Java | the newest Eclipse Temurin LTS JDK, from Adoptium, in `/usr/lib/jvm/temurin-<major>` |
 | Rust | `rustup` with the latest stable toolchain as the default (`rustc`, `cargo`, `rustfmt`, `clippy`, `llvm-tools`, and the `wasm32-unknown-unknown` target) and the latest nightly (`minimal` profile) |
-| cargo tools | `cargo-llvm-cov` 0.9.1, `cargo-audit` 0.22.1, `cargo-deny` 0.20.2, `cargo-fuzz` 0.13.2, and `worker-build` 0.8.7 |
+| cargo tools | the newest `cargo-llvm-cov`, `cargo-audit`, `cargo-deny`, `cargo-fuzz`, and `worker-build` |
 
-The JDK version and both Rust toolchains are the newest when the image is
-built. The JDK archive is checked against the SHA-256 Adoptium publishes for
-it. The cargo tools are pinned and built from crates.io with `--locked`.
+The JDK version, both Rust toolchains, and the cargo tools are the newest
+when the image is built. The JDK archive is checked against the SHA-256 Adoptium publishes for
+it. The cargo tools are built from crates.io with `--locked`.
 Every command is linked into `/usr/local/bin`. `JAVA_HOME` and
 `RUSTUP_HOME=/usr/local/rustup` are written to `/etc/environment` for SSH
 sessions and to `/opt/actions-runner/.env` for jobs. `/usr/local/rustup` is
@@ -643,12 +644,36 @@ owned by `github-runner`, so a workflow step can run `rustup toolchain
 install`, `rustup component add`, or `rustup target add` without `sudo`.
 `CARGO_HOME` is not set, so `cargo install` writes into the account's own
 `~/.cargo`. The build fails when any of these cannot run as `github-runner`
-or when a cargo tool is not the pinned version. `agent-vm update` updates the
+or when cargo does not list a cargo tool as installed. `agent-vm update` updates the
 Rust toolchains and then gives `/usr/local/rustup` back to `github-runner`.
 It does not update the JDK or the cargo tools; rebuild the image for those.
 An image already cached gains all of this when it is rebuilt with
 `agent-vm image build <family>-runner --force`. Create the VM again from that
 image.
+
+A runner image also installs Maven, and Go with its tools (ADR-0023):
+
+| Tool | What is installed |
+|---|---|
+| Maven | the newest Apache Maven release (`X.Y.Z`, never a release candidate), from Maven Central, in `/opt/maven` |
+| Go | the newest stable release, from go.dev, in `/usr/local/go` |
+| Go tools | the newest `golangci-lint`, from its GitHub release, and the newest `govulncheck`, `goimports`, and `gotestsum`, built with `go install`, in `/usr/local/lib/go-tools/bin` |
+
+Every version is the newest when it is installed. The Maven archive is
+checked against the SHA-512 Maven Central publishes for it, the Go archive
+against the SHA-256 go.dev publishes, and golangci-lint against the
+checksums file of its release. Every command is linked into
+`/usr/local/bin`. `MAVEN_HOME`, `GOROOT`, `GOPATH`, and `GOTOOLCHAIN` are not
+set, so the Maven local repository stays in each account's `~/.m2` and
+`GOPATH`, the module cache, and any newer toolchain a `go.mod` asks for stay
+in each account's own `~/go`. The build fails when any of these cannot run
+as `github-runner`, or when `mvn` or `go` is not the version installed. The
+Go installer stays in the image as `agent-vm-runner-go`; `agent-vm update`
+runs it to move Go and the Go tools to their newest versions, and it
+replaces only what is out of date. `agent-vm update` does not update Maven;
+rebuild the image for that. A VM created from an image built before this
+has no `agent-vm-runner-go`, and `agent-vm update` skips the step; rebuild
+the image and create the VM again.
 
 Before each job, the runner runs
 `/usr/local/libexec/snaphop-runner/job-started.sh` (ADR-0019). The hook
@@ -1511,7 +1536,7 @@ Once SSH accepts a login, `create` brings the guest up to date before it
 joins Tailscale or registers anything with GitHub. The steps are the same
 ones [`agent-vm update`](#agent-vm-update-name---all) runs: the family's
 package update, then mise, codex, the shared Rust toolchain, and on a runner
-guest that toolchain's owner, each skipped
+guest that toolchain's owner and Go, each skipped
 when the guest has no such command. The guest's own output is streamed to
 stderr. The budget is `--update-timeout` (default 45 minutes), shared by
 every step. A guest that needs no refresh still runs the steps; they finish
@@ -2055,6 +2080,7 @@ Then the rest of what a guest carries, in this order:
 | `codex` | `codex update` with `CODEX_HOME=/usr/local/lib/codex` | root |
 | the Rust toolchain | `rustup update` with `RUSTUP_HOME=/usr/local/rustup` and `CARGO_HOME=/usr/local/cargo` | root |
 | the Rust toolchain's owner, on a runner guest | `chown -R github-runner:github-runner -- /usr/local/rustup`, only when the guest has `agent-vm-github-runner` (ADR-0022) | root |
+| Go and the Go tools, on a runner guest | `agent-vm-runner-go`, only when the guest has it; it installs go.dev's newest stable release into `/usr/local/go` and the newest `golangci-lint`, `govulncheck`, `goimports`, and `gotestsum`, replacing only what is out of date (ADR-0023) | root |
 
 `mise upgrade` covers everything `mise` manages in that account: `node`, the
 `claude`, `opencode` and `pi` agents, `herdr`, `java` and `maven`, `go` and
@@ -2300,7 +2326,7 @@ table below is the summary.
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`). `start` and `restart` of a VM with a recorded Pi-hole name also call the same Pi-hole HTTP API as `create --pihole` when libvirt reports a different address. `stop` does not call Pi-hole |
 | `ssh` | `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), then `ssh` |
-| `update` | `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `find`/`chown -h` (the shared store's selector symlinks, handed to the guest user), `codex`, and `rustup`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
+| `update` | `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), then one `ssh <guest> …` per step: the guest family's package manager (`apt-get`, `dnf`, or `pacman`), then `mkdir -p` (root's mise temporary directory), `mise`, `find`/`chown -h` (the shared store's selector symlinks, handed to the guest user), `codex`, and `rustup`, and on a runner guest `chown` (the Rust toolchain, handed back to `github-runner`) and `agent-vm-runner-go`, each preceded by an `ssh <guest> command -v <tool>` probe and run under `sudo -n` where it needs root |
 | `console` | `virsh domstate`, then `virsh console` |
 | `destroy` | `virsh domblklist` (to confirm the domain is the one recorded here), `virsh shutdown` or `virsh destroy`, `virsh undefine` (never `--remove-all-storage`), then file removal inside the state directory |
 | `completion` / `__complete` | none with a local libvirt URI — completion reads the state directory and spawns no process; with `qemu+ssh://…`, reading the state directory runs `ssh` and read-only commands such as `find`, `cat`, `test`, and `readlink` on the hypervisor on each Tab |
