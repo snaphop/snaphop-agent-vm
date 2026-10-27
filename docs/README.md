@@ -37,6 +37,7 @@ Documentation for SnapHop Agent VM.
 | [0021](./decisions/0021-register-a-guest-on-pi-hole.md) | Register a guest on a Pi-hole DNS server |
 | [0022](./decisions/0022-install-java-and-rust-on-the-runner-image.md) | Install Java and Rust on the runner image |
 | [0023](./decisions/0023-install-go-and-maven-on-the-runner-image.md) | Install Go, its tools, and Maven on the runner image |
+| [0024](./decisions/0024-share-the-full-image-rust-home-through-a-rustup-group.md) | Share the full image's Rust home through a rustup group |
 
 Add operational runbooks, contract references, and design notes here, and link
 them from `README.md` and `AGENTS.md` so both humans and agents can find them.

@@ -234,15 +234,18 @@ func TestGenerate_PutsTheLoginUserInTheGuestToolingGroups(t *testing.T) {
 	}
 	// The memberships have to be part of creating the account: a group added
 	// afterwards does not apply to a session that has already started, and the
-	// first SSH session can land before any boot-time unit has run.
-	if !strings.Contains(string(got), "    groups:\n      - docker\n      - libvirt\n      - kvm\n") {
-		t.Errorf("the login user is not created in the docker, libvirt, and kvm groups:\n%s", got)
+	// first SSH session can land before any boot-time unit has run. rustup is
+	// the group that may write the shared /usr/local/rustup, so without it the
+	// first `cargo build` of a project that pins a toolchain fails with
+	// "Permission denied".
+	if !strings.Contains(string(got), "    groups:\n      - docker\n      - libvirt\n      - kvm\n      - rustup\n") {
+		t.Errorf("the login user is not created in the docker, libvirt, kvm, and rustup groups:\n%s", got)
 	}
 	// Declaring the groups is what lets a base image that has none of that
 	// software — one built before the guest tooling landed — still create the
 	// account. cloud-init creates groups before users, so a group named for an
 	// account but missing from the image would leave the VM unreachable.
-	if !strings.Contains(string(got), "\ngroups:\n  - docker\n  - libvirt\n  - kvm\n") {
+	if !strings.Contains(string(got), "\ngroups:\n  - docker\n  - libvirt\n  - kvm\n  - rustup\n") {
 		t.Errorf("the guest tooling groups are not declared, so a VM on an older base image would lose its login user:\n%s", got)
 	}
 }

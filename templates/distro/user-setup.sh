@@ -13,10 +13,10 @@
 set -eu
 
 # docker for the daemon's socket, libvirt and kvm for the nested VMs the guest
-# can run. A group the image does not have is skipped rather than created: on a
-# base image built before that software was installed, its absence is the
-# truth.
-groups='docker libvirt kvm'
+# can run, rustup for installing a toolchain into the shared /usr/local/rustup.
+# A group the image does not have is skipped rather than created: on a base
+# image built before that software was installed, its absence is the truth.
+groups='docker libvirt kvm rustup'
 
 # The mise store every account shares. An account created from /etc/skel
 # already has the symlink below; this is for the ones that were not -- an

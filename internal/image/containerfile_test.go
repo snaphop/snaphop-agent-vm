@@ -779,6 +779,63 @@ func TestContainerfiles_InstallTheGoAndRustToolchains(t *testing.T) {
 	}
 }
 
+// TestContainerfiles_LetEveryAccountInstallARustToolchain guards the
+// permissions on the shared /usr/local/rustup.
+//
+// cargo installs the toolchain a project's rust-toolchain.toml pins on first
+// use, as whichever account ran it, and rustup writes its temporary files,
+// downloads and toolchains into RUSTUP_HOME. On a root-owned RUSTUP_HOME that
+// fails with "could not create temp file /usr/local/rustup/tmp/...:
+// Permission denied". The tree belongs to the rustup group, with every
+// directory setgid and group-writable, and a tmpfiles.d rule adds a default
+// ACL at boot. The ACL cannot be set in the build: podman does not keep POSIX
+// ACLs in a committed layer.
+func TestContainerfiles_LetEveryAccountInstallARustToolchain(t *testing.T) {
+	t.Parallel()
+	for _, name := range distro.Names() {
+		d, ok := distro.Lookup(name)
+		if !ok {
+			t.Fatalf("distro.Names() returned %q, which distro.Lookup does not know", name)
+		}
+		recipe := readTemplate(t, "distro/"+d.Containerfile)
+
+		for _, step := range []string{
+			"groupadd --system rustup;",
+			"chgrp -R rustup /usr/local/rustup;",
+			"chmod -R g+rwX /usr/local/rustup;",
+			"find /usr/local/rustup -type d -exec chmod g+s {} +",
+		} {
+			if !strings.Contains(recipe, step) {
+				t.Errorf("%s does not run %q; an account in the rustup group could not install a toolchain", d.Containerfile, step)
+			}
+		}
+		// The group step has to follow the install, or what rustup installs
+		// stays root's.
+		install := strings.Index(recipe, "https://sh.rustup.rs")
+		group := strings.Index(recipe, "chgrp -R rustup /usr/local/rustup;")
+		if install < 0 || group < 0 || group < install {
+			t.Errorf("%s does not hand /usr/local/rustup to the rustup group after installing Rust", d.Containerfile)
+		}
+		// The ACL has to come from a boot-time rule: a setfacl in the build is
+		// gone by the next layer.
+		if !strings.Contains(recipe, "A+ /usr/local/rustup - - - - default:group:rustup:rwx") ||
+			!strings.Contains(recipe, "/etc/tmpfiles.d/agent-vm-rustup.conf") {
+			t.Errorf("%s installs no tmpfiles.d rule for the default ACL; a toolchain one account installs would be read-only to the others", d.Containerfile)
+		}
+		for _, line := range strings.Split(recipe, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "setfacl") {
+				t.Errorf("%s runs setfacl in the build; podman drops the ACL when it commits the layer: %s", d.Containerfile, strings.TrimSpace(line))
+			}
+		}
+		// The build checks what it left, so a later root-run rustup step that
+		// leaves directories at 0755 fails the build instead of a guest.
+		if !strings.Contains(recipe, `find /usr/local/rustup ! -group rustup -print -quit`) ||
+			!strings.Contains(recipe, `find /usr/local/rustup -type d ! -perm -2070 -print -quit`) {
+			t.Errorf("%s does not check that /usr/local/rustup is group-owned and group-writable before the image is committed", d.Containerfile)
+		}
+	}
+}
+
 // TestContainerfiles_CanGrowTheRootFilesystem guards the one thing that makes
 // the VM's disk size real inside the guest.
 //
@@ -1242,10 +1299,10 @@ func TestUserSetupScript_DoesEveryJobItIsThereFor(t *testing.T) {
 	t.Parallel()
 	script := readTemplate(t, "distro/user-setup.sh")
 
-	for _, group := range []string{"docker", "libvirt", "kvm"} {
-		if !strings.Contains(script, group) {
-			t.Errorf("the first-boot script does not add accounts to the %q group", group)
-		}
+	// rustup is the group that may write the shared /usr/local/rustup. An
+	// account left out of it cannot install the toolchain a project pins.
+	if !strings.Contains(script, "groups='docker libvirt kvm rustup'") {
+		t.Error("the first-boot script does not add accounts to the docker, libvirt, kvm, and rustup groups; an account it covers could not reach Docker or libvirt, or install a Rust toolchain")
 	}
 	// A group the image does not have must be skipped, not created: base
 	// images built before that software was installed have none of them.
