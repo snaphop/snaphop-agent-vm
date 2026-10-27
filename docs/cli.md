@@ -1160,7 +1160,7 @@ only in a login shell.
 
 Rust is shared rather than per account: it is installed once into
 `/usr/local/rustup` with `CARGO_HOME=/usr/local/cargo`, so no account downloads
-its own toolchain at first use, and `rustup update` needs `sudo`. It is
+its own toolchain at first use. It is
 deliberately not managed by `mise` — `mise`'s `rust` is `rustup` underneath and
 re-reads `RUSTUP_HOME`/`CARGO_HOME` from the environment of whoever runs
 `cargo`, so it would re-run `rustup-init` as each account rather than use what the
@@ -1171,8 +1171,20 @@ it, and a non-interactive command reads that file but no profile script.
 `CARGO_HOME` is left unset, so `cargo install` writes into the account's own
 `~/.cargo`.
 
-The Rust installation is shared, so `rustup update` and `rustup toolchain
-install` need `sudo`. What a user installs is not shared: `CARGO_HOME` is
+`/usr/local/rustup` belongs to the `rustup` group. Every directory in it is
+setgid and group-writable, and every interactive account is in that group, so
+`rustup toolchain install`, `rustup component add`, and `rustup update` work
+without `sudo`. So does the install cargo starts for a project that pins a
+toolchain in `rust-toolchain.toml`. A toolchain one account installs is shared
+with the others, and they can update it: a `tmpfiles.d` rule gives every
+directory a default ACL for the group at each boot, so what an account adds
+stays group-writable under a umask of `022`. This is not the mise store's
+sticky arrangement, because rustup changes an installed toolchain in place
+(ADR-0024). A VM created from a base image built before this has a root-owned
+`/usr/local/rustup`, and installing a toolchain there still needs `sudo` until
+the image is rebuilt.
+
+What a user installs is not shared: `CARGO_HOME` is
 deliberately left unset, so `cargo install` writes into that account's own
 `~/.cargo`, as `go install` writes into `~/go`. Both `~/.cargo/bin` and
 `~/go/bin` are added to the path of a login shell by
@@ -1250,9 +1262,10 @@ keys or logins have to reach each VM separately — through `--cloud-init`, or b
 authenticating inside the guest.
 
 The Docker daemon is enabled, so it is running when the VM becomes reachable.
-The login user is placed in the `docker`, `libvirt`, and `kvm` groups by the
-generated cloud-init user-data, at the moment the account is created, so
-`docker` and `virsh` work without `sudo` in the very first SSH session. The base
+The login user is placed in the `docker`, `libvirt`, `kvm`, and `rustup` groups
+by the generated cloud-init user-data, at the moment the account is created, so
+`docker`, `virsh`, and `rustup toolchain install` work without `sudo` in the
+very first SSH session. The base
 image also carries a one-shot unit that adds any other interactive account to
 those groups after cloud-init has finished, which covers accounts an operator's
 own `--cloud-init` file creates. This grants the login user nothing it did not

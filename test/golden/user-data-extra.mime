@@ -19,9 +19,10 @@ Content-Type: text/cloud-config; charset="utf-8"
 # the guest was configured with.
 #
 # This is the whole guest-side contract. It authorizes public keys and creates
-# the login user and the groups that let it reach the Docker socket and libvirt.
-# It installs no packages and carries no credentials. A bridged guest also
-# publishes its hostname and SSH with mDNS. A NAT guest does not.
+# the login user and the groups that let it reach the Docker socket and libvirt
+# and install Rust toolchains. It installs no packages and carries no
+# credentials. A bridged guest also publishes its hostname and SSH with mDNS. A
+# NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -32,20 +33,23 @@ preserve_hostname: false
 
 # Docker's socket is owned by root:docker, and libvirt's by root:libvirt, so
 # the login user has to be in those groups to run `docker` and `virsh` without
-# sudo; kvm is what lets the VMs it starts use /dev/kvm. They are declared here
-# rather than only in the base image's boot-time unit because a group added to
-# an account after it has already logged in does not apply to that session, and
-# the first SSH session can land before a post-cloud-init unit has run.
+# sudo; kvm is what lets the VMs it starts use /dev/kvm. A full image makes the
+# shared /usr/local/rustup writable by the rustup group, so the login user can
+# install the toolchain a project's rust-toolchain.toml pins. They are declared
+# here rather than only in the base image's boot-time unit because a group added
+# to an account after it has already logged in does not apply to that session,
+# and the first SSH session can land before a post-cloud-init unit has run.
 #
 # Declaring the groups is what keeps this safe on a base image that has none of
-# that software — one built before the guest tooling landed. cloud-init creates
-# groups before users, so the account is created either way; without this, a
-# missing group would fail user creation and leave the VM unreachable
-# (AGENTS.md §8).
+# that software — one built before the guest tooling landed, or a slim, nix or
+# runner image, which has no rustup group. cloud-init creates groups before
+# users, so the account is created either way; without this, a missing group
+# would fail user creation and leave the VM unreachable (AGENTS.md §8).
 groups:
   - docker
   - libvirt
   - kvm
+  - rustup
 
 users:
   - name: "agent"
@@ -53,6 +57,7 @@ users:
       - docker
       - libvirt
       - kvm
+      - rustup
     # No password is ever set, so the account is reachable by key only. sudo is
     # granted through a sudoers drop-in rather than by adding the user to a
     # group, because the group that confers sudo differs per distro and this

@@ -648,14 +648,38 @@ RUN set -eu; \
 # inside a guest with no network at all -- and going through mise, which is
 # rustup underneath, would do the same thing at 1.5 GiB per account. A shared
 # installation costs two things and is worth them: RUSTUP_HOME has to be
-# visible to every account (below), and `rustup update` needs sudo because the
-# directory is root-owned. Crates a user installs are unaffected -- CARGO_HOME
-# is deliberately left unset, so `cargo install` writes into that account's own
-# ~/.cargo.
+# visible to every account (below), and it has to be writable by every account
+# that may install a toolchain (the rustup group, below). Crates a user installs
+# are unaffected -- CARGO_HOME is deliberately left unset, so `cargo install`
+# writes into that account's own ~/.cargo.
 #
 # The version is unpinned like every other one here, and the installer is piped
 # to sh straight from the vendor. The manifest records only the source image's
 # digest, not either of them, so a rebuild is not reproducible (ADR-0006).
+#
+# The same step lets every interactive account change the shared toolchains,
+# through the rustup group. It is one RUN with the install because a chgrp or
+# chmod in a later step copies the whole 1.5 GiB toolchain into a second layer.
+#
+# A project that pins a toolchain in rust-toolchain.toml makes cargo install it
+# on first use, as whichever account ran cargo. On a root-owned RUSTUP_HOME that
+# fails with "could not create temp file /usr/local/rustup/tmp/...: Permission
+# denied". The login user joins rustup from the generated cloud-init user-data,
+# and agent-vm-user-setup adds every other interactive account.
+#
+# This is not the mise store's arrangement, where every directory is mode 1777
+# and files keep their modes. That works for mise because it never changes an
+# install in place: a new version is a new directory. rustup does change them.
+# It adds a component or target to an existing toolchain, rewrites
+# settings.toml and update-hashes/, and `rustup update` replaces stable where it
+# stands. Under 1777 the files root installed here stay read-only to everyone
+# else, and the sticky bit stops one account from updating a toolchain another
+# installed. So the tree is group-owned and group-writable instead, and every
+# directory is setgid so what an account adds stays in the group.
+#
+# The accounts inside the VM are not a security boundary (SECURITY.md): the
+# login user has passwordless sudo, and the VM is the sandbox. What this grants
+# is the ability to do without sudo what that user could already do with it.
 RUN set -eu; \
     export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo; \
     curl -fsSL https://sh.rustup.rs \
@@ -663,7 +687,26 @@ RUN set -eu; \
     for proxy in "${CARGO_HOME}"/bin/*; do \
       ln -sf "${proxy}" "/usr/local/bin/$(basename "${proxy}")"; \
     done; \
-    chmod -R a+rX /usr/local/rustup /usr/local/cargo
+    chmod -R a+rX /usr/local/rustup /usr/local/cargo; \
+    groupadd --system rustup; \
+    chgrp -R rustup /usr/local/rustup; \
+    chmod -R g+rwX /usr/local/rustup; \
+    find /usr/local/rustup -type d -exec chmod g+s {} +
+
+# A default ACL on every directory, so what an account adds stays
+# group-writable under the usual umask of 022. Without it a toolchain one
+# account installs is read-only to the group, and the next account cannot add a
+# component to it or update it.
+#
+# The ACL is applied at boot by systemd-tmpfiles rather than with setfacl here,
+# because an image layer does not keep it: podman commits a layer's mode bits,
+# owner and group, which is why the setgid bits above survive, but drops
+# POSIX ACLs, so a setfacl in this build would be gone by the next step. A
+# tmpfiles rule also needs no setfacl in the image, and every boot reapplies it
+# to whatever `agent-vm update` or an account has installed since. A+ is
+# recursive and adds to whatever ACL is there; default ACLs go on directories
+# only, so the walk leaves files alone.
+RUN printf 'A+ /usr/local/rustup - - - - default:group:rustup:rwx\n' > /etc/tmpfiles.d/agent-vm-rustup.conf
 
 # RUSTUP_HOME goes in /etc/environment rather than a profile script for the
 # same reason PLAYWRIGHT_BROWSERS_PATH does: sshd reads that file through PAM,
@@ -684,6 +727,11 @@ RUN chmod 0644 /etc/profile.d/agent-vm-toolchains.sh
 # reached the way a guest reaches it, through /etc/environment, because the
 # shared RUSTUP_HOME is the part of this that can be wrong while every file is
 # in place.
+#
+# The last two checks are for the rustup group. A rustup command run as root
+# after the group step above, such as a `rustup component add` added later,
+# would create directories at 0755: the default ACL only arrives at boot. That
+# shows up only when an account inside a VM tries to install a toolchain.
 RUN set -eu; \
     go version >/dev/null || { echo "the Go toolchain installed but cannot run" >&2; exit 1; }; \
     printf 'package main\n' | gofmt >/dev/null || { echo "gofmt installed but cannot run" >&2; exit 1; }; \
@@ -693,7 +741,11 @@ RUN set -eu; \
     cargo --version >/dev/null || { echo "cargo installed but cannot run" >&2; exit 1; }; \
     rustup --version >/dev/null || { echo "rustup installed but cannot run" >&2; exit 1; }; \
     cargo fmt --version >/dev/null || { echo "rustfmt is missing from the Rust toolchain" >&2; exit 1; }; \
-    cargo clippy --version >/dev/null || { echo "clippy is missing from the Rust toolchain" >&2; exit 1; }
+    cargo clippy --version >/dev/null || { echo "clippy is missing from the Rust toolchain" >&2; exit 1; }; \
+    [ -z "$(find /usr/local/rustup ! -group rustup -print -quit)" ] \
+      || { echo "part of /usr/local/rustup is not in the rustup group; an account could not install a toolchain there" >&2; exit 1; }; \
+    [ -z "$(find /usr/local/rustup -type d ! -perm -2070 -print -quit)" ] \
+      || { echo "a directory in /usr/local/rustup is not setgid and group-writable; an account could not install a toolchain there" >&2; exit 1; }
 
 # Docker comes from the distro's own repository rather than Docker's
 # convenience script: the build then needs no extra registry or GPG key, and

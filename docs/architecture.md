@@ -231,6 +231,13 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
   the exported root, which covers first-boot writes. Cloud-init then grows the
   root partition to the overlay's virtual size, so `--disk` is what the guest
   sees.
+  The full recipe installs Rust once into `/usr/local/rustup`. The tree
+  belongs to the `rustup` group, and every directory in it is setgid and
+  group-writable, so any interactive account can install the toolchain a
+  project pins. A `tmpfiles.d` rule adds a default ACL for that group at each
+  boot, which keeps what one account installs writable by the others. The
+  rule is applied at boot because podman does not keep POSIX ACLs in a
+  committed layer (ADR-0024).
   Each family also has three variant recipes, each built and cached as a base
   image of its own under `images/<family>-<variant>/<tag>/`, sharing the boot,
   cloud-init, clock, and SSH blocks with the full recipe word for word.
@@ -292,8 +299,9 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 ### `internal/guestinit`
 
 - **Responsibility:** Generate the two files the NoCloud seed carries — the
-  **user-data** (hostname, guest user, authorized SSH public keys, and any
-  operator-supplied user-data merged in) and the **meta-data** (instance id and
+  **user-data** (hostname, guest user and its `docker`, `libvirt`, `kvm`, and
+  `rustup` groups, authorized SSH public keys, and any operator-supplied
+  user-data merged in) and the **meta-data** (instance id and
   hostname). We own the content; writing it onto a filesystem is `virt-make-fs`'s
   job, driven from `internal/domain` (ADR-0011). `virt-install` always boots the
   guest it defines, so there is no "define without starting" mode:

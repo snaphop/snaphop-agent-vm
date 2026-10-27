@@ -126,6 +126,19 @@ migration or rebuild step a user has to take.
 
 ### Fixed
 
+- On the full images (`ubuntu`, `fedora`, `arch`), the login user and every
+  other interactive account can install a Rust toolchain without `sudo`.
+  Before this, `cargo` in a project that pins a toolchain in
+  `rust-toolchain.toml` failed with "could not create temp file
+  /usr/local/rustup/tmp/...: Permission denied", because the shared
+  `/usr/local/rustup` was writable only by root. It now belongs to a new
+  `rustup` group, and the generated cloud-init user-data puts the login user
+  in it. `rustup toolchain install`, `rustup component add`, and
+  `rustup update` work for any account in that group, and a toolchain one
+  account installs can be updated by the others (ADR-0024). Runner images
+  are unchanged: their Rust home already belongs to `github-runner`. An image
+  already cached gains this after `agent-vm image build <family> --force`,
+  and a VM gains it when it is created again from that image.
 - Arch base images build again. The current Arch Linux container image pads
   the `en_US.UTF-8` line in `/etc/locale.gen` with trailing spaces, and the
   build's locale step failed on it for every Arch image (`arch`, `arch-slim`,
