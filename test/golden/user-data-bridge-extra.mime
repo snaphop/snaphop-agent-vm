@@ -23,8 +23,9 @@ Content-Type: text/cloud-config; charset="utf-8"
 # This is the whole guest-side contract. It authorizes public keys and creates
 # the login user and the groups that let it reach the Docker socket and libvirt
 # and install Rust toolchains. It installs no packages and carries no
-# credentials. A bridged guest also publishes its hostname and SSH with mDNS. A
-# NAT guest does not.
+# credentials. It writes a git identity for this VM: user.name is the VM name
+# and user.email is that name at the configured domain. A bridged guest also
+# publishes its hostname and SSH with mDNS. A NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -78,7 +79,8 @@ disable_root: true
 # rules make that ordering mean something: their lists are added to ours, and
 # where both set the same key, the settings above win. Without an explicit rule
 # here, whether an operator could replace the authorized keys would depend on
-# cloud-init's default merger.
+# cloud-init's default merger. The git identity is a later part, so an operator
+# write_files list is kept and the .gitconfig entries are appended to it.
 merge_how: "dict(recurse_array,replace)+list(append)"
 
 --agent-vm-cloud-init
@@ -144,6 +146,39 @@ bootcmd:
       n=$((n + 1))
     done
     [ "$n" -gt 0 ]
+
+
+--agent-vm-cloud-init
+Content-Disposition: attachment; filename="agent-vm-gitconfig"
+Content-Type: text/cloud-config; charset="utf-8"
+
+#cloud-config
+# Applied after the settings part. That part replaces every list it names, so
+# these files are their own part: list(append) keeps an operator write_files
+# and still installs this VM's git identity (ADR-0026).
+merge_how: "dict(recurse_array)+list(append)"
+write_files:
+  - path: /etc/gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
+  - path: /etc/skel/.gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
+  - path: /root/.gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
 
 
 --agent-vm-cloud-init--

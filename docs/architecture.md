@@ -56,7 +56,8 @@ single-host tool with no daemon of its own.
 │  internal/cli        orchestration, confirmation, output, exit codes               │
 │  internal/config     defaults → file → env → flags, validation                     │
 │  internal/image      base image cache: podman → virt-make-fs → virt-copy-out       │
-│  internal/guestinit  cloud-init user-data + meta-data (hostname, SSH public key)   │
+│  internal/guestinit  cloud-init user-data + meta-data (hostname, SSH public key,   │
+│                      git identity)                                                 │
 │  internal/domain     virt-install argv construction; virsh lifecycle + inspection  │
 │  internal/network    virsh net-* for NAT | ip -d -json link bridge validation      │
 │  internal/state      state dir, vm.json, per-VM and per-image file locks           │
@@ -300,7 +301,9 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 
 - **Responsibility:** Generate the two files the NoCloud seed carries — the
   **user-data** (hostname, guest user and its `docker`, `libvirt`, `kvm`, and
-  `rustup` groups, authorized SSH public keys, an optional `/swapfile` when
+  `rustup` groups, authorized SSH public keys, a git identity whose name is
+  the VM name and whose email is `<name>@<domain>` (ADR-0026), an optional
+  `/swapfile` when
   `create --swap` set a size (ADR-0025), and any operator-supplied
   user-data merged in) and the **meta-data** (instance id and
   hostname). We own the content; writing it onto a filesystem is `virt-make-fs`'s

@@ -80,6 +80,9 @@ func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
 	if cfg.GitHubOrg != "" {
 		t.Errorf("GitHubOrg = %q, want empty", cfg.GitHubOrg)
 	}
+	if cfg.GitDomain != DefaultGitDomain {
+		t.Errorf("GitDomain = %q, want %s", cfg.GitDomain, DefaultGitDomain)
+	}
 }
 
 func TestLoad_PrecedenceIsDefaultsThenFileThenEnvThenFlags(t *testing.T) {
@@ -564,6 +567,55 @@ func TestLoad_GitHubOrgFromFileEnvAndFlag(t *testing.T) {
 	}
 	if fromFlag.GitHubOrg != "from-flag" {
 		t.Errorf("GitHubOrg = %q, want from-flag (flag beats env)", fromFlag.GitHubOrg)
+	}
+}
+
+func TestLoad_GitDomainFromFileEnvAndFlag(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[git]\ndomain = \"From-File.Example.\"\n")
+
+	fromFile, err := Load(noEnv, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load file: %v", err)
+	}
+	if fromFile.GitDomain != "from-file.example" {
+		t.Errorf("GitDomain = %q, want from-file.example", fromFile.GitDomain)
+	}
+
+	fromEnv, err := Load(envMap(map[string]string{
+		"HOME":                emptyHome,
+		"AGENT_VM_GIT_DOMAIN": "from-env.example",
+	}), Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load env: %v", err)
+	}
+	if fromEnv.GitDomain != "from-env.example" {
+		t.Errorf("GitDomain = %q, want from-env.example (env beats file)", fromEnv.GitDomain)
+	}
+
+	fromFlag, err := Load(envMap(map[string]string{
+		"HOME":                emptyHome,
+		"AGENT_VM_GIT_DOMAIN": "from-env.example",
+	}), Overrides{ConfigFile: path, GitDomain: "from-flag.example"})
+	if err != nil {
+		t.Fatalf("Load flag: %v", err)
+	}
+	if fromFlag.GitDomain != "from-flag.example" {
+		t.Errorf("GitDomain = %q, want from-flag.example (flag beats env)", fromFlag.GitDomain)
+	}
+}
+
+func TestLoad_RejectsAnInvalidGitDomain(t *testing.T) {
+	t.Parallel()
+	for _, domain := range []string{".local", "not a domain", "-bad.com"} {
+		t.Run(domain, func(t *testing.T) {
+			t.Parallel()
+			_, err := Load(noEnv, Overrides{GitDomain: domain})
+			var verr *ValidationError
+			if !errors.As(err, &verr) || verr.Field != "git domain" {
+				t.Fatalf("Load(%q) = %v, want a git domain *ValidationError", domain, err)
+			}
+		})
 	}
 }
 

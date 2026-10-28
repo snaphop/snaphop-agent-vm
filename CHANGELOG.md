@@ -18,6 +18,14 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- Every new VM gets a git identity. `user.name` is the VM's name and
+  `user.email` is `<name>@<domain>`. The domain defaults to `local` and can
+  be set with `create --git-domain`, `[git] domain` in the config file, or
+  `AGENT_VM_GIT_DOMAIN`. The same file is written to `/etc/gitconfig`, to
+  `/etc/skel/.gitconfig` (so the login user inherits `~/.gitconfig`), and to
+  `/root/.gitconfig`. A cached base image does not need a rebuild. A VM
+  created before this change gets the files when you create it again.
+  `--dry-run` names the name and the email (ADR-0026).
 - `agent-vm create --swap <size>` creates `/swapfile` on the guest's root
   filesystem at first boot. cloud-init makes the file after the root
   partition has grown, marks it mode 600, and turns it on again from

@@ -6,8 +6,9 @@
 # This is the whole guest-side contract. It authorizes public keys and creates
 # the login user and the groups that let it reach the Docker socket and libvirt
 # and install Rust toolchains. It installs no packages and carries no
-# credentials. A bridged guest also publishes its hostname and SSH with mDNS. A
-# NAT guest does not.
+# credentials. It writes a git identity for this VM: user.name is the VM name
+# and user.email is that name at the configured domain. A bridged guest also
+# publishes its hostname and SSH with mDNS. A NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -57,16 +58,39 @@ users:
 ssh_pwauth: false
 disable_root: true
 
-# The operator's own opencode.json, from `create --opencode-config`. The base
-# image ships one in /etc/skel and /root; this replaces both, per VM, without
-# rebuilding the image.
-#
-# It is written into /etc/skel rather than into the login user's home because
-# cloud-init runs write_files before it creates users, so skel is what the new
-# account inherits — and /root already exists here, which is why it needs its
-# own entry. The content is base64 so that a JSON document cannot be reshaped
-# by YAML quoting on its way through this file.
+# Git identity for this VM. user.name is the VM name and user.email is
+# <name>@<domain>. /etc/gitconfig applies to every account, including one the
+# image created before first boot. /etc/skel is what the login user inherits,
+# because cloud-init runs write_files before it creates users, and /root
+# already exists, so it needs its own file (ADR-0026).
 write_files:
+  - path: /etc/gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
+  - path: /etc/skel/.gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
+  - path: /root/.gitconfig
+    content: |
+      [user]
+          name = agent-01
+          email = agent-01@local
+    owner: "root:root"
+    permissions: "0644"
+
+
+  # The operator's own opencode.json, from `create --opencode-config`. The base
+  # image ships one in /etc/skel and /root; this replaces both, per VM, without
+  # rebuilding the image. The content is base64 so that a JSON document cannot
+  # be reshaped by YAML quoting on its way through this file.
   - path: /etc/skel/.config/opencode/opencode.json
     encoding: b64
     content: ewogICIkc2NoZW1hIjogImh0dHBzOi8vb3BlbmNvZGUuYWkvY29uZmlnLmpzb24iLAogICJwZXJtaXNzaW9uIjogewogICAgImVkaXQiOiAiYWxsb3ciLAogICAgImJhc2giOiAiYXNrIiwKICAgICJ3ZWJmZXRjaCI6ICJhbGxvdyIKICB9Cn0K
@@ -77,3 +101,4 @@ write_files:
     content: ewogICIkc2NoZW1hIjogImh0dHBzOi8vb3BlbmNvZGUuYWkvY29uZmlnLmpzb24iLAogICJwZXJtaXNzaW9uIjogewogICAgImVkaXQiOiAiYWxsb3ciLAogICAgImJhc2giOiAiYXNrIiwKICAgICJ3ZWJmZXRjaCI6ICJhbGxvdyIKICB9Cn0K
     owner: "root:root"
     permissions: "0644"
+
