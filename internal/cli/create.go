@@ -61,6 +61,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	bridge := flags.String("bridge", "", "host bridge to attach to; required with --network bridge")
 	cloudInit := flags.String("cloud-init", "", "extra cloud-init user-data merged into the generated user-data")
 	opencodeConfig := flags.String("opencode-config", "", "opencode.json to install in the guest, replacing the one the base image ships")
+	gitDomain := flags.String("git-domain", "", "email `domain` for the guest .gitconfig (default local); user.name is the VM name and user.email is <name>@<domain>")
 	noStart := flags.Bool("no-start", false, "define the domain without starting it")
 	waitForSSH := flags.Duration("wait-for-ssh", defaultWaitForSSH, "how long to wait for the guest to accept SSH; 0 disables waiting")
 	noUpdate := flags.Bool("no-update", false, "leave the guest's packages and tooling as the base image shipped them")
@@ -116,6 +117,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		Bridge:                 *bridge,
 		SSHKeys:                sshKeys,
 		GitHubOrg:              *githubOrgFlag,
+		GitDomain:              *gitDomain,
 		PiHoleURL:              *piholeURL,
 		PiHolePasswordFile:     *piholePasswordFile,
 		PiHoleDomain:           *piholeDomain,
@@ -182,6 +184,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		AgentVMVersion:    Version,
 		PublishMDNS:       cfg.BridgeMode(),
 		Swap:              cfg.Swap,
+		GitDomain:         cfg.GitDomain,
 	}
 	// The same checks Generate makes later, run here so they precede the
 	// tool checks, the lock, and any base image build — and so a dry run
@@ -1115,6 +1118,7 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	if cfg.Swap > 0 {
 		notes = append(notes, fmt.Sprintf("create a %s swap file at /swapfile on the root filesystem", cfg.Swap))
 	}
+	notes = append(notes, fmt.Sprintf("write .gitconfig with user.name %s and user.email %s@%s", name, name, cfg.GitDomain))
 	for _, note := range notes {
 		a.out.Printf("# %s\n", note)
 	}

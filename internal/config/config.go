@@ -121,6 +121,9 @@ type Config struct {
 	// when create registers it. Empty means create leaves the runner
 	// unconfigured. It is never a secret.
 	GitHubOrg string
+	// GitDomain is the domain in the guest's git email, <vm-name>@<domain>.
+	// The default is local. It is never a secret (ADR-0026).
+	GitDomain string
 
 	// PiHole is where create --pihole registers <name>.<domain>. The password
 	// is not a field here: it is read from PasswordFile at the moment of use
@@ -181,6 +184,7 @@ type Overrides struct {
 	GuestUser string
 	SSHKeys   []string
 	GitHubOrg string
+	GitDomain string
 
 	PiHoleURL          string
 	PiHolePasswordFile string
@@ -261,6 +265,7 @@ func defaults() *Config {
 		Network:           DefaultNetwork,
 		NATNetwork:        DefaultNATNetwork,
 		GuestUser:         DefaultGuestUser,
+		GitDomain:         DefaultGitDomain,
 	}
 }
 
@@ -325,6 +330,7 @@ func environOverrides(env Environ) Overrides {
 		o.SSHKeys = []string{key}
 	}
 	o.GitHubOrg = env("AGENT_VM_GITHUB_ORG")
+	o.GitDomain = env("AGENT_VM_GIT_DOMAIN")
 	o.PiHoleURL = env("AGENT_VM_PIHOLE_URL")
 	o.PiHolePasswordFile = env("AGENT_VM_PIHOLE_PASSWORD_FILE")
 	o.PiHoleDomain = env("AGENT_VM_PIHOLE_DOMAIN")
@@ -455,6 +461,15 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 		}
 		if org != "" {
 			cfg.GitHubOrg = org
+		}
+	}
+	if o.GitDomain != "" {
+		domain, err := ParseGitDomain(o.GitDomain)
+		if err != nil {
+			return err
+		}
+		if domain != "" {
+			cfg.GitDomain = domain
 		}
 	}
 	if o.PiHoleURL != "" {

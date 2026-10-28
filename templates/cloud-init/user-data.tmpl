@@ -6,8 +6,9 @@
 # This is the whole guest-side contract. It authorizes public keys and creates
 # the login user and the groups that let it reach the Docker socket and libvirt
 # and install Rust toolchains. It installs no packages and carries no
-# credentials. A bridged guest also publishes its hostname and SSH with mDNS. A
-# NAT guest does not.
+# credentials. It writes a git identity for this VM: user.name is the VM name
+# and user.email is that name at the configured domain. A bridged guest also
+# publishes its hostname and SSH with mDNS. A NAT guest does not.
 # A base image is shared by every VM built on it, so anything per-VM has to
 # arrive here, and anything secret must not arrive at all (SECURITY.md).
 
@@ -81,15 +82,41 @@ bootcmd:
   - |
 {{ indent 4 .MDNSScript }}
 {{- end }}
+{{ if not .HasExtraUserData }}
+# Git identity for this VM. user.name is the VM name and user.email is
+# <name>@<domain>. /etc/gitconfig applies to every account, including one the
+# image created before first boot. /etc/skel is what the login user inherits,
+# because cloud-init runs write_files before it creates users, and /root
+# already exists, so it needs its own file (ADR-0026).
+write_files:
+{{ .GitconfigFiles }}
+{{ if .HasOpencodeConfig }}
+  # The operator's own opencode.json, from `create --opencode-config`. The base
+  # image ships one in /etc/skel and /root; this replaces both, per VM, without
+  # rebuilding the image. The content is base64 so that a JSON document cannot
+  # be reshaped by YAML quoting on its way through this file.
+  - path: /etc/skel/.config/opencode/opencode.json
+    encoding: b64
+    content: {{ .OpencodeConfigBase64 }}
+    owner: "root:root"
+    permissions: "0644"
+  - path: /root/.config/opencode/opencode.json
+    encoding: b64
+    content: {{ .OpencodeConfigBase64 }}
+    owner: "root:root"
+    permissions: "0644"
+{{ end }}
+{{ end -}}
 {{ if .HasExtraUserData }}
 # This part is applied after the operator's own user-data, and these merge
 # rules make that ordering mean something: their lists are added to ours, and
 # where both set the same key, the settings above win. Without an explicit rule
 # here, whether an operator could replace the authorized keys would depend on
-# cloud-init's default merger.
+# cloud-init's default merger. The git identity is a later part, so an operator
+# write_files list is kept and the .gitconfig entries are appended to it.
 merge_how: "dict(recurse_array,replace)+list(append)"
 {{ end -}}
-{{ if .HasOpencodeConfig }}
+{{ if and .HasExtraUserData .HasOpencodeConfig }}
 # The operator's own opencode.json, from `create --opencode-config`. The base
 # image ships one in /etc/skel and /root; this replaces both, per VM, without
 # rebuilding the image.

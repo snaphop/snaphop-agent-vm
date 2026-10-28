@@ -1,0 +1,7 @@
+#cloud-config
+# Applied after the settings part. That part replaces every list it names, so
+# these files are their own part: list(append) keeps an operator write_files
+# and still installs this VM's git identity (ADR-0026).
+merge_how: "dict(recurse_array)+list(append)"
+write_files:
+{{ . }}

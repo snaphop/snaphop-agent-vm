@@ -187,6 +187,10 @@ Chromium, `tmux` with a session menu at login, the
 permissive mode, because the VM is the sandbox. Guests can also run VMs of
 their own.
 
+`create` writes a `.gitconfig` for the VM. `user.name` is the VM's name and
+`user.email` is `<name>@<domain>`. The domain defaults to `local`. Set it
+with `--git-domain`.
+
 **No credentials are baked in.** The agents ship configured but
 unauthenticated; logins arrive per VM. The full inventory, and why each piece
 is where it is, is in [`docs/cli.md`](./docs/cli.md#guest-tooling).
@@ -254,7 +258,7 @@ flattened rootfs + kernel packages ──────► base.qcow2 + vmlinuz + 
                                                           │
 agent-vm create ◄─────────────────────────────────────────┘
    │   qemu-img create -b base.qcow2 …        (copy-on-write overlay)
-   │   virt-make-fs --label=cidata seed/      (NoCloud seed: hostname, SSH key)
+   │   virt-make-fs --label=cidata seed/      (NoCloud seed: hostname, SSH key, git identity)
    │   virt-install --import --boot kernel=…  (direct kernel boot)
    │   ssh: same steps as agent-vm update     (packages and tooling)
    ▼

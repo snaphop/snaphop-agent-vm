@@ -51,6 +51,12 @@ type fileConfig struct {
 		Org string `toml:"org"`
 	} `toml:"github"`
 
+	// Git names the domain in the guest's git email, <vm-name>@<domain>.
+	// The name is the VM name and is not a config value (ADR-0026).
+	Git struct {
+		Domain string `toml:"domain"`
+	} `toml:"git"`
+
 	// PiHole names the DNS server create --pihole registers a guest on.
 	// The password is a file path, never the password itself (ADR-0021).
 	PiHole struct {
@@ -127,6 +133,7 @@ func loadFile(path string) (Overrides, bool, error) {
 		GuestUser:              file.Guest.User,
 		SSHKeys:                file.Guest.SSHKeys,
 		GitHubOrg:              file.GitHub.Org,
+		GitDomain:              file.Git.Domain,
 		PiHoleURL:              file.PiHole.URL,
 		PiHolePasswordFile:     file.PiHole.PasswordFile,
 		PiHoleDomain:           file.PiHole.Domain,

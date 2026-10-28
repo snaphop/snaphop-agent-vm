@@ -141,6 +141,9 @@ ssh_keys = ["~/.ssh/id_ed25519.pub"]
 [github]
 org = "acme"   # optional: register a -runner VM with this organization
 
+[git]
+domain = "example.com"   # optional; the guest's git email is <name>@<domain>. Default is local.
+
 [pihole]
 url = "https://pi.hole"   # used only when create is given --pihole
 password_file = "~/.config/agent-vm/pihole-password"   # mode 600, one password
@@ -189,6 +192,7 @@ the **client** home directory, so use absolute remote paths.
 | `AGENT_VM_BRIDGE` | `create --bridge` |
 | `AGENT_VM_SSH_KEY` | `create --ssh-key` |
 | `AGENT_VM_GITHUB_ORG` | `create --github-org` |
+| `AGENT_VM_GIT_DOMAIN` | `create --git-domain` |
 | `AGENT_VM_PIHOLE_URL` | `create --pihole-url`. `destroy` keeps the URL stored in `vm.json` unless that command is given `--pihole-url` |
 | `AGENT_VM_PIHOLE_PASSWORD_FILE` | `create --pihole-password-file` and `destroy --pihole-password-file` |
 | `AGENT_VM_PIHOLE_DOMAIN` | `create --pihole-domain` |
@@ -1310,6 +1314,38 @@ still requires a key passed to `create`. `agent-vm create --github-ssh-key`
 adds the public half to your GitHub account, and `agent-vm destroy
 --github-ssh-key` removes it again.
 
+#### Git identity
+
+Every VM gets a git identity at first boot
+([ADR-0026](./decisions/0026-write-a-git-identity-for-the-vm.md)).
+`user.name` is the VM's name. `user.email` is `<name>@<domain>`. The domain
+defaults to `local`, so a VM named `agent-01` commits as
+`agent-01 <agent-01@local>`. Set the domain with `--git-domain`, with
+`[git] domain` in the config file, or with `AGENT_VM_GIT_DOMAIN`. A domain
+is a DNS name such as `example.com`, with no leading dot.
+
+The same file is written to three paths:
+
+- `/etc/gitconfig`, which every account reads, including `github-runner`
+- `/etc/skel/.gitconfig`, which the login user inherits as `~/.gitconfig`
+- `/root/.gitconfig`
+
+cloud-init writes those files before it creates the login user, so a cached
+base image does not need a rebuild. A VM created before this change gets
+them when you create it again. `agent-vm update` does not rewrite them.
+
+```console
+$ agent-vm create agent-01 --git-domain example.com
+```
+
+`--dry-run` names the name and the email.
+
+When `--cloud-init` is also set, the identity is a later cloud-config part
+that appends its `write_files` to yours, so your files stay. If your file
+writes one of the three paths above, the identity is what remains in that
+path. A different author can be set after boot with `git config --global`,
+which replaces the home file and leaves `/etc/gitconfig` underneath it.
+
 #### The tmux session menu
 
 An interactive login lands on a small menu rather than a bare prompt, because
@@ -1404,6 +1440,7 @@ and must not already exist.
 | `--host-authorized-keys` | off | Also authorize every key in this host account's `~/.ssh/authorized_keys` and `~/.ssh/authorized-keys/authorized_keys`. Combines with `--ssh-key`. |
 | `--cloud-init <path>` | none | Extra cloud-init user-data merged into the generated user-data. |
 | `--opencode-config <path>` | none | Your own `opencode.json`, installed in the guest in place of the one the base image ships. Must be valid JSON. |
+| `--git-domain <domain>` | `local` | Domain in the guest's git email, so the address is `<name>@<domain>`. `user.name` is the VM name. No leading dot. Also `[git] domain` and `AGENT_VM_GIT_DOMAIN`. See [Git identity](#git-identity). |
 | `--virt-install-arg <arg>` | none | Extra argument passed through to `virt-install`; repeatable. The escape hatch for anything this CLI does not expose. |
 | `--no-start` | off | **Not honored — rejected with exit `2`.** See below. |
 | `--wait-for-ssh <duration>` | `90s` | How long to wait for the guest to accept SSH; `0` disables waiting and skips the guest update. |
@@ -1432,7 +1469,8 @@ stays the description of how the VM was defined.
 
 Inputs are checked before anything on the host is touched. The SSH keys, the
 `--cloud-init` file (it must begin with a header cloud-init recognizes), the
-`--opencode-config` file (it must be valid JSON), and — when a join was
+`--opencode-config` file (it must be valid JSON), the git domain (a DNS name,
+default `local`), and — when a join was
 requested — the Tailscale auth key file (one key, and nothing else), and —
 when `--pihole` was requested — the Pi-hole URL, the domain, and the password
 file (a regular file, mode `600`, one password) are read
@@ -2374,6 +2412,7 @@ table below is the summary.
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
 | `create --swap` | the `create` tools; the cloud-init user-data gains a `swap` key (`filename: /swapfile` and the size given). cloud-init's mounts module creates the file on first boot. No extra host command |
+| `create` git identity | the `create` tools; the cloud-init user-data gains `write_files` entries for `/etc/gitconfig`, `/etc/skel/.gitconfig`, and `/root/.gitconfig`. `user.name` is the VM name and `user.email` is `<name>@<domain>` (`local` unless `--git-domain` says otherwise). When `--cloud-init` is also set, those entries are a later part that appends to `write_files`. No extra host command |
 | `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`; `--xml ./devices/interface/rom/@enabled=no` so QEMU does not load a virtio option ROM), `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe; `virsh domifaddr` and, when a NAT guest has more than one lease, `virsh net-dhcp-leases` are read again before each probe), then the guest commands listed for `update` (skipped with `--no-update` or `--wait-for-ssh 0`) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`). `start` and `restart` of a VM with a recorded Pi-hole name also call the same Pi-hole HTTP API as `create --pihole` when libvirt reports a different address. `stop` does not call Pi-hole |

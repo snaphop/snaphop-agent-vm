@@ -26,6 +26,7 @@ func options() Options {
 		User:              "agent",
 		SSHAuthorizedKeys: []string{testKey},
 		AgentVMVersion:    "0.1.0-test",
+		GitDomain:         config.DefaultGitDomain,
 	}
 }
 
@@ -88,7 +89,7 @@ func TestGenerate_KeepsAnOperatorSwapKeyInItsOwnPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	_, bodies := parseParts(t, got, 2)
+	_, bodies := parseParts(t, got, 3)
 	if !strings.Contains(bodies[0], "/operator-swap") {
 		t.Errorf("the operator's swap key was rewritten:\n%s", bodies[0])
 	}
@@ -184,8 +185,8 @@ func TestGenerate_PublishesMDNSAlongsideOperatorUserData(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	golden.Assert(t, "user-data-bridge-extra.mime", got)
-	types, bodies := parseParts(t, got, 3)
-	if want := []string{"text/cloud-config", "text/cloud-config", "text/cloud-config"}; !equal(types, want) {
+	types, bodies := parseParts(t, got, 4)
+	if want := []string{"text/cloud-config", "text/cloud-config", "text/cloud-config", "text/cloud-config"}; !equal(types, want) {
 		t.Errorf("part content types = %v, want %v", types, want)
 	}
 	if !strings.Contains(bodies[0], "echo operator-boot") {
@@ -203,6 +204,12 @@ func TestGenerate_PublishesMDNSAlongsideOperatorUserData(t *testing.T) {
 	script := mdnsBootcmdScript(t, bodies[2])
 	if !strings.Contains(script, "name='agent-01'") || !strings.Contains(script, "\nEOF\n") {
 		t.Errorf("the publication script is missing from the appended part:\n%s", script)
+	}
+	if strings.Contains(bodies[1], "path: /etc/gitconfig") {
+		t.Errorf("the settings part carries the git identity, so it would replace an operator write_files:\n%s", bodies[1])
+	}
+	if !strings.Contains(bodies[3], "path: /etc/skel/.gitconfig") || !strings.Contains(bodies[3], "email = agent-01@local") {
+		t.Errorf("the git identity is missing from the appended part:\n%s", bodies[3])
 	}
 }
 
@@ -446,8 +453,8 @@ func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
 	}
 	golden.Assert(t, "user-data-extra.mime", got)
 
-	types, bodies := parseParts(t, got, 2)
-	if want := []string{"text/cloud-config", "text/cloud-config"}; !equal(types, want) {
+	types, bodies := parseParts(t, got, 3)
+	if want := []string{"text/cloud-config", "text/cloud-config", "text/cloud-config"}; !equal(types, want) {
 		t.Errorf("part content types = %v, want %v", types, want)
 	}
 	// Ours is applied last, and says so, which is what keeps operator data from
@@ -461,6 +468,12 @@ func TestGenerate_MergesOperatorUserDataAsASeparateMIMEPart(t *testing.T) {
 	if !strings.Contains(bodies[1], testKey) {
 		t.Errorf("the generated part must still authorize the key:\n%s", bodies[1])
 	}
+	if strings.Contains(bodies[1], "write_files:") {
+		t.Errorf("the settings part names write_files, so it would replace the operator's files:\n%s", bodies[1])
+	}
+	if !strings.Contains(bodies[2], "path: /etc/skel/.gitconfig") || !strings.Contains(bodies[2], `merge_how: "dict(recurse_array)+list(append)"`) {
+		t.Errorf("the git identity is not an appended part:\n%s", bodies[2])
+	}
 }
 
 func TestGenerate_ClassifiesAShellScriptUserData(t *testing.T) {
@@ -472,7 +485,7 @@ func TestGenerate_ClassifiesAShellScriptUserData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	types, _ := parseParts(t, got, 2)
+	types, _ := parseParts(t, got, 3)
 	if types[0] != "text/x-shellscript" {
 		t.Errorf("first part content type = %q, want text/x-shellscript", types[0])
 	}
@@ -750,6 +763,8 @@ func TestGenerate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
 	for _, path := range []string{
 		"path: /etc/skel/.config/opencode/opencode.json",
 		"path: /root/.config/opencode/opencode.json",
+		"path: /etc/skel/.gitconfig",
+		"email = agent-01@local",
 	} {
 		if !strings.Contains(string(got), path) {
 			t.Errorf("user-data does not write %s:\n%s", path, got)
@@ -764,16 +779,96 @@ func TestGenerate_InstallsTheOperatorsOpencodeConfig(t *testing.T) {
 	if strings.Contains(string(got), `"$schema"`) {
 		t.Errorf("the config was emitted as raw JSON inside the YAML:\n%s", got)
 	}
+	if strings.Count(string(got), "write_files:") != 1 {
+		t.Errorf("opencode and the git identity are separate write_files keys, so one of them is dropped:\n%s", got)
+	}
 }
 
-func TestGenerate_OmitsWriteFilesWithoutAnOpencodeConfig(t *testing.T) {
+func TestGenerate_OmitsOpencodeFilesWithoutAnOpencodeConfig(t *testing.T) {
 	t.Parallel()
 	got, err := Generate(options())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if strings.Contains(string(got), "write_files") {
-		t.Errorf("user-data writes files nobody asked for:\n%s", got)
+	if strings.Contains(string(got), "opencode.json") {
+		t.Errorf("user-data writes an opencode config nobody asked for:\n%s", got)
+	}
+}
+
+func TestGenerate_NamesGitAfterTheVM(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.Hostname = "build-01"
+	opts.GitDomain = "Lab.Example"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	text := string(got)
+	for _, path := range []string{"/etc/gitconfig", "/etc/skel/.gitconfig", "/root/.gitconfig"} {
+		if !strings.Contains(text, "path: "+path) {
+			t.Errorf("user-data does not write %s:\n%s", path, text)
+		}
+	}
+	for _, want := range []string{"name = build-01", "email = build-01@lab.example"} {
+		if strings.Count(text, want) != 3 {
+			t.Errorf("user-data has %d copies of %q, want one in each git config:\n%s", strings.Count(text, want), want, text)
+		}
+	}
+	if strings.Contains(text, "agent-01@") || strings.Contains(text, "@local") {
+		t.Errorf("user-data kept the default identity:\n%s", text)
+	}
+	// One write_files key. A second would replace the first when cloud-init
+	// reads a plain document, and one of the two files would never be written.
+	if strings.Count(text, "write_files:") != 1 {
+		t.Errorf("user-data has %d write_files keys, want 1:\n%s", strings.Count(text, "write_files:"), text)
+	}
+}
+
+func TestGenerate_AppendsGitConfigWithoutReplacingOperatorWriteFiles(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.ExtraUserData = []byte("#cloud-config\nwrite_files:\n  - path: /etc/motd\n    content: hello\n")
+	opts.ExtraSource = "/home/operator/extra.yaml"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, bodies := parseParts(t, got, 3)
+	if !strings.Contains(bodies[0], "path: /etc/motd") {
+		t.Errorf("the operator's write_files was rewritten:\n%s", bodies[0])
+	}
+	if strings.Contains(bodies[1], "write_files:") || strings.Contains(bodies[1], "/etc/gitconfig") {
+		t.Errorf("the settings part would replace the operator's write_files:\n%s", bodies[1])
+	}
+	if !strings.Contains(bodies[2], "path: /etc/skel/.gitconfig") || !strings.Contains(bodies[2], "email = agent-01@local") {
+		t.Errorf("the git identity was not appended:\n%s", bodies[2])
+	}
+	if strings.Contains(bodies[2], "dict(recurse_array,replace)") {
+		t.Errorf("the git identity part replaces lists:\n%s", bodies[2])
+	}
+}
+
+func TestGenerate_RejectsAnInvalidGitDomain(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.GitDomain = "not a domain"
+
+	for name, run := range map[string]func() error{
+		"Generate": func() error { _, err := Generate(opts); return err },
+		"Validate": opts.Validate,
+	} {
+		var validation *config.ValidationError
+		if err := run(); !errors.As(err, &validation) || validation.Field != "git domain" {
+			t.Errorf("%s = %v, want a git domain ValidationError", name, err)
+		}
+	}
+
+	opts.GitDomain = ""
+	if _, err := Generate(opts); err == nil {
+		t.Error("Generate accepted a git identity with no domain")
 	}
 }
 

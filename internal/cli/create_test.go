@@ -1356,6 +1356,91 @@ func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 	}
 }
 
+func TestCreate_WritesAGitConfigNamedAfterTheVM(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir,
+		append(createArgs(keyPath), "--git-domain", "Lab.Example")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	text := string(userData)
+	for _, want := range []string{
+		"path: /etc/gitconfig",
+		"path: /etc/skel/.gitconfig",
+		"path: /root/.gitconfig",
+		"name = agent-01",
+		"email = agent-01@lab.example",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("user-data is missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestCreate_UsesLocalWhenNoGitDomainIsSet(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	vm := loadVM(t, stateDir, "agent-01")
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if !strings.Contains(string(userData), "email = agent-01@local") {
+		t.Errorf("user-data did not use the default domain:\n%s", userData)
+	}
+}
+
+func TestCreate_RejectsAnInvalidGitDomain(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir,
+		append(createArgs(keyPath), "--git-domain", ".local")...)
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d for a domain that starts with a dot: %s", code, ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "git domain") {
+		t.Errorf("the refusal should name the git domain:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install ") {
+			t.Errorf("nothing should have been defined: %v", argv)
+		}
+	}
+}
+
+func TestCreate_DryRunNamesTheGitConfig(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, stdout, stderr := cliRun(t, fake, stateDir,
+		append([]string{"--dry-run"}, createArgs(keyPath, "--git-domain", "example.com")...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	const want = "write .gitconfig with user.name agent-01 and user.email agent-01@example.com"
+	if !strings.Contains(stdout, want) {
+		t.Errorf("the plan does not name the git identity:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("--dry-run created state: %v", err)
+	}
+}
+
 func TestCreate_DryRunNamesTheSwapFile(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
