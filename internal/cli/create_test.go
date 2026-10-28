@@ -1223,6 +1223,89 @@ func TestCreate_RejectsAMaxMemoryBelowTheBootMemory(t *testing.T) {
 	}
 }
 
+func TestCreate_SwapReachesTheSeedAndTheVMRecord(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, stdout, stderr := cliRun(t, createHost(t), stateDir,
+		append(createArgs(keyPath), "--swap", "4G")...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "4.0G swap") {
+		t.Errorf("create did not report the swap file:\n%s", stdout)
+	}
+
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Resources.Swap != 4*config.GiB {
+		t.Errorf("recorded swap = %s, want 4G", vm.Resources.Swap)
+	}
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	for _, want := range []string{"filename: /swapfile", `size: "4G"`} {
+		if !strings.Contains(string(userData), want) {
+			t.Errorf("user-data is missing %q:\n%s", want, userData)
+		}
+	}
+	record, err := os.ReadFile(filepath.Join(vm.Paths.Dir, state.VMRecordFile))
+	if err != nil {
+		t.Fatalf("reading vm.json: %v", err)
+	}
+	if !strings.Contains(string(record), `"swap": "4G"`) {
+		t.Errorf("vm.json does not record the swap size:\n%s", record)
+	}
+}
+
+func TestCreate_WithoutSwapLeavesTheGuestWithoutASwapFile(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+
+	code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	vm := loadVM(t, stateDir, "agent-01")
+	if vm.Resources.Swap != 0 {
+		t.Errorf("recorded swap = %s, want none", vm.Resources.Swap)
+	}
+	userData, err := os.ReadFile(vm.Paths.UserData)
+	if err != nil {
+		t.Fatalf("reading the generated user-data: %v", err)
+	}
+	if strings.Contains(string(userData), "swap:") {
+		t.Errorf("user-data asks for a swap file nobody requested:\n%s", userData)
+	}
+	record, err := os.ReadFile(filepath.Join(vm.Paths.Dir, state.VMRecordFile))
+	if err != nil {
+		t.Fatalf("reading vm.json: %v", err)
+	}
+	if strings.Contains(string(record), `"swap"`) {
+		t.Errorf("vm.json records a swap the VM was not given:\n%s", record)
+	}
+}
+
+func TestCreate_RejectsASwapThatFillsTheDisk(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, _, stderr := cliRun(t, fake, stateDir,
+		append(createArgs(keyPath), "--swap", "50G")...)
+	if code != ExitUsage {
+		t.Fatalf("exit code = %d, want %d for a swap file that fills the disk: %s", code, ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "swap") {
+		t.Errorf("the refusal should name swap:\n%s", stderr)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install ") {
+			t.Errorf("nothing should have been defined: %v", argv)
+		}
+	}
+}
+
 func TestCreate_WithoutMaxMemoryRecordsNoCeiling(t *testing.T) {
 	t.Parallel()
 	stateDir, keyPath := createEnv(t)
@@ -1255,9 +1338,37 @@ func TestCreate_DryRunPrintsThePlanAndChangesNothing(t *testing.T) {
 		}
 	}
 	// NAT is the default. The plan must not tell the operator the guest will
-	// appear on the LAN.
+	// appear on the LAN, and a create without a swap size must not name a
+	// swap file.
 	if strings.Contains(stdout, "mDNS") || strings.Contains(stdout, ".local") {
 		t.Errorf("a NAT plan publishes mDNS:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "/swapfile") {
+		t.Errorf("a plan without a swap size names a swap file:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
+		t.Errorf("--dry-run created state: %v", err)
+	}
+	for _, argv := range fake.Argvs() {
+		if strings.HasPrefix(argv, "virt-install --connect") || strings.HasPrefix(argv, "qemu-img create") {
+			t.Errorf("--dry-run must not run a mutating command: %v", argv)
+		}
+	}
+}
+
+func TestCreate_DryRunNamesTheSwapFile(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	fake := createHost(t)
+
+	code, stdout, stderr := cliRun(t, fake, stateDir,
+		append([]string{"--dry-run"}, createArgs(keyPath, "--swap", "4G")...)...)
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	const want = "create a 4G swap file at /swapfile on the root filesystem"
+	if !strings.Contains(stdout, want) {
+		t.Errorf("the plan does not name the swap file:\n%s", stdout)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "vms", "agent-01")); !os.IsNotExist(err) {
 		t.Errorf("--dry-run created state: %v", err)

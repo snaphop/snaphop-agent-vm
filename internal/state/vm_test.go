@@ -119,6 +119,36 @@ func TestSaveVM_WritesSizesInTheFormOperatorsRead(t *testing.T) {
 	if decoded.Resources.Memory != "4G" || decoded.Resources.Disk != "50G" {
 		t.Errorf("sizes = %s / %s, want 4G / 50G", decoded.Resources.Memory, decoded.Resources.Disk)
 	}
+	// A VM created without a swap file must not grow a "swap": "0" field.
+	// Records written before the field existed stay valid at schemaVersion 1.
+	if strings.Contains(string(raw), `"swap"`) {
+		t.Errorf("vm.json records a swap the VM was not given:\n%s", raw)
+	}
+}
+
+func TestSaveVM_RecordsASwapSize(t *testing.T) {
+	t.Parallel()
+	store := newStore(t)
+	vm := sampleVM(store, "agent-01")
+	vm.Resources.Swap = 4 * config.GiB
+	if err := store.SaveVM(vm); err != nil {
+		t.Fatalf("SaveVM: %v", err)
+	}
+
+	got, err := store.LoadVM("agent-01")
+	if err != nil {
+		t.Fatalf("LoadVM: %v", err)
+	}
+	if got.Resources.Swap != 4*config.GiB {
+		t.Errorf("Swap = %s, want 4G", got.Resources.Swap)
+	}
+	raw, err := store.ReadFile(filepath.Join(store.VMDir("agent-01"), VMRecordFile))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), `"swap": "4G"`) {
+		t.Errorf("vm.json does not record the swap size:\n%s", raw)
+	}
 }
 
 func TestSaveVM_RecordsNoPrivateKeyMaterial(t *testing.T) {

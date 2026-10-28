@@ -40,6 +40,31 @@ func TestInfo_PrintsTheProvenanceOfAVM(t *testing.T) {
 	}
 }
 
+func TestInfo_NamesASwapFile(t *testing.T) {
+	t.Parallel()
+	stateDir, keyPath := createEnv(t)
+	// 2G is not the default memory, so a row that only repeats the RAM size
+	// cannot satisfy this check.
+	if code, _, stderr := cliRun(t, createHost(t), stateDir, createArgs(keyPath, "--swap", "2G")...); code != ExitOK {
+		t.Fatalf("create: exit code = %d: %s", code, stderr)
+	}
+
+	code, stdout, stderr := cliRun(t, runningHost(t, "agent-01"), stateDir, "info", "agent-01")
+	if code != ExitOK {
+		t.Fatalf("exit code = %d: %s", code, stderr)
+	}
+	var swap string
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "swap" {
+			swap = fields[1]
+		}
+	}
+	if swap != "2.0G" {
+		t.Errorf("swap row = %q, want 2.0G:\n%s", swap, stdout)
+	}
+}
+
 func TestInfo_ReportsWhatTheOverlayActuallyCosts(t *testing.T) {
 	t.Parallel()
 	stateDir, _ := createdVM(t, "agent-01")

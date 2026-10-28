@@ -163,7 +163,7 @@ func completionSpecs() map[string]*completionSpec {
 		"doctor": {},
 		"setup":  {flags: []string{"github"}},
 		"create": {flags: []string{
-			"distro", "vcpus", "memory", "max-memory", "disk", "network", "bridge",
+			"distro", "vcpus", "memory", "max-memory", "disk", "swap", "network", "bridge",
 			"cloud-init", "opencode-config", "no-start", "wait-for-ssh", "no-update", "update-timeout", "ssh-key",
 			"host-authorized-keys", "virt-install-arg", "github-org", "github-ssh-key",
 			"tailscale", "tailscale-auth-key-file", "tailscale-hostname", "tailscale-login-server",

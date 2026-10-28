@@ -82,6 +82,12 @@ type VMResources struct {
 	// before this field existed stay valid without a schema bump.
 	MaxMemory config.Size `json:"maxMemory,omitempty"`
 	Disk      config.Size `json:"disk"`
+	// Swap is the swap file cloud-init creates on the root filesystem, and is
+	// absent when the VM was created without one. It is omitted rather than
+	// written as zero so that a reader can tell "no swap file" from a size,
+	// and so that vm.json files written before this field existed stay valid
+	// without a schema bump (ADR-0025).
+	Swap config.Size `json:"swap,omitempty"`
 }
 
 // VMNetwork records how the guest is attached. The mode is recorded so that

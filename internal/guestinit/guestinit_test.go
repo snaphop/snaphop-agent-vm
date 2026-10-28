@@ -36,6 +36,65 @@ func TestGenerate_MatchesTheUserDataContract(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	golden.Assert(t, "user-data-default.yaml", got)
+	if strings.Contains(string(got), "swap:") {
+		t.Errorf("a VM with no swap size must not ask cloud-init for a swap file:\n%s", got)
+	}
+}
+
+func TestGenerate_CreatesASwapFileOfTheRequestedSize(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.Swap = 4 * config.GiB
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	golden.Assert(t, "user-data-swap.yaml", got)
+	for _, want := range []string{"filename: /swapfile", `size: "4G"`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("user-data is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerate_PublishesMDNSAndCreatesASwapFileTogether(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.PublishMDNS = true
+	opts.Swap = 2 * config.GiB
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	text := string(got)
+	if !strings.Contains(text, "filename: /swapfile") || !strings.Contains(text, `size: "2G"`) {
+		t.Errorf("user-data dropped the swap file:\n%s", text)
+	}
+	if !strings.Contains(text, "MulticastDNS=yes") {
+		t.Errorf("user-data dropped the mDNS publication:\n%s", text)
+	}
+}
+
+func TestGenerate_KeepsAnOperatorSwapKeyInItsOwnPart(t *testing.T) {
+	t.Parallel()
+	opts := options()
+	opts.Swap = 4 * config.GiB
+	opts.ExtraUserData = []byte("#cloud-config\nswap:\n  filename: /operator-swap\n  size: 1G\n")
+	opts.ExtraSource = "/home/operator/extra.yaml"
+
+	got, err := Generate(opts)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	_, bodies := parseParts(t, got, 2)
+	if !strings.Contains(bodies[0], "/operator-swap") {
+		t.Errorf("the operator's swap key was rewritten:\n%s", bodies[0])
+	}
+	if !strings.Contains(bodies[1], "filename: /swapfile") || !strings.Contains(bodies[1], `size: "4G"`) {
+		t.Errorf("the settings part does not name the swap file:\n%s", bodies[1])
+	}
 }
 
 func TestGenerate_LeavesNATWithoutMDNS(t *testing.T) {

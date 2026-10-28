@@ -125,6 +125,7 @@ vcpus   = 2
 memory  = "4G"
 # max_memory = "16G"   # optional: ceiling the guest can be grown to at runtime
 disk    = "50G"
+# swap    = "4G"   # optional: /swapfile on the root filesystem, created at first boot
 network = "nat"
 
 [network.nat]
@@ -183,6 +184,7 @@ the **client** home directory, so use absolute remote paths.
 | `AGENT_VM_MEMORY` | `create --memory` |
 | `AGENT_VM_MAX_MEMORY` | `create --max-memory` |
 | `AGENT_VM_DISK` | `create --disk` |
+| `AGENT_VM_SWAP` | `create --swap` |
 | `AGENT_VM_NETWORK` | `create --network` |
 | `AGENT_VM_BRIDGE` | `create --bridge` |
 | `AGENT_VM_SSH_KEY` | `create --ssh-key` |
@@ -1395,6 +1397,7 @@ and must not already exist.
 | `--memory <size>` | `4G` | Guest RAM at boot (`512M`, `4G`, `8G`), from `256M` to `1024G`. |
 | `--max-memory <size>` | unset | Ceiling the guest's RAM can be grown to while it runs, using a `virtio-mem` device. Unset means a fixed-size guest. See [Growable Memory](#growable-memory). |
 | `--disk <size>` | `50G` | Virtual root disk size (thin overlay), from `1G` to `8T`. Cloud-init grows the guest's root partition to this size at first boot. |
+| `--swap <size>` | unset | Swap file at `/swapfile` on the root filesystem, created at first boot. A whole number of mebibytes, at least `1M`, leaving at least `1G` of the virtual disk for the root filesystem. Unset means no swap file. `0` clears a configured size. See [Swap file](#swap-file). |
 | `--network <nat\|bridge>` | `nat` | Network mode. `bridge` also publishes the guest's hostname and SSH on the LAN with mDNS. |
 | `--bridge <iface>` | config value | Host bridge to attach to; required with `--network bridge` unless configured. |
 | `--ssh-key <path>` | config value, else this account's `~/.ssh` identities | SSH **public** key(s) to authorize; repeatable. |
@@ -1544,6 +1547,41 @@ Constraints, all of which are checked before anything on the host changes:
 
 A VM created without `--max-memory` gets exactly the domain it always did: no
 `maxMemory`, no guest NUMA topology, and no memory device.
+
+#### Swap file
+
+`--swap` asks cloud-init to create `/swapfile` on the root filesystem at
+first boot
+([ADR-0025](./decisions/0025-create-an-optional-swap-file.md)).
+The mounts module, which the base images already run, creates the file after
+the root partition has grown to the virtual disk, marks it mode 600, and adds
+it to `/etc/fstab`. Later boots turn it on from that entry. No base image
+rebuild is required. A VM created before this change gets a swap file when
+you create it again. `agent-vm update` does not add or resize one.
+
+Unset means no swap file, which is the default
+([ADR-0007](./decisions/0007-default-vm-resource-profile.md)).
+`0` clears a size set in the config file or the environment.
+
+The size is a whole number of mebibytes, at least `1M`. At least `1G` of the
+virtual disk stays for the root filesystem, so on the default `50G` disk the
+largest swap is `49G`. The file is written, so the thin overlay grows by
+about that much on the host. The image's own files also occupy the
+filesystem. If the swap file still does not fit, cloud-init records a warning
+and the guest boots without swap.
+
+```console
+$ agent-vm create agent-01 --swap 4G
+```
+
+`--dry-run` of a create with a swap size names `/swapfile` and that size.
+
+When `--cloud-init` also sets a `swap` key, the generated settings replace
+that key. A create without `--swap` leaves the operator's `swap` key as
+written.
+
+`resources.swap` in `vm.json` is the size, present only when one was set.
+`schemaVersion` stays 1.
 
 Once SSH accepts a login, `create` brings the guest up to date before it
 joins Tailscale or registers anything with GitHub. The steps are the same
@@ -2335,6 +2373,7 @@ table below is the summary.
 | `destroy --github-ssh-key` | the `destroy` tools, plus `gh auth status`, `gh api --method DELETE user/keys/<id>`, and `gh api user` (to name the account when the key is not there) |
 | `destroy` of a recorded Actions runner | the `destroy` tools, plus `gh auth status` and `gh api --method DELETE orgs/<org>/actions/runners/<id> --silent` before `virsh undefine`. A recorded id of 0 is looked up first with `gh api --paginate orgs/<org>/actions/runners` |
 | `create --max-memory` | the `create` tools; `virt-install` additionally gets `--memory <boot>,maxMemory=<ceiling>,maxMemory.slots=16`, a single-cell guest NUMA topology on `--cpu`, and `--memdev model=virtio-mem,target.node=0,target.block=2048,target.size=<growth>,target.requested=0` |
+| `create --swap` | the `create` tools; the cloud-init user-data gains a `swap` key (`filename: /swapfile` and the size given). cloud-init's mounts module creates the file on first boot. No extra host command |
 | `create` | `find /boot -maxdepth 1 -name vmlinuz-* -print` and `test -r` of each versioned kernel (skipped under `--dry-run` and when `appliance_kernel` is set; an unreadable kernel exits 3 before a VM directory exists), then `virt-make-fs --type=vfat --label=cidata` (the cloud-init seed), `qemu-img create`, `virsh net-list`/`net-define`/`net-start`/`net-autostart` (autostart only for a network it defined), `virsh net-dumpxml` (an existing network must forward by NAT), `ip -d -json link` (bridge mode), `virsh capabilities`, `virt-install --import --boot kernel=…,initrd=… --disk …seed.img,bus=virtio,readonly=on --sysinfo type=smbios,…` (on x86, also `--cpu host-passthrough,-hypervisor` and `--features kvm.hidden.state=on`; the `--network` value carries a locally administered `mac=`; `--xml ./devices/interface/rom/@enabled=no` so QEMU does not load a virtio option ROM), `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `virsh domiflist`, `virsh dumpxml`, `ssh` (readiness probe; `virsh domifaddr` and, when a NAT guest has more than one lease, `virsh net-dhcp-leases` are read again before each probe), then the guest commands listed for `update` (skipped with `--no-update` or `--wait-for-ssh 0`) |
 | `list` / `info` | `virsh list --all --name`, `virsh domstate`, `virsh domifaddr` (and `virsh net-dhcp-leases` when a NAT guest has more than one lease for its MAC), `qemu-img info -U --output=json` (`info` only) |
 | `start` / `stop` / `restart` | `virsh start`, `virsh shutdown`, `virsh destroy` (for `--force`). `start` and `restart` of a VM with a recorded Pi-hole name also call the same Pi-hole HTTP API as `create --pihole` when libvirt reports a different address. `stop` does not call Pi-hole |
@@ -2475,7 +2514,7 @@ answer that goes stale.
 | `name`, `createdAt`, `libvirtUri` | Identity, creation time (UTC), and the connection the domain was defined on. |
 | `distro` | The resolved `<distro>:<tag>` reference, including the default tag when omitted. |
 | `baseImage` | The image the overlay is backed by, **by digest as well as by name** — a tag can be rebuilt, a digest cannot. `path` is the backing file. |
-| `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. `maxMemory` is present only for a VM created with `--max-memory`, and is the ceiling its `virtio-mem` device can grow it to. |
+| `resources` | What the domain was defined with. `memory` and `disk` are size strings (`4G`, `50G`), not byte counts. `maxMemory` is present only for a VM created with `--max-memory`, and is the ceiling its `virtio-mem` device can grow it to. `swap` is present only for a VM created with a swap size, and is that size; the file is `/swapfile`. Absent means no swap file, including records written before the field existed. `schemaVersion` stays 1. |
 | `network` | `mode` is `nat` or `bridge`; `name` is the libvirt network in NAT mode, `bridge` the host interface in bridge mode, and `mac` is what libvirt allocated. Recorded so exposure stays auditable after the fact. |
 | `guest.user` | The account to SSH in as. |
 | `guest.sshKeyPaths` | Paths of the **public** keys that were authorized; their contents are not stored in this field. |

@@ -163,7 +163,11 @@ func resourceSummary(vm *state.VM) string {
 		// has been plugged in.
 		memory += "-" + max.Human()
 	}
-	return fmt.Sprintf("%dv/%s/%s", vm.Resources.VCPUs, memory, vm.Resources.Disk.Human())
+	summary := fmt.Sprintf("%dv/%s/%s", vm.Resources.VCPUs, memory, vm.Resources.Disk.Human())
+	if vm.Resources.Swap > 0 {
+		summary += "+" + vm.Resources.Swap.Human() + "swap"
+	}
+	return summary
 }
 
 // memoryDetail names the ceiling a virtio-mem device can grow the guest to,
@@ -182,7 +186,11 @@ func describeResources(r state.VMResources) string {
 	if r.MaxMemory > r.Memory {
 		memory += fmt.Sprintf(" (growable to %s)", r.MaxMemory.Human())
 	}
-	return fmt.Sprintf("%d vCPU, %s, %s disk", r.VCPUs, memory, r.Disk.Human())
+	summary := fmt.Sprintf("%d vCPU, %s, %s disk", r.VCPUs, memory, r.Disk.Human())
+	if r.Swap > 0 {
+		summary += ", " + r.Swap.Human() + " swap"
+	}
+	return summary
 }
 
 // networkSummary names the mode and, in bridged mode, the bridge — because

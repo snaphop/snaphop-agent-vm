@@ -56,6 +56,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 	memory := flags.String("memory", "", "guest RAM, for example 512M or 4G")
 	maxMemory := flags.String("max-memory", "", "ceiling the guest's RAM can be grown to at runtime, via virtio-mem; unset means a fixed-size guest")
 	disk := flags.String("disk", "", "virtual root disk size (a thin overlay)")
+	swap := flags.String("swap", "", "swap file on the guest's root filesystem, for example 4G; unset means no swap file, and 0 clears a configured size")
 	networkMode := flags.String("network", "", "network mode: nat or bridge")
 	bridge := flags.String("bridge", "", "host bridge to attach to; required with --network bridge")
 	cloudInit := flags.String("cloud-init", "", "extra cloud-init user-data merged into the generated user-data")
@@ -110,6 +111,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		Memory:                 *memory,
 		MaxMemory:              *maxMemory,
 		Disk:                   *disk,
+		Swap:                   *swap,
 		Network:                *networkMode,
 		Bridge:                 *bridge,
 		SSHKeys:                sshKeys,
@@ -179,6 +181,7 @@ func runCreate(ctx context.Context, app *App, args []string) (err error) {
 		OpencodeSource:    *opencodeConfig,
 		AgentVMVersion:    Version,
 		PublishMDNS:       cfg.BridgeMode(),
+		Swap:              cfg.Swap,
 	}
 	// The same checks Generate makes later, run here so they precede the
 	// tool checks, the lock, and any base image build — and so a dry run
@@ -621,7 +624,7 @@ func (a *App) buildVM(ctx context.Context, req createRequest, rollback *createRo
 		SourceDigest: req.manifest.SourceDigest,
 		Path:         store.BaseDiskPath(req.manifest.Distro, req.manifest.Tag),
 	}
-	vm.Resources = state.VMResources{VCPUs: cfg.VCPUs, Memory: cfg.Memory, MaxMemory: cfg.MaxMemory, Disk: cfg.Disk}
+	vm.Resources = state.VMResources{VCPUs: cfg.VCPUs, Memory: cfg.Memory, MaxMemory: cfg.MaxMemory, Disk: cfg.Disk, Swap: cfg.Swap}
 	// Only the attachment the mode actually uses is recorded. A bridged VM is
 	// never on the NAT network and a NAT VM is never on the configured bridge,
 	// and recording the unused one — both are configured whether or not they
@@ -1108,6 +1111,9 @@ func (a *App) printCreatePlan(cfg *config.Config, name string, extraArgs []strin
 	}
 	if cfg.BridgeMode() {
 		notes = append(notes, fmt.Sprintf("publish SSH on the LAN as %s.local (_ssh._tcp) with mDNS", name))
+	}
+	if cfg.Swap > 0 {
+		notes = append(notes, fmt.Sprintf("create a %s swap file at /swapfile on the root filesystem", cfg.Swap))
 	}
 	for _, note := range notes {
 		a.out.Printf("# %s\n", note)

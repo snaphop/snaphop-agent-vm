@@ -14,6 +14,11 @@
 // A bridged guest's user-data also publishes that hostname and SSH with mDNS.
 // A NAT guest's user-data does not (ADR-0020).
 //
+// When Swap is set, the user-data asks cloud-init's mounts module to create
+// /swapfile after the root filesystem has grown. Unset leaves the document
+// without a swap key, which is the user-data a VM has always received
+// (ADR-0025).
+//
 // The generated user-data is a public contract pinned by golden files
 // (AGENTS.md §8), so a change to the template is a change other software sees.
 package guestinit
@@ -74,6 +79,9 @@ type Options struct {
 	// hostname and SSH with mDNS. A NAT guest leaves it false, and the
 	// generated user-data carries no publication (ADR-0020).
 	PublishMDNS bool
+	// Swap is the size of the swap file cloud-init creates at /swapfile.
+	// Zero means the user-data carries no swap key (ADR-0025).
+	Swap config.Size
 }
 
 var userNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -137,12 +145,14 @@ func Generate(opts Options) ([]byte, error) {
 		HasOpencodeConfig    bool
 		OpencodeConfigBase64 string
 		MDNSScript           string
+		HasSwap              bool
 	}{
 		Options:              opts,
 		HasExtraUserData:     hasExtra,
 		HasOpencodeConfig:    len(opts.OpencodeConfig) > 0,
 		OpencodeConfigBase64: base64String(opts.OpencodeConfig),
 		MDNSScript:           mdnsScript,
+		HasSwap:              opts.Swap > 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("rendering cloud-init user-data: %w", err)
