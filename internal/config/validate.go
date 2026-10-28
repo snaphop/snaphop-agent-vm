@@ -141,6 +141,9 @@ func (c *Config) validate() error {
 			Err: fmt.Errorf("must be between %s and %s", MinDisk, MaxDisk),
 		}
 	}
+	if err := c.validateSwap(); err != nil {
+		return err
+	}
 	if c.GuestUser == "" {
 		return &ValidationError{Field: "guest user", Value: "", Err: fmt.Errorf("must not be empty")}
 	}
@@ -148,6 +151,43 @@ func (c *Config) validate() error {
 		return &ValidationError{Field: "network.nat.name", Value: "", Err: fmt.Errorf("must not be empty")}
 	}
 	return c.validateNetwork()
+}
+
+// validateSwap checks the optional swap file. Zero means the feature is off,
+// which is the default and always valid. A non-zero size has to be a whole
+// number of mebibytes, because cloud-init's mounts module divides the size by
+// 1 MiB and truncates, and it has to leave MinDisk of the virtual disk for
+// the root filesystem the file is created on (ADR-0025).
+func (c *Config) validateSwap() error {
+	if c.Swap == 0 {
+		return nil
+	}
+	if c.Swap < MinSwap || c.Swap%MiB != 0 {
+		return &ValidationError{
+			Field: "swap", Value: c.Swap.String(),
+			Err:    fmt.Errorf("must be a whole number of mebibytes, at least %s", MinSwap),
+			Remedy: "Leave swap unset for no swap file, or pass a size such as 4G.",
+		}
+	}
+	// Disk is already known to be at least MinDisk, so this difference is
+	// never negative. The swap file is allocated on the root filesystem
+	// after cloud-init grows that filesystem to the virtual disk.
+	maxSwap := c.Disk - MinDisk
+	if c.Swap > maxSwap {
+		if maxSwap < MinSwap {
+			return &ValidationError{
+				Field: "swap", Value: c.Swap.String(),
+				Err:    fmt.Errorf("a %s disk has no room for a swap file", c.Disk),
+				Remedy: fmt.Sprintf("Raise --disk. The swap file is created on the root filesystem, and at least %s of the virtual disk has to remain for it.", MinDisk),
+			}
+		}
+		return &ValidationError{
+			Field: "swap", Value: c.Swap.String(),
+			Err:    fmt.Errorf("leaves less than %s of the %s disk for the root filesystem", MinDisk, c.Disk),
+			Remedy: fmt.Sprintf("Use a swap of at most %s, or raise --disk.", maxSwap),
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateNetwork() error {

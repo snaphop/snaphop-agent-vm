@@ -18,6 +18,16 @@ migration or rebuild step a user has to take.
 
 ### Added
 
+- `agent-vm create --swap <size>` creates `/swapfile` on the guest's root
+  filesystem at first boot. cloud-init makes the file after the root
+  partition has grown, marks it mode 600, and turns it on again from
+  `/etc/fstab` on later boots. A cached base image does not need a rebuild.
+  Unset means no swap file, which is still the default. `0` clears a size
+  set in the config file or with `AGENT_VM_SWAP`. The file is written, so
+  the VM's disk grows by about that much on the host. At least 1 GiB of the
+  virtual disk stays for the root filesystem. A VM created before this
+  change gets a swap file when you create it again. `--dry-run` names the
+  file and the size (ADR-0025).
 - Runner images (`<family>-runner`) now come with the newest stable Go,
   `golangci-lint`, `govulncheck`, `goimports`, and `gotestsum`, and the
   newest Maven, so a workflow job can build Go and Maven projects without

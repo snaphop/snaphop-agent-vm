@@ -348,7 +348,8 @@ Major modules and responsibilities:
 - `internal/guestinit` — generates the two files the NoCloud seed carries: the
   **user-data** (hostname, SSH public key, agent user, optional user-supplied
   user-data; a bridged guest's user-data also publishes the hostname and SSH
-  with mDNS) and the **meta-data** (instance id and hostname). We own their
+  with mDNS; a swap size adds a `/swapfile` on the root filesystem, ADR-0025)
+  and the **meta-data** (instance id and hostname). We own their
   content; writing them onto a `cidata`-labelled filesystem is `virt-make-fs`'s
   job, driven from `internal/domain` (ADR-0011).
 - `internal/domain` — builds the `virt-install` argument vector and drives
@@ -413,7 +414,8 @@ check required tool versions (not the full `doctor` report) → lock and check t
 name → ensure base image (build if the cache misses) → allocate the VM's state
 directory → generate cloud-init user-data and meta-data and build the NoCloud
 seed with `virt-make-fs` (a bridged guest's user-data publishes the hostname
-and SSH with mDNS) → `qemu-img create` the overlay with the base as backing
+and SSH with mDNS; a swap size asks cloud-init to create `/swapfile` after the
+root filesystem grows, ADR-0025) → `qemu-img create` the overlay with the base as backing
 file → ensure the network → one `virt-install --import --boot
 kernel=…` run to define and start the domain, with the seed attached as a
 read-only virtio disk (ADR-0011) → capture `virsh dumpxml` and write `vm.json`
@@ -488,7 +490,8 @@ account (ADR-0017), joining a guest to an overlay
 network (ADR-0014), registering a guest as a GitHub Actions runner
 (ADR-0015), preparing a host with `agent-vm setup` (ADR-0018),
 publishing mDNS from a bridged guest (ADR-0020),
-registering a guest on a Pi-hole DNS server (ADR-0021), or
+registering a guest on a Pi-hole DNS server (ADR-0021),
+creating an optional swap file on the guest root filesystem (ADR-0025), or
 **implementing something a standard host
 tool already does** (ADR-0009). ADR-0001 carries the same list.
 

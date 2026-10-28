@@ -300,7 +300,8 @@ a login (bounded by `--update-timeout`), graceful shutdown, and `agent-vm update
 
 - **Responsibility:** Generate the two files the NoCloud seed carries — the
   **user-data** (hostname, guest user and its `docker`, `libvirt`, `kvm`, and
-  `rustup` groups, authorized SSH public keys, and any operator-supplied
+  `rustup` groups, authorized SSH public keys, an optional `/swapfile` when
+  `create --swap` set a size (ADR-0025), and any operator-supplied
   user-data merged in) and the **meta-data** (instance id and
   hostname). We own the content; writing it onto a filesystem is `virt-make-fs`'s
   job, driven from `internal/domain` (ADR-0011). `virt-install` always boots the

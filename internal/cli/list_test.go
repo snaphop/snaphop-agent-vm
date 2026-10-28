@@ -196,6 +196,10 @@ func TestResourceRendering_NamesTheCeilingOnlyWhenThereIsOne(t *testing.T) {
 	fixed := state.VMResources{VCPUs: 2, Memory: 4 * config.GiB, Disk: 50 * config.GiB}
 	growable := fixed
 	growable.MaxMemory = 16 * config.GiB
+	withSwap := fixed
+	withSwap.Swap = 4 * config.GiB
+	growableSwap := growable
+	growableSwap.Swap = 4 * config.GiB
 
 	for _, tc := range []struct {
 		name string
@@ -204,10 +208,14 @@ func TestResourceRendering_NamesTheCeilingOnlyWhenThereIsOne(t *testing.T) {
 	}{
 		{"list, fixed", resourceSummary(&state.VM{Resources: fixed}), "2v/4.0G/50.0G"},
 		{"list, growable", resourceSummary(&state.VM{Resources: growable}), "2v/4.0G-16.0G/50.0G"},
+		{"list, swap", resourceSummary(&state.VM{Resources: withSwap}), "2v/4.0G/50.0G+4.0Gswap"},
+		{"list, growable swap", resourceSummary(&state.VM{Resources: growableSwap}), "2v/4.0G-16.0G/50.0G+4.0Gswap"},
 		{"info, fixed", memoryDetail(fixed), "4.0G"},
 		{"info, growable", memoryDetail(growable), "4.0G, growable to 16.0G"},
 		{"create, fixed", describeResources(fixed), "2 vCPU, 4.0G RAM, 50.0G disk"},
 		{"create, growable", describeResources(growable), "2 vCPU, 4.0G RAM (growable to 16.0G), 50.0G disk"},
+		{"create, swap", describeResources(withSwap), "2 vCPU, 4.0G RAM, 50.0G disk, 4.0G swap"},
+		{"create, growable swap", describeResources(growableSwap), "2 vCPU, 4.0G RAM (growable to 16.0G), 50.0G disk, 4.0G swap"},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)

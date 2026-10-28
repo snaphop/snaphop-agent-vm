@@ -58,6 +58,17 @@ users:
 # Passwords are never accepted: the only way in is a key listed above.
 ssh_pwauth: false
 disable_root: true
+{{- if .HasSwap }}
+
+# Swap file on the root filesystem. cloud-init's mounts module creates it
+# once, after the root partition has grown to the virtual disk, marks it
+# mode 600, and records it in /etc/fstab so later boots activate it. The
+# size is a whole number of mebibytes. That module already runs in every
+# base image, so a cached image does not need a rebuild (ADR-0025).
+swap:
+  filename: /swapfile
+  size: "{{ .Swap }}"
+{{- end }}
 {{- if and .PublishMDNS (not .HasExtraUserData) }}
 
 # This guest is on a bridge. Publish the VM name and SSH with mDNS so other

@@ -59,6 +59,9 @@ const (
 	MemoryCeiling = 1024 * GiB
 	MinDisk       = 1 * GiB
 	MaxDisk       = 8 * TiB
+	// MinSwap is one mebibyte. cloud-init's mounts module creates the swap
+	// file in whole mebibytes and would shorten any other size.
+	MinSwap = 1 * MiB
 )
 
 // VirtioMemBlock is the granularity virtio-mem plugs memory in. QEMU derives
@@ -100,8 +103,12 @@ type Config struct {
 	// MaxMemory is the ceiling the guest's RAM may be grown to at runtime,
 	// through a virtio-mem device sized to the difference from Memory. Zero —
 	// the default — means no such device and a fixed-size guest.
-	MaxMemory  Size
-	Disk       Size
+	MaxMemory Size
+	Disk      Size
+	// Swap is the size of the swap file cloud-init creates on the guest's
+	// root filesystem at first boot. Zero — the default — means no swap file,
+	// so a VM created without one keeps the user-data it always had (ADR-0025).
+	Swap       Size
 	Network    NetworkMode
 	Bridge     string
 	NATNetwork string
@@ -166,6 +173,7 @@ type Overrides struct {
 	Memory     string
 	MaxMemory  string
 	Disk       string
+	Swap       string
 	Network    string
 	Bridge     string
 	NATNetwork string
@@ -309,6 +317,7 @@ func environOverrides(env Environ) Overrides {
 		Memory:    env("AGENT_VM_MEMORY"),
 		MaxMemory: env("AGENT_VM_MAX_MEMORY"),
 		Disk:      env("AGENT_VM_DISK"),
+		Swap:      env("AGENT_VM_SWAP"),
 		Network:   env("AGENT_VM_NETWORK"),
 		Bridge:    env("AGENT_VM_BRIDGE"),
 	}
@@ -404,6 +413,13 @@ func apply(env Environ, cfg *Config, o Overrides) error {
 			return &ValidationError{Field: "disk", Value: o.Disk, Err: err}
 		}
 		cfg.Disk = size
+	}
+	if o.Swap != "" {
+		size, err := ParseSize(o.Swap)
+		if err != nil {
+			return &ValidationError{Field: "swap", Value: o.Swap, Err: err}
+		}
+		cfg.Swap = size
 	}
 	if o.Network != "" {
 		mode := NetworkMode(strings.ToLower(strings.TrimSpace(o.Network)))

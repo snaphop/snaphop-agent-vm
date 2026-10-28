@@ -93,6 +93,11 @@ func runInfo(ctx context.Context, app *App, args []string) error {
 		[]string{"base disk", vm.BaseImage.Path},
 		[]string{"vcpus", fmt.Sprint(vm.Resources.VCPUs)},
 		[]string{"memory", memoryDetail(vm.Resources)},
+	)
+	if vm.Resources.Swap > 0 {
+		rows = append(rows, []string{"swap", vm.Resources.Swap.Human()})
+	}
+	rows = append(rows,
 		[]string{"network", networkSummary(vm)},
 	)
 	if vm.PiHole != nil {

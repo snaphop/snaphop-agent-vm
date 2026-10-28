@@ -57,6 +57,11 @@ func TestLoad_DefaultsMatchTheDocumentedProfile(t *testing.T) {
 	if cfg.Disk.String() != "50G" {
 		t.Errorf("Disk = %s, want 50G", cfg.Disk)
 	}
+	// Swap stays off so `agent-vm create` keeps producing the machine ADR-0007
+	// describes. A size here would write a swap file into every guest.
+	if cfg.Swap != 0 {
+		t.Errorf("Swap = %s, want it unset", cfg.Swap)
+	}
 	if cfg.Network != NetworkNAT {
 		t.Errorf("Network = %s, want nat", cfg.Network)
 	}
@@ -164,6 +169,69 @@ func TestLoad_MaxMemoryIsUnsetByDefault(t *testing.T) {
 	}
 }
 
+func TestLoad_SwapFollowsTheResourcePrecedence(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, `
+[defaults]
+swap = "2G"
+`)
+
+	fromFile, err := Load(noEnv, Overrides{ConfigFile: path})
+	if err != nil {
+		t.Fatalf("Load file: %v", err)
+	}
+	if fromFile.Swap != 2*GiB {
+		t.Errorf("Swap = %s, want 2G from the config file", fromFile.Swap)
+	}
+
+	fromEnv, err := Load(envMap(map[string]string{
+		"HOME":            emptyHome,
+		"AGENT_VM_SWAP":   "4G",
+		"AGENT_VM_CONFIG": path,
+	}), Overrides{})
+	if err != nil {
+		t.Fatalf("Load env: %v", err)
+	}
+	if fromEnv.Swap != 4*GiB {
+		t.Errorf("Swap = %s, want 4G (env beats the file)", fromEnv.Swap)
+	}
+
+	fromFlag, err := Load(envMap(map[string]string{
+		"HOME":          emptyHome,
+		"AGENT_VM_SWAP": "4G",
+	}), Overrides{Swap: "8G"})
+	if err != nil {
+		t.Fatalf("Load flag: %v", err)
+	}
+	if fromFlag.Swap != 8*GiB {
+		t.Errorf("Swap = %s, want 8G (flag beats env)", fromFlag.Swap)
+	}
+
+	// Zero is a size, so a flag of 0 turns a configured swap file off for
+	// this one VM.
+	cleared, err := Load(envMap(map[string]string{
+		"HOME":          emptyHome,
+		"AGENT_VM_SWAP": "4G",
+	}), Overrides{Swap: "0"})
+	if err != nil {
+		t.Fatalf("Load cleared: %v", err)
+	}
+	if cleared.Swap != 0 {
+		t.Errorf("Swap = %s, want 0 to clear the environment", cleared.Swap)
+	}
+}
+
+func TestLoad_AcceptsASwapThatLeavesTheRootFilesystemAGiB(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(noEnv, Overrides{Disk: "50G", Swap: "49G"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Swap != 49*GiB {
+		t.Errorf("Swap = %s, want 49G", cfg.Swap)
+	}
+}
+
 func TestLoad_AcceptsAMaxMemoryAboveTheBootMemory(t *testing.T) {
 	t.Parallel()
 	cfg, err := Load(noEnv, Overrides{Memory: "4G", MaxMemory: "16G"})
@@ -194,6 +262,11 @@ func TestLoad_RejectsResourcesOutsideBounds(t *testing.T) {
 		{"growth room is not a whole virtio-mem block", Overrides{Memory: "4G", MaxMemory: "4097M"}, "max_memory"},
 		{"disk below floor", Overrides{Disk: "100M"}, "disk"},
 		{"unknown unit", Overrides{Disk: "50X"}, "disk"},
+		{"swap not a size", Overrides{Swap: "plenty"}, "swap"},
+		{"swap below a mebibyte", Overrides{Swap: "512K"}, "swap"},
+		{"swap is not a whole number of mebibytes", Overrides{Swap: "1500K"}, "swap"},
+		{"swap leaves the root filesystem less than 1G", Overrides{Disk: "50G", Swap: "50G"}, "swap"},
+		{"swap on the smallest disk", Overrides{Disk: "1G", Swap: "1M"}, "swap"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -352,6 +425,7 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 		"AGENT_VM_VCPUS":       "6",
 		"AGENT_VM_MEMORY":      "2G",
 		"AGENT_VM_DISK":        "20G",
+		"AGENT_VM_SWAP":        "8G",
 		"AGENT_VM_NETWORK":     "nat",
 		"AGENT_VM_GITHUB_ORG":  "acme",
 	}), Overrides{})
@@ -368,8 +442,8 @@ func TestLoad_EnvNamesMatchTheDocumentedContract(t *testing.T) {
 	if cfg.Distro.String() != "arch:base-20260927.0.600689" {
 		t.Errorf("Distro = %s, want arch:base-20260927.0.600689", cfg.Distro)
 	}
-	if cfg.VCPUs != 6 || cfg.Memory.String() != "2G" || cfg.Disk.String() != "20G" {
-		t.Errorf("resources = %d vcpu / %s / %s", cfg.VCPUs, cfg.Memory, cfg.Disk)
+	if cfg.VCPUs != 6 || cfg.Memory.String() != "2G" || cfg.Disk.String() != "20G" || cfg.Swap.String() != "8G" {
+		t.Errorf("resources = %d vcpu / %s / %s / swap %s", cfg.VCPUs, cfg.Memory, cfg.Disk, cfg.Swap)
 	}
 	if cfg.GitHubOrg != "acme" {
 		t.Errorf("GitHubOrg = %q, want acme", cfg.GitHubOrg)

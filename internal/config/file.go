@@ -26,6 +26,7 @@ type fileConfig struct {
 		Memory    string `toml:"memory"`
 		MaxMemory string `toml:"max_memory"`
 		Disk      string `toml:"disk"`
+		Swap      string `toml:"swap"`
 		Network   string `toml:"network"`
 	} `toml:"defaults"`
 
@@ -119,6 +120,7 @@ func loadFile(path string) (Overrides, bool, error) {
 		Memory:                 file.Defaults.Memory,
 		MaxMemory:              file.Defaults.MaxMemory,
 		Disk:                   file.Defaults.Disk,
+		Swap:                   file.Defaults.Swap,
 		Network:                file.Defaults.Network,
 		Bridge:                 file.Network.Bridge.Interface,
 		NATNetwork:             file.Network.NAT.Name,
